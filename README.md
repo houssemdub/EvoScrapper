@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ EvoScrapper (v2.0.0)
+# ⚡ EvoScrapper
 
 **High-Performance, Fault-Tolerant P2P Streaming, Torrent Indexer & Subtitle Platform**
 
