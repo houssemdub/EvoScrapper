@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="EvoScrapper.jpg" alt="EvoScrapper Logo" width="220" style="border-radius: 20px; margin-bottom: 15px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);" />
+
 # ⚡ EvoScrapper
 
 **High-Performance, Fault-Tolerant P2P Streaming, Torrent Indexer & Subtitle Platform**
