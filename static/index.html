@@ -1,0 +1,2121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EvoScrapper // Terminal</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <!-- Theme -->
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- NAVBAR -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <header class="navbar">
+    <div class="navbar-inner">
+
+      <!-- Logo -->
+      <div class="logo" onclick="switchTab('torrents')">
+        <div class="logo-icon"><i class="fa-solid fa-terminal"></i></div>
+        <span class="logo-text">EvoScrapper</span>
+        <span class="logo-ver">v2</span>
+      </div>
+
+      <!-- Desktop Nav -->
+      <nav class="nav-tabs" id="desktop-nav">
+        <button class="nav-tab active" id="nav-torrents" onclick="switchTab('torrents')">
+          <i class="fa-solid fa-magnet tab-icon"></i> torrents
+        </button>
+        <button class="nav-tab" id="nav-subtitles" onclick="switchTab('subtitles')">
+          <i class="fa-solid fa-closed-captioning tab-icon"></i> subtitles
+        </button>
+        <button class="nav-tab" id="nav-trending" onclick="switchTab('trending')">
+          <i class="fa-solid fa-fire tab-icon"></i> trending
+        </button>
+        <button class="nav-tab" id="nav-discover" onclick="switchTab('discover')">
+          <i class="fa-solid fa-compass tab-icon text-accent"></i> discover
+        </button>
+      </nav>
+
+      <!-- Right: Status + GUI Scale + API -->
+      <div class="flex items-center gap-2">
+        <!-- Text & GUI Scale Trackbar Slider -->
+        <div class="gui-scale-control" title="Adjust Text & GUI Size Scale">
+          <i class="fa-solid fa-text-height scale-icon"></i>
+          <span class="scale-label mono">GUI:</span>
+          <input
+            type="range"
+            id="gui-scale-slider"
+            min="13"
+            max="22"
+            step="0.5"
+            value="15.5"
+            class="scale-slider"
+            oninput="handleGuiScaleInput(this.value)"
+            aria-label="GUI scale slider"
+          >
+          <span id="gui-scale-value" class="scale-val mono">100%</span>
+          <button class="btn btn-icon btn-ghost btn-sm" onclick="resetGuiScale()" title="Reset default scale">
+            <i class="fa-solid fa-rotate-left"></i>
+          </button>
+        </div>
+
+        <button class="status-badge" onclick="openStatusModal()" title="View provider health">
+          <span class="status-dot"></span>
+          <span id="tracker-status-text">checking…</span>
+        </button>
+        <button class="btn btn-icon btn-ghost btn-sm" id="btn-theme-cycle" onclick="cycleTheme()" title="Cycle Theme (Cyberpunk, OLED, Netflix Red, Emerald, Obsidian)">
+          <i class="fa-solid fa-palette text-accent"></i>
+        </button>
+        <button class="btn btn-sm btn-ghost" id="btn-open-library" onclick="openLibraryModal()" title="My Library & Watchlist Bookmarks">
+          <i class="fa-solid fa-bookmark text-yellow"></i> <span class="hide-mobile">Library</span>
+          <span id="nav-library-badge" class="badge-count hidden" style="background:#ffab00; color:#000; font-size:10px; padding:1px 5px; border-radius:10px; margin-left:4px;">0</span>
+        </button>
+        <button class="btn btn-icon btn-ghost btn-sm" id="btn-open-settings" onclick="toggleSettingsModal(true)" title="Settings, Storage Cache & Stremio Addons">
+          <i class="fa-solid fa-gear"></i>
+        </button>
+        <a href="/docs" target="_blank" class="btn btn-sm btn-ghost" title="API Docs">
+          <i class="fa-solid fa-code"></i> docs
+        </a>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- Mobile Bottom Nav -->
+  <nav class="mobile-nav" id="mobile-nav">
+    <button class="nav-tab active" id="mnav-torrents" onclick="switchTab('torrents')">
+      <i class="fa-solid fa-magnet tab-icon"></i> torrents
+    </button>
+    <button class="nav-tab" id="mnav-subtitles" onclick="switchTab('subtitles')">
+      <i class="fa-solid fa-closed-captioning tab-icon"></i> subs
+    </button>
+    <button class="nav-tab" id="mnav-trending" onclick="switchTab('trending')">
+      <i class="fa-solid fa-fire tab-icon"></i> trending
+    </button>
+    <button class="nav-tab" id="mnav-discover" onclick="switchTab('discover')">
+      <i class="fa-solid fa-compass tab-icon text-accent"></i> discover
+    </button>
+  </nav>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MAIN CONTENT -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <main class="container" style="padding-bottom:5rem;">
+
+    <!-- ───────────────────────────────────────────────────────────────── -->
+    <!-- VIEW: TORRENTS -->
+    <!-- ───────────────────────────────────────────────────────────────── -->
+    <section id="view-torrents">
+
+      <!-- Search -->
+      <div class="search-container">
+        <form id="torrent-search-form" onsubmit="handleTorrentSearch(event)">
+          <div class="search-wrapper">
+            <i class="fa-solid fa-terminal search-icon"></i>
+            <input
+              type="text"
+              id="torrent-search-input"
+              class="search-input"
+              placeholder="query> search movies, games, series, anime, apps..."
+              autocomplete="off"
+              required
+            >
+            <div class="search-actions">
+              <button type="button" id="clear-btn" class="btn btn-icon btn-ghost hidden" onclick="clearSearchInput()" title="Clear">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+              <label class="toggle-wrap" title="SSE Live Stream mode">
+                <input type="checkbox" id="stream-toggle" class="toggle-input" checked>
+                <span class="toggle-track"></span>
+                <span>SSE</span>
+              </label>
+              <button type="submit" id="search-submit-btn" class="btn btn-primary">
+                <i id="search-spinner" class="fa-solid fa-circle-notch spinner hidden"></i>
+                <span>SEARCH</span>
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <!-- Categories -->
+      <div class="category-bar" id="category-bar">
+        <button class="cat-pill active" data-cat="all" onclick="setCategory('all')">
+          <i class="fa-solid fa-layer-group cat-icon"></i> ALL
+        </button>
+        <button class="cat-pill" data-cat="movies" onclick="setCategory('movies')">
+          <i class="fa-solid fa-film cat-icon"></i> MOVIES
+        </button>
+        <button class="cat-pill" data-cat="tv" onclick="setCategory('tv')">
+          <i class="fa-solid fa-tv cat-icon"></i> TV SERIES
+        </button>
+        <button class="cat-pill" data-cat="anime" onclick="setCategory('anime')">
+          <i class="fa-solid fa-torii-gate cat-icon"></i> ANIME
+        </button>
+        <button class="cat-pill" data-cat="games" onclick="setCategory('games')">
+          <i class="fa-solid fa-gamepad cat-icon"></i> GAMES
+        </button>
+        <button class="cat-pill" data-cat="apps" onclick="setCategory('apps')">
+          <i class="fa-solid fa-microchip cat-icon"></i> APPS
+        </button>
+        <button class="cat-pill" data-cat="books" onclick="setCategory('books')">
+          <i class="fa-solid fa-book cat-icon"></i> BOOKS
+        </button>
+        <button class="cat-pill" data-cat="music" onclick="setCategory('music')">
+          <i class="fa-solid fa-music cat-icon"></i> MUSIC
+        </button>
+        <button class="cat-pill" data-cat="doc" onclick="setCategory('doc')">
+          <i class="fa-solid fa-earth-americas cat-icon"></i> DOCS
+        </button>
+        <button class="cat-pill" data-cat="sports" onclick="setCategory('sports')">
+          <i class="fa-solid fa-trophy cat-icon"></i> SPORTS
+        </button>
+        <button class="cat-pill" data-cat="courses" onclick="setCategory('courses')">
+          <i class="fa-solid fa-graduation-cap cat-icon"></i> COURSES
+        </button>
+        <button class="cat-pill" data-cat="audiobooks" onclick="setCategory('audiobooks')">
+          <i class="fa-solid fa-headphones cat-icon"></i> AUDIOBOOKS
+        </button>
+        <button class="cat-pill" data-cat="dev" onclick="setCategory('dev')">
+          <i class="fa-solid fa-code cat-icon"></i> DEV / CODE
+        </button>
+        <button class="cat-pill" data-cat="3d" onclick="setCategory('3d')">
+          <i class="fa-solid fa-cube cat-icon"></i> 3D & ASSETS
+        </button>
+      </div>
+
+      <!-- Filters -->
+      <div class="filter-bar" id="filter-bar">
+        <!-- Resolution -->
+        <div class="filter-group">
+          <span class="filter-label">RES:</span>
+          <button class="filter-chip active" data-filter="resolution" data-val="" onclick="setFilter('resolution','')">Any</button>
+          <button class="filter-chip" data-filter="resolution" data-val="2160p" onclick="setFilter('resolution','2160p')">4K</button>
+          <button class="filter-chip" data-filter="resolution" data-val="1080p" onclick="setFilter('resolution','1080p')">1080p</button>
+          <button class="filter-chip" data-filter="resolution" data-val="720p" onclick="setFilter('resolution','720p')">720p</button>
+          <button class="filter-chip" data-filter="resolution" data-val="480p" onclick="setFilter('resolution','480p')">480p</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Source type -->
+        <div class="filter-group">
+          <span class="filter-label">SRC:</span>
+          <button class="filter-chip active" data-filter="source" data-val="" onclick="setFilter('source','')">Any</button>
+          <button class="filter-chip" data-filter="source" data-val="REMUX" onclick="setFilter('source','REMUX')">REMUX</button>
+          <button class="filter-chip" data-filter="source" data-val="BluRay" onclick="setFilter('source','BluRay')">BluRay</button>
+          <button class="filter-chip" data-filter="source" data-val="WEB-DL" onclick="setFilter('source','WEB-DL')">WEB-DL</button>
+          <button class="filter-chip" data-filter="source" data-val="WEBRip" onclick="setFilter('source','WEBRip')">WEBRip</button>
+          <button class="filter-chip" data-filter="source" data-val="HDTV" onclick="setFilter('source','HDTV')">HDTV</button>
+          <button class="filter-chip" data-filter="source" data-val="CAM" onclick="setFilter('source','CAM')">CAM</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- HDR Profile -->
+        <div class="filter-group">
+          <span class="filter-label">HDR:</span>
+          <select id="hdr-filter" class="filter-select" onchange="setFilter('hdr',this.value)">
+            <option value="">Any</option>
+            <option value="DV">Dolby Vision (DV)</option>
+            <option value="HDR10+">HDR10+</option>
+            <option value="HDR">HDR10 / HDR</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Audio -->
+        <div class="filter-group">
+          <span class="filter-label">AUDIO:</span>
+          <select id="audio-filter" class="filter-select" onchange="setFilter('audio',this.value)">
+            <option value="">Any</option>
+            <option value="Atmos">Dolby Atmos</option>
+            <option value="TrueHD">TrueHD</option>
+            <option value="DTS-HD">DTS-HD MA</option>
+            <option value="DDP5.1">DDP 5.1</option>
+            <option value="5.1">5.1 Surround</option>
+            <option value="Stereo">Stereo / AAC</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Codec -->
+        <div class="filter-group">
+          <span class="filter-label">CODEC:</span>
+          <select id="codec-filter" class="filter-select" onchange="setFilter('codec',this.value)">
+            <option value="">Any</option>
+            <option value="HEVC">HEVC / x265</option>
+            <option value="x264">x264 / H.264</option>
+            <option value="AV1">AV1</option>
+            <option value="XviD">XviD</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Min Seeds -->
+        <div class="filter-group">
+          <span class="filter-label">SEEDS≥:</span>
+          <button class="filter-chip active" data-filter="min_seeders" data-val="0" onclick="setFilter('min_seeders',0)">0</button>
+          <button class="filter-chip" data-filter="min_seeders" data-val="5" onclick="setFilter('min_seeders',5)">5</button>
+          <button class="filter-chip" data-filter="min_seeders" data-val="25" onclick="setFilter('min_seeders',25)">25</button>
+          <button class="filter-chip" data-filter="min_seeders" data-val="50" onclick="setFilter('min_seeders',50)">50</button>
+          <button class="filter-chip" data-filter="min_seeders" data-val="100" onclick="setFilter('min_seeders',100)">100</button>
+          <button class="filter-chip" data-filter="min_seeders" data-val="250" onclick="setFilter('min_seeders',250)">250</button>
+          <button class="filter-chip" data-filter="min_seeders" data-val="500" onclick="setFilter('min_seeders',500)">500+</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Size Range -->
+        <div class="filter-group">
+          <span class="filter-label">SIZE:</span>
+          <select id="size-filter" class="filter-select" onchange="setFilter('size_range',this.value)">
+            <option value="">Any</option>
+            <option value="0-500MB">&lt; 500 MB</option>
+            <option value="500MB-2GB">500 MB – 2 GB</option>
+            <option value="2GB-5GB">2 – 5 GB</option>
+            <option value="5GB-10GB">5 – 10 GB</option>
+            <option value="10GB-25GB">10 – 25 GB</option>
+            <option value="25GB-50GB">25 – 50 GB</option>
+            <option value="50GB-">50 GB+</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Year -->
+        <div class="filter-group">
+          <span class="filter-label">YEAR:</span>
+          <select id="year-filter" class="filter-select" onchange="setFilter('year',this.value)">
+            <option value="">Any</option>
+            <option value="2026">2026</option>
+            <option value="2025">2025</option>
+            <option value="2024">2024</option>
+            <option value="2023">2023</option>
+            <option value="2020-2022">2020 – 2022</option>
+            <option value="2010s">2010s</option>
+            <option value="classic">Classic (&lt;2010)</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Swarm Health -->
+        <div class="filter-group">
+          <span class="filter-label">HEALTH:</span>
+          <select id="health-filter" class="filter-select" onchange="setFilter('health',this.value)">
+            <option value="">Any Health</option>
+            <option value="verified">Verified (Seeds ≥ 10)</option>
+            <option value="healthy">Swarm Healthy (Seeds &gt; Leech)</option>
+            <option value="super">Super Seeded (Seeds ≥ 100)</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Sort -->
+        <div class="filter-group">
+          <span class="filter-label">SORT:</span>
+          <select id="sort-select" class="filter-select" onchange="handleSortSelect(this.value)">
+            <option value="relevance">Relevance</option>
+            <option value="seeds_desc">Seeds (High to Low)</option>
+            <option value="seeds_asc">Seeds (Low to High)</option>
+            <option value="size_desc">Size (Largest first)</option>
+            <option value="size_asc">Size (Smallest first)</option>
+            <option value="title_asc">Title (A-Z)</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Tracker / Provider -->
+        <div class="filter-group">
+          <span class="filter-label">TRACKER:</span>
+          <select id="provider-select" class="filter-select" onchange="setFilter('provider',this.value)">
+            <option value="all">⚡ All Trackers</option>
+            <option value="yts">YTS</option>
+            <option value="thepiratebay">ThePirateBay</option>
+            <option value="nyaa">Nyaa.si</option>
+            <option value="torrentgalaxy">TorrentGalaxy</option>
+            <option value="rutor">Rutor</option>
+            <option value="eztv">EZTV</option>
+            <option value="subsplease">SubsPlease</option>
+            <option value="comando">Comando</option>
+            <option value="bludv">BluDV</option>
+            <option value="torlock">Torlock</option>
+            <option value="1337x">1337x</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Reset Button -->
+        <button class="btn btn-sm btn-ghost" onclick="resetAllFilters()" title="Reset all filters" style="color:var(--red);">
+          <i class="fa-solid fa-filter-circle-xmark"></i> RESET
+        </button>
+      </div>
+
+      <!-- Results Meta Bar -->
+      <div id="results-meta-bar" class="meta-bar hidden">
+        <div>
+          <span class="count" id="meta-count">0</span> results ·
+          <span class="providers-count" id="meta-providers">0</span> providers ·
+          <span class="elapsed" id="meta-time">0.0s</span>
+          <span id="relevance-info" class="hidden" style="margin-left:0.5rem;color:var(--amber);">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> relevance-ranked
+          </span>
+        </div>
+        <div id="active-filter-tags" class="flex gap-1"></div>
+      </div>
+
+      <!-- Stream indicator (shown during SSE) -->
+      <div id="stream-indicator" class="stream-indicator hidden">
+        <span class="stream-dot"></span>
+        <span id="stream-status">Streaming results live from providers…</span>
+      </div>
+
+      <!-- RESULTS TABLE -->
+      <div id="torrents-results-container">
+        <!-- Default empty state -->
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon"><i class="fa-solid fa-terminal"></i></div>
+          <h3>EvoScrapper Terminal</h3>
+          <p>Search across 12+ torrent indexers simultaneously. Results are deduplicated, relevance-ranked, and enriched with quality metadata.</p>
+          <div class="quick-tags">
+            <span class="filter-label" style="padding-top:0.15rem;">try:</span>
+            <button class="quick-tag" onclick="quickSearch('Dune Part Two')">Dune Part Two</button>
+            <button class="quick-tag" onclick="quickSearch('Avatar')">Avatar</button>
+            <button class="quick-tag" onclick="quickSearch('Breaking Bad')">Breaking Bad</button>
+            <button class="quick-tag" onclick="quickSearch('Frieren')">Frieren</button>
+            <button class="quick-tag" onclick="quickSearch('Cyberpunk 2077')">Cyberpunk 2077</button>
+            <button class="quick-tag" onclick="quickSearch('GTA VI')">GTA VI</button>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ───────────────────────────────────────────────────────────────── -->
+    <!-- VIEW: SUBTITLES -->
+    <!-- ───────────────────────────────────────────────────────────────── -->
+    <section id="view-subtitles" class="hidden">
+
+      <div class="panel" style="margin-top:1.5rem;">
+        <div class="panel-header">
+          <i class="fa-solid fa-closed-captioning text-green"></i>
+          <div>
+            <div class="mono font-bold" style="color:var(--green);">subtitles://hub</div>
+            <div class="text-xs text-dim">OpenSubtitles · Gestdown · YIFY Subs · AnimeTosho</div>
+          </div>
+        </div>
+        <div class="p-4">
+          <form id="subs-search-form" onsubmit="handleSubtitlesSearch(event)">
+            <div style="display:grid;grid-template-columns:1fr 90px 90px 120px;gap:0.5rem;margin-bottom:0.75rem;">
+              <input type="text" id="subs-query-input" class="search-input" placeholder="Title or IMDb ID (tt0816692)..." required>
+              <input type="number" id="subs-season-input" class="search-input" placeholder="Season" min="1" style="font-size:0.75rem;">
+              <input type="number" id="subs-episode-input" class="search-input" placeholder="Episode" min="1" style="font-size:0.75rem;">
+              <select id="subs-lang-select" class="filter-select" style="height:100%;padding:0.5rem;">
+                <option value="en">🇬🇧 English</option>
+                <option value="es">🇪🇸 Spanish</option>
+                <option value="fr">🇫🇷 French</option>
+                <option value="ar">🇸🇦 Arabic</option>
+                <option value="pt">🇧🇷 Portuguese</option>
+                <option value="de">🇩🇪 German</option>
+                <option value="it">🇮🇹 Italian</option>
+                <option value="ja">🇯🇵 Japanese</option>
+                <option value="zh">🇨🇳 Chinese</option>
+                <option value="ko">🇰🇷 Korean</option>
+                <option value="ru">🇷🇺 Russian</option>
+                <option value="tr">🇹🇷 Turkish</option>
+                <option value="nl">🇳🇱 Dutch</option>
+                <option value="pl">🇵🇱 Polish</option>
+                <option value="hi">🇮🇳 Hindi</option>
+              </select>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <div class="text-xs text-dim mono">
+                <i class="fa-solid fa-info-circle"></i>
+                Tip: Use IMDb ID (tt...) for exact results. Title search works via Gestdown/YIFY.
+              </div>
+              <button type="submit" class="btn btn-green" id="subs-submit-btn">
+                <i id="subs-spinner" class="fa-solid fa-circle-notch spinner hidden"></i>
+                <i class="fa-solid fa-closed-captioning"></i> SEARCH SUBS
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Subtitles results meta -->
+      <div id="subs-meta-bar" class="meta-bar hidden" style="margin-top:0.5rem;">
+        <div>
+          <span class="count" id="subs-meta-count">0</span> subtitles found ·
+          <span class="elapsed" id="subs-meta-time">0.0s</span>
+        </div>
+      </div>
+
+      <!-- Subtitles results -->
+      <div id="subtitles-results-container" style="margin-top:0.75rem;">
+        <div class="empty-state">
+          <div class="empty-icon"><i class="fa-solid fa-closed-captioning"></i></div>
+          <h3>Subtitle Search</h3>
+          <p>Enter a movie title or IMDb ID to find matching subtitles across multiple providers.</p>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ───────────────────────────────────────────────────────────────── -->
+    <!-- VIEW: TRENDING -->
+    <!-- ───────────────────────────────────────────────────────────────── -->
+    <section id="view-trending" class="hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:1.5rem 0 0.75rem;flex-wrap:wrap;gap:0.75rem;">
+        <div>
+          <div class="mono font-bold" style="color:var(--amber);font-size:1.1rem;">
+            <i class="fa-solid fa-fire"></i> trending://daily
+          </div>
+          <div class="text-xs text-dim">Top daily releases curated across tracker swarms</div>
+        </div>
+        <div class="flex items-center gap-2">
+          <input
+            type="text"
+            id="trending-filter-input"
+            class="search-input"
+            placeholder="filter in trending releases…"
+            style="width:220px;padding:0.4rem 0.6rem;font-size:0.75rem;"
+            oninput="handleTrendingSearch(this.value)"
+          >
+          <button class="btn btn-sm" onclick="loadTrending()">
+            <i class="fa-solid fa-rotate-right"></i> REFRESH
+          </button>
+        </div>
+      </div>
+
+      <!-- Trending Category Pills -->
+      <div class="category-bar" id="trending-category-bar">
+        <button class="cat-pill active" data-tcat="all" onclick="setTrendingCategory('all')">
+          <i class="fa-solid fa-layer-group cat-icon"></i> ALL
+        </button>
+        <button class="cat-pill" data-tcat="movies" onclick="setTrendingCategory('movies')">
+          <i class="fa-solid fa-film cat-icon"></i> MOVIES
+        </button>
+        <button class="cat-pill" data-tcat="tv" onclick="setTrendingCategory('tv')">
+          <i class="fa-solid fa-tv cat-icon"></i> TV SERIES
+        </button>
+        <button class="cat-pill" data-tcat="anime" onclick="setTrendingCategory('anime')">
+          <i class="fa-solid fa-torii-gate cat-icon"></i> ANIME
+        </button>
+        <button class="cat-pill" data-tcat="games" onclick="setTrendingCategory('games')">
+          <i class="fa-solid fa-gamepad cat-icon"></i> GAMES
+        </button>
+        <button class="cat-pill" data-tcat="apps" onclick="setTrendingCategory('apps')">
+          <i class="fa-solid fa-microchip cat-icon"></i> APPS
+        </button>
+        <button class="cat-pill" data-tcat="books" onclick="setTrendingCategory('books')">
+          <i class="fa-solid fa-book cat-icon"></i> BOOKS
+        </button>
+        <button class="cat-pill" data-tcat="music" onclick="setTrendingCategory('music')">
+          <i class="fa-solid fa-music cat-icon"></i> MUSIC
+        </button>
+        <button class="cat-pill" data-tcat="doc" onclick="setTrendingCategory('doc')">
+          <i class="fa-solid fa-earth-americas cat-icon"></i> DOCS
+        </button>
+        <button class="cat-pill" data-tcat="sports" onclick="setTrendingCategory('sports')">
+          <i class="fa-solid fa-trophy cat-icon"></i> SPORTS
+        </button>
+      </div>
+
+      <!-- Trending Filter Bar -->
+      <div class="filter-bar" id="trending-filter-bar">
+        <!-- Resolution -->
+        <div class="filter-group">
+          <span class="filter-label">RES:</span>
+          <button class="filter-chip active" data-tfilter="resolution" data-val="" onclick="setTrendingFilter('resolution','')">Any</button>
+          <button class="filter-chip" data-tfilter="resolution" data-val="2160p" onclick="setTrendingFilter('resolution','2160p')">4K</button>
+          <button class="filter-chip" data-tfilter="resolution" data-val="1080p" onclick="setTrendingFilter('resolution','1080p')">1080p</button>
+          <button class="filter-chip" data-tfilter="resolution" data-val="720p" onclick="setTrendingFilter('resolution','720p')">720p</button>
+          <button class="filter-chip" data-tfilter="resolution" data-val="480p" onclick="setTrendingFilter('resolution','480p')">480p</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Source -->
+        <div class="filter-group">
+          <span class="filter-label">SRC:</span>
+          <button class="filter-chip active" data-tfilter="source" data-val="" onclick="setTrendingFilter('source','')">Any</button>
+          <button class="filter-chip" data-tfilter="source" data-val="REMUX" onclick="setTrendingFilter('source','REMUX')">REMUX</button>
+          <button class="filter-chip" data-tfilter="source" data-val="BluRay" onclick="setTrendingFilter('source','BluRay')">BluRay</button>
+          <button class="filter-chip" data-tfilter="source" data-val="WEB-DL" onclick="setTrendingFilter('source','WEB-DL')">WEB-DL</button>
+          <button class="filter-chip" data-tfilter="source" data-val="WEBRip" onclick="setTrendingFilter('source','WEBRip')">WEBRip</button>
+          <button class="filter-chip" data-tfilter="source" data-val="HDTV" onclick="setTrendingFilter('source','HDTV')">HDTV</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- HDR Profile -->
+        <div class="filter-group">
+          <span class="filter-label">HDR:</span>
+          <select id="trending-hdr-filter" class="filter-select" onchange="setTrendingFilter('hdr',this.value)">
+            <option value="">Any</option>
+            <option value="DV">Dolby Vision (DV)</option>
+            <option value="HDR10+">HDR10+</option>
+            <option value="HDR">HDR10 / HDR</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Audio -->
+        <div class="filter-group">
+          <span class="filter-label">AUDIO:</span>
+          <select id="trending-audio-filter" class="filter-select" onchange="setTrendingFilter('audio',this.value)">
+            <option value="">Any</option>
+            <option value="Atmos">Dolby Atmos</option>
+            <option value="TrueHD">TrueHD</option>
+            <option value="DTS-HD">DTS-HD</option>
+            <option value="DDP5.1">DDP 5.1</option>
+            <option value="Stereo">Stereo / AAC</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Codec -->
+        <div class="filter-group">
+          <span class="filter-label">CODEC:</span>
+          <select id="trending-codec-filter" class="filter-select" onchange="setTrendingFilter('codec',this.value)">
+            <option value="">Any</option>
+            <option value="HEVC">HEVC/x265</option>
+            <option value="x264">x264/H.264</option>
+            <option value="AV1">AV1</option>
+            <option value="XviD">XviD</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Min Seeds -->
+        <div class="filter-group">
+          <span class="filter-label">SEEDS≥:</span>
+          <button class="filter-chip active" data-tfilter="min_seeders" data-val="0" onclick="setTrendingFilter('min_seeders',0)">0</button>
+          <button class="filter-chip" data-tfilter="min_seeders" data-val="50" onclick="setTrendingFilter('min_seeders',50)">50</button>
+          <button class="filter-chip" data-tfilter="min_seeders" data-val="100" onclick="setTrendingFilter('min_seeders',100)">100</button>
+          <button class="filter-chip" data-tfilter="min_seeders" data-val="250" onclick="setTrendingFilter('min_seeders',250)">250+</button>
+          <button class="filter-chip" data-tfilter="min_seeders" data-val="500" onclick="setTrendingFilter('min_seeders',500)">500+</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Size Range -->
+        <div class="filter-group">
+          <span class="filter-label">SIZE:</span>
+          <select id="trending-size-filter" class="filter-select" onchange="setTrendingFilter('size_range',this.value)">
+            <option value="">Any</option>
+            <option value="0-500MB">&lt; 500 MB</option>
+            <option value="500MB-2GB">500 MB – 2 GB</option>
+            <option value="2GB-5GB">2 – 5 GB</option>
+            <option value="5GB-10GB">5 – 10 GB</option>
+            <option value="10GB-25GB">10 – 25 GB</option>
+            <option value="25GB-50GB">25 – 50 GB</option>
+            <option value="50GB-">50 GB+</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Tracker -->
+        <div class="filter-group">
+          <span class="filter-label">TRACKER:</span>
+          <select id="trending-provider-filter" class="filter-select" onchange="setTrendingFilter('provider',this.value)">
+            <option value="all">⚡ All Trackers</option>
+            <option value="yts">YTS</option>
+            <option value="thepiratebay">ThePirateBay</option>
+            <option value="nyaa">Nyaa.si</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Sort By -->
+        <div class="filter-group">
+          <span class="filter-label">SORT:</span>
+          <select id="trending-sort-select" class="filter-select" onchange="setTrendingSort(this.value)">
+            <option value="seeds_desc">Seeders (High to Low)</option>
+            <option value="seeds_asc">Seeders (Low to High)</option>
+            <option value="size_desc">Size (Largest first)</option>
+            <option value="size_asc">Size (Smallest first)</option>
+            <option value="title_asc">Title (A-Z)</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <button class="btn btn-sm btn-ghost" onclick="resetTrendingFilters()" title="Reset trending filters" style="color:var(--red);">
+          <i class="fa-solid fa-filter-circle-xmark"></i> RESET
+        </button>
+      </div>
+
+      <!-- Trending Meta Bar -->
+      <div id="trending-meta-bar" class="meta-bar hidden">
+        <div>
+          Showing <span class="count" id="trending-meta-count">0</span> trending releases
+        </div>
+      </div>
+
+      <div id="trending-results-container">
+        <div class="empty-state">
+          <div class="empty-icon loading-pulse"><i class="fa-solid fa-fire"></i></div>
+          <h3>Loading trending...</h3>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────────────────────────────────────────────── -->
+    <!-- TAB 4: DISCOVER CATALOG (STREAMING & CINEMA DISCOVERY)            -->
+    <!-- ───────────────────────────────────────────────────────────────── -->
+    <section id="view-discover" class="tab-view hidden">
+      <!-- ── Tier 1: Discover Navigation Header & Smart Search ── -->
+      <div class="discover-nav-bar">
+        <!-- Media Type Selector Segmented Capsule -->
+        <div class="discover-segment-capsule">
+          <button class="segment-btn active" data-dcat="movie" onclick="setDiscoverType('movie')">
+            <i class="fa-solid fa-film"></i>
+            <span>Movies</span>
+          </button>
+          <button class="segment-btn" data-dcat="series" onclick="setDiscoverType('series')">
+            <i class="fa-solid fa-tv"></i>
+            <span>TV Series</span>
+          </button>
+          <button class="segment-btn" data-dcat="anime" onclick="setDiscoverType('anime')">
+            <i class="fa-solid fa-torii-gate"></i>
+            <span>Anime</span>
+          </button>
+        </div>
+
+        <!-- Smart Search in Discover with Live Suggestions Dropdown -->
+        <div class="discover-search-wrap">
+          <i class="fa-solid fa-magnifying-glass search-leading-icon"></i>
+          <input
+            id="discover-search-input"
+            type="text"
+            class="discover-search-input"
+            placeholder="Search movies, series, anime, actors..."
+            autocomplete="off"
+            oninput="handleDiscoverSearchInput(this.value)"
+            onkeydown="handleDiscoverSearchKeydown(event)"
+          >
+          <button id="btn-discover-search-clear" class="discover-search-clear-btn hidden" onclick="clearDiscoverSearch()" title="Clear search">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+          <button class="discover-search-btn" onclick="searchDiscoverCatalog()" title="Search catalog">
+            <i class="fa-solid fa-magnifying-glass"></i>
+          </button>
+
+          <!-- Autocomplete Suggestions Floating Dropdown -->
+          <div id="discover-search-suggestions" class="discover-suggestions-dropdown hidden"></div>
+        </div>
+      </div>
+
+      <!-- ── Dynamic Featured Hero Showcase Banner (Removed per user request) ── -->
+
+      <!-- Continue Watching Dynamic Shelf (Collapsible with +/-) -->
+      <div id="continue-watching-section" class="discover-shelf hidden">
+        <div class="shelf-header">
+          <div class="shelf-title-wrap">
+            <div class="shelf-icon-pulse"><i class="fa-solid fa-play"></i></div>
+            <h2 class="shelf-title">Continue Watching</h2>
+            <span id="continue-watching-count" class="shelf-count-badge">0 in progress</span>
+          </div>
+          <div class="shelf-actions">
+            <button class="shelf-clear-btn" onclick="clearContinueWatching()">Clear All</button>
+            <button id="btn-toggle-continue-shelf" class="shelf-collapse-btn" onclick="toggleContinueWatchingShelf()" title="Collapse / Expand Shelf">
+              <i id="continue-watching-shelf-icon" class="fa-solid fa-minus"></i>
+            </button>
+          </div>
+        </div>
+        <div id="continue-watching-shelf-body" class="shelf-body-collapsible">
+          <div id="continue-watching-grid" class="shelf-carousel"></div>
+        </div>
+      </div>
+
+      <!-- My List / Bookmarks Dynamic Shelf (Collapsible with +/-) -->
+      <div id="bookmarks-section" class="discover-shelf hidden">
+        <div class="shelf-header">
+          <div class="shelf-title-wrap">
+            <div class="shelf-icon-pulse list-icon"><i class="fa-solid fa-bookmark"></i></div>
+            <h2 class="shelf-title">My List & Favorites</h2>
+            <span id="bookmarks-shelf-count" class="shelf-count-badge">0 saved</span>
+          </div>
+          <div class="shelf-actions">
+            <button class="shelf-link-btn" onclick="openLibraryModal()" title="Open Full Library Manager">
+              <i class="fa-solid fa-arrow-up-right-from-square"></i> Full Library
+            </button>
+            <button id="btn-toggle-bookmarks-shelf" class="shelf-collapse-btn" onclick="toggleBookmarksShelf()" title="Collapse / Expand Shelf">
+              <i id="bookmarks-shelf-icon" class="fa-solid fa-minus"></i>
+            </button>
+          </div>
+        </div>
+        <div id="bookmarks-shelf-body" class="shelf-body-collapsible">
+          <div id="bookmarks-grid" class="shelf-carousel"></div>
+        </div>
+      </div>
+
+      <!-- ── Tier 2: Anime Sub-Category Filter Ribbon (Active when Anime tab is selected) ── -->
+      <div id="anime-category-bar" class="sub-ribbon-bar hidden">
+        <div class="sub-ribbon-scroll">
+          <span class="sub-ribbon-label"><i class="fa-solid fa-layer-group text-accent"></i> Format:</span>
+          <button class="sub-pill active" data-anime-cat="all" onclick="setAnimeCategory('all')">All Anime</button>
+          <button class="sub-pill" data-anime-cat="tv" onclick="setAnimeCategory('tv')"><i class="fa-solid fa-tv"></i> TV Series</button>
+          <button class="sub-pill" data-anime-cat="movie" onclick="setAnimeCategory('movie')"><i class="fa-solid fa-film"></i> Movies</button>
+          <button class="sub-pill" data-anime-cat="ova" onclick="setAnimeCategory('ova')"><i class="fa-solid fa-compact-disc"></i> OVA / ONA</button>
+          <button class="sub-pill" data-anime-cat="special" onclick="setAnimeCategory('special')"><i class="fa-solid fa-sparkles"></i> Specials</button>
+        </div>
+      </div>
+
+      <!-- ── Tier 3: Sleek Borderless Genre Pill Ribbon ── -->
+      <div class="genre-ribbon-bar">
+        <div class="genre-ribbon-scroll">
+          <button class="genre-pill active" data-dgenre="" onclick="setDiscoverGenre('')">
+            <i class="fa-solid fa-shapes"></i> All Genres
+          </button>
+          <button class="genre-pill" data-dgenre="Action" onclick="setDiscoverGenre('Action')">Action</button>
+          <button class="genre-pill" data-dgenre="Sci-Fi" onclick="setDiscoverGenre('Sci-Fi')">Sci-Fi</button>
+          <button class="genre-pill" data-dgenre="Drama" onclick="setDiscoverGenre('Drama')">Drama</button>
+          <button class="genre-pill" data-dgenre="Comedy" onclick="setDiscoverGenre('Comedy')">Comedy</button>
+          <button class="genre-pill" data-dgenre="Horror" onclick="setDiscoverGenre('Horror')">Horror</button>
+          <button class="genre-pill" data-dgenre="Animation" onclick="setDiscoverGenre('Animation')">Animation</button>
+          <button class="genre-pill" data-dgenre="Adventure" onclick="setDiscoverGenre('Adventure')">Adventure</button>
+          <button class="genre-pill" data-dgenre="Thriller" onclick="setDiscoverGenre('Thriller')">Thriller</button>
+          <button class="genre-pill" data-dgenre="Fantasy" onclick="setDiscoverGenre('Fantasy')">Fantasy</button>
+          <button class="genre-pill" data-dgenre="Crime" onclick="setDiscoverGenre('Crime')">Crime</button>
+          <button class="genre-pill" data-dgenre="Documentary" onclick="setDiscoverGenre('Documentary')">Documentary</button>
+        </div>
+      </div>
+
+      <!-- Catalog Section Header -->
+      <div class="catalog-section-header">
+        <div class="flex items-center gap-3">
+          <h2 id="catalog-heading-title" class="catalog-heading-title">Trending Movies</h2>
+          <span id="catalog-count-badge" class="catalog-count-badge">Popular Feed</span>
+        </div>
+        <!-- Discover Grid Sort Select -->
+        <div class="discover-sort-wrap flex items-center gap-2">
+          <span class="filter-label"><i class="fa-solid fa-arrow-down-wide-short text-accent"></i> SORT:</span>
+          <select id="discover-sort-select" class="filter-select discover-sort-select" onchange="setDiscoverSort(this.value)">
+            <option value="trending">🔥 Trending / Popular</option>
+            <option value="seeds_desc">🌱 Top Seeders</option>
+            <option value="rating_desc">⭐ Highest Rating</option>
+            <option value="year_desc">📅 Newest First</option>
+            <option value="year_asc">🕰️ Oldest First</option>
+            <option value="title_asc">🔤 Title (A - Z)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Discover Grid Container -->
+      <div id="discover-grid" class="discover-grid">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <div id="discover-loading" class="empty-state hidden">
+        <div class="empty-icon loading-pulse"><i class="fa-solid fa-compass"></i></div>
+        <h3>Loading catalog...</h3>
+      </div>
+
+      <div id="discover-more-wrap" class="flex flex-col items-center justify-center mt-4" style="margin-top: 1.5rem; margin-bottom: 2rem;">
+        <button id="btn-discover-more" class="btn btn-outline" onclick="loadMoreDiscover()">
+          <i class="fa-solid fa-angles-down"></i> Load More Titles
+        </button>
+        <!-- Creative Spiral Vortex Loading Animation -->
+        <div id="discover-more-loading" class="discover-spiral-loader hidden">
+          <div class="spiral-vortex">
+            <div class="spiral-ring ring-1"></div>
+            <div class="spiral-ring ring-2"></div>
+            <div class="spiral-ring ring-3"></div>
+            <div class="spiral-core"></div>
+          </div>
+          <span class="spiral-text">Summoning titles from the swarm…</span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Provider Health Status -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="status-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeStatusModal()">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-heart-pulse text-accent"></i>
+          <div>
+            <div class="mono font-bold text-sm">Provider Health & Circuit Breakers</div>
+            <div class="text-xs text-dim">Live tracker metrics</div>
+          </div>
+        </div>
+        <button class="btn btn-icon btn-ghost" onclick="closeStatusModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="data-table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width:25%">Provider</th>
+                <th style="width:12%">Type</th>
+                <th style="width:18%">Status</th>
+                <th style="width:12%">Calls</th>
+                <th style="width:15%">Success</th>
+                <th style="width:18%">Latency</th>
+              </tr>
+            </thead>
+            <tbody id="provider-status-rows">
+              <tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-dim);">Checking providers…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Subtitle Viewer -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="sub-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeSubModal()">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-closed-captioning text-green"></i>
+          <div>
+            <div class="mono font-bold text-sm" id="modal-sub-title">Subtitles</div>
+            <div class="text-xs text-dim" id="modal-sub-subtitle">Searching…</div>
+          </div>
+        </div>
+        <button class="btn btn-icon btn-ghost" onclick="closeSubModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body" id="modal-sub-list">
+        <!-- Dynamically populated -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Media Details & Jacket Artwork -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="media-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeMediaModal()">
+    <div class="modal-box modal-media">
+      <div id="media-backdrop" class="media-backdrop">
+        <button class="btn btn-icon btn-ghost media-close-btn" onclick="closeMediaModal()" title="Close (Esc)">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body media-content-wrap" id="media-modal-content">
+        <!-- Dynamically populated via JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Discover Media Details & Stream Drawer                     -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="discover-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeDiscoverModal()">
+    <div class="modal-box modal-media">
+      <div id="discover-modal-backdrop" class="media-backdrop">
+        <button class="btn btn-icon btn-ghost media-close-btn" onclick="closeDiscoverModal()" title="Close (Esc)">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body media-content-wrap" id="discover-modal-content">
+        <!-- Dynamically populated via JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: My Library & Watchlist Bookmarks (Power-User Overhaul)      -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="library-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeLibraryModal()">
+    <div class="modal-box modal-xl library-modal-box">
+      <!-- Modal Header -->
+      <div class="modal-header library-modal-header">
+        <div class="flex items-center gap-3">
+          <i class="fa-solid fa-bookmark text-yellow" style="font-size:1.3rem;"></i>
+          <div>
+            <h2 style="margin:0; font-size:1.25rem; font-weight:700; line-height:1.2;">My Library & Watchlist</h2>
+            <div class="flex items-center gap-2 mt-1">
+              <span id="library-total-count" class="tag tag-hdr">0 Titles</span>
+              <span id="library-filtered-count" class="mono text-dim text-xs">Showing 0</span>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <!-- Backup & Restore Actions -->
+          <div class="library-backup-dropdown-wrap" style="position:relative;">
+            <button class="btn btn-sm btn-outline text-accent" onclick="toggleLibraryBackupMenu()" title="Backup & Restore Library">
+              <i class="fa-solid fa-cloud-arrow-down"></i> Backup / Restore <i class="fa-solid fa-chevron-down text-xs ml-1"></i>
+            </button>
+            <div id="library-backup-menu" class="library-backup-menu hidden">
+              <button class="backup-menu-item" onclick="exportLibraryBackup('json')">
+                <i class="fa-solid fa-file-code text-accent"></i> Export as JSON Backup
+              </button>
+              <button class="backup-menu-item" onclick="exportLibraryBackup('csv')">
+                <i class="fa-solid fa-file-csv text-green"></i> Export as CSV Spreadsheet
+              </button>
+              <div class="menu-divider"></div>
+              <button class="backup-menu-item" onclick="triggerLibraryRestorePicker()">
+                <i class="fa-solid fa-file-import text-yellow"></i> Restore from JSON/CSV File...
+              </button>
+            </div>
+            <input type="file" id="library-backup-file-input" accept=".json,.csv" style="display:none;" onchange="handleLibraryBackupUpload(event)">
+          </div>
+
+          <button class="btn btn-icon btn-ghost modal-close-btn" onclick="closeLibraryModal()" title="Close (Esc)">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Status Filter Tabs -->
+      <div class="library-filter-tabs">
+        <button class="filter-chip active" data-lib-status="all" onclick="setLibraryFilter('all')">
+          <i class="fa-solid fa-border-all"></i> All (<span id="lib-count-all">0</span>)
+        </button>
+        <button class="filter-chip" data-lib-status="watching" onclick="setLibraryFilter('watching')">
+          <i class="fa-solid fa-play text-green"></i> Watching (<span id="lib-count-watching">0</span>)
+        </button>
+        <button class="filter-chip" data-lib-status="plan_to_watch" onclick="setLibraryFilter('plan_to_watch')">
+          <i class="fa-solid fa-clock text-accent"></i> Plan to Watch (<span id="lib-count-plan">0</span>)
+        </button>
+        <button class="filter-chip" data-lib-status="completed" onclick="setLibraryFilter('completed')">
+          <i class="fa-solid fa-circle-check text-blue"></i> Completed (<span id="lib-count-completed">0</span>)
+        </button>
+        <button class="filter-chip" data-lib-status="on_hold" onclick="setLibraryFilter('on_hold')">
+          <i class="fa-solid fa-circle-pause text-yellow"></i> On Hold (<span id="lib-count-onhold">0</span>)
+        </button>
+        <button class="filter-chip" data-lib-status="dropped" onclick="setLibraryFilter('dropped')">
+          <i class="fa-solid fa-circle-xmark text-dim"></i> Dropped (<span id="lib-count-dropped">0</span>)
+        </button>
+      </div>
+
+      <!-- Toolbar: Search, Type Filter, Sort, and Card Size Zoom Slider -->
+      <div class="library-toolbar">
+        <div class="library-search-box">
+          <i class="fa-solid fa-magnifying-glass text-dim text-xs"></i>
+          <input
+            type="text"
+            id="library-search-input"
+            class="library-search-input"
+            placeholder="Filter saved titles..."
+            oninput="handleLibrarySearch(this.value)"
+          >
+          <button id="btn-library-search-clear" class="btn btn-icon btn-ghost btn-xs hidden" onclick="clearLibrarySearch()">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="flex items-center gap-2 flex-wrap">
+          <!-- Type Filter -->
+          <div class="flex items-center gap-1">
+            <span class="mono text-xs text-dim">Type:</span>
+            <select id="library-type-filter" class="filter-select library-select-compact" onchange="handleLibraryTypeChange(this.value)">
+              <option value="all">All Types</option>
+              <option value="movie">Movies</option>
+              <option value="series">Series</option>
+              <option value="anime">Anime</option>
+            </select>
+          </div>
+
+          <!-- Sort Select -->
+          <div class="flex items-center gap-1">
+            <span class="mono text-xs text-dim">Sort:</span>
+            <select id="library-sort-select" class="filter-select library-select-compact" onchange="handleLibrarySortChange(this.value)">
+              <option value="updated">Recently Updated</option>
+              <option value="title_asc">Title (A-Z)</option>
+              <option value="title_desc">Title (Z-A)</option>
+              <option value="year_desc">Year (Newest)</option>
+              <option value="rating_desc">Rating (Highest)</option>
+              <option value="progress_desc">Progress % (Highest)</option>
+            </select>
+          </div>
+
+          <!-- Card Zoom Slider -->
+          <div class="library-zoom-control" title="Adjust Card Size / Grid Density">
+            <i class="fa-solid fa-table-cells text-accent text-xs"></i>
+            <span class="mono text-xs text-dim">Size:</span>
+            <input
+              type="range"
+              id="library-zoom-slider"
+              min="130"
+              max="280"
+              step="10"
+              value="180"
+              class="scale-slider"
+              style="width: 80px;"
+              oninput="handleLibraryCardZoom(this.value)"
+            >
+            <span id="library-zoom-val" class="mono text-xs text-accent font-bold" style="min-width:38px;">180px</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal Body (Dynamic Cards Grid) -->
+      <div class="modal-body" id="library-modal-body" style="overflow-y:auto; flex:1; padding:1.25rem;">
+        <!-- Dynamically rendered library cards -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: In-Browser Video Player (P2P + FFmpeg Transmux)            -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="player-modal" class="modal-overlay hidden" onclick="if(event.target===this)closePlayerModal()">
+    <div class="player-modal-box">
+      <!-- Player Header HUD -->
+      <div class="player-hud-header">
+        <div class="flex items-center gap-2" style="min-width:0; overflow:hidden;">
+          <span class="tag tag-green mono"><i class="fa-solid fa-satellite-dish"></i> P2P STREAM</span>
+          <span id="player-stream-title" class="mono font-bold text-sm" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">EvoPlayer</span>
+          <span id="player-audio-badge" class="tag tag-green mono text-xs"><i class="fa-solid fa-volume-high"></i> Stereo AAC</span>
+          <div id="player-p2p-hud" class="flex items-center gap-1 mono text-xs ml-2">
+            <span class="tag tag-accent"><i class="fa-solid fa-users"></i> <span id="p2p-peers-count">0 Peers</span></span>
+            <span class="tag tag-blue"><i class="fa-solid fa-chart-pie"></i> <span id="p2p-ratio">Direct P2P Ready</span></span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <!-- Audio Track Switcher (for multi-audio releases) -->
+          <button id="btn-cycle-audio-track" class="btn btn-sm btn-ghost" onclick="cycleAudioTrack()" title="Switch Audio Track (Track 1, Track 2...)">
+            <i class="fa-solid fa-headphones text-blue"></i>
+            <span id="player-audio-track-badge" class="mono text-xs">Track 1</span>
+          </button>
+          <!-- Subtitle Menu & Sync Controls -->
+          <button id="btn-toggle-subs" class="btn btn-sm btn-ghost" onclick="toggleSubtitleDrawer()" title="Subtitles Menu & Auto-Loader">
+            <i class="fa-solid fa-closed-captioning text-green"></i>
+            <span id="player-active-sub-badge" class="mono text-xs">Subs: Auto</span>
+          </button>
+          <button id="btn-jump-first-cue" class="btn btn-sm btn-ghost hidden" title="Jump straight to first spoken dialogue line" onclick="jumpToFirstCue()">
+            <i class="fa-solid fa-forward-step text-green"></i>
+            <span id="player-first-cue-text" class="mono text-xs">1st Line</span>
+          </button>
+          <button id="btn-sync-subs" class="btn btn-sm btn-ghost" onclick="toggleSubtitleDrawer(true)" title="Subtitle Real-time Sync & Timing">
+            <i class="fa-solid fa-clock text-accent"></i>
+            <span id="player-sync-badge" class="mono text-xs">0.0s</span>
+          </button>
+          <button class="btn btn-sm btn-stream-vlc" onclick="switchPlayerToVlc()" title="Launch external VLC Player in foreground">
+            <i class="fa-solid fa-rocket"></i> Launch in VLC
+          </button>
+          <button id="btn-player-m3u" class="btn btn-sm btn-ghost" onclick="downloadActiveM3u()" title="Download M3U Playlist file for instant VLC / MPV opening">
+            <i class="fa-solid fa-file-arrow-down text-blue"></i> .M3U
+          </button>
+          <button id="btn-player-fullscreen" class="btn btn-icon btn-ghost" onclick="togglePlayerFullscreen()" title="Fullscreen (F)">
+            <i class="fa-solid fa-expand"></i>
+          </button>
+          <button class="btn btn-icon btn-ghost" onclick="closePlayerModal()" title="Close Player (Esc)">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Native Video Viewport -->
+      <div class="player-video-wrap" id="player-video-wrap" onmousemove="handlePlayerMouseMove()" onmouseleave="handlePlayerMouseLeave()">
+        <!-- Ambient Glow Backing Layer -->
+        <div id="player-ambilight-glow" class="player-ambilight-glow"></div>
+        <canvas id="player-ambilight-canvas" class="hidden" width="32" height="18"></canvas>
+
+        <video id="evo-video-player" playsinline class="evo-video-el aspect-contain" onclick="togglePlayerPlay()">
+          Your browser does not support HTML5 video streaming.
+        </video>
+
+        <!-- Big Center Play / Pause Indicator -->
+        <div id="player-center-play" class="player-center-play">
+          <i class="fa-solid fa-play"></i>
+        </div>
+
+        <!-- Buffering Spinner & Modern Progress HUD -->
+        <div id="player-buffering-hud" class="player-buffering-hud hidden">
+          <div class="buffering-card">
+            <div class="buffering-header">
+              <span class="buffering-pulse-ring"></span>
+              <span class="buffering-title mono"><i class="fa-solid fa-satellite-dish text-accent"></i> BUFFERING STREAM</span>
+              <span id="buffering-pct-badge" class="tag tag-accent mono font-bold">0%</span>
+            </div>
+            <!-- Animated Striped Progress Bar -->
+            <div class="buffering-progress-track">
+              <div id="buffering-progress-fill" class="buffering-progress-fill" style="width: 0%;"></div>
+            </div>
+            <!-- Telemetry & Countdown Stats -->
+            <div class="buffering-telemetry">
+              <span id="buffering-bytes-label" class="mono text-dim text-xs"><i class="fa-solid fa-layer-group"></i> 0.0 / 6.0 MB</span>
+              <span id="buffering-speed-label" class="mono text-green text-xs"><i class="fa-solid fa-gauge-high"></i> Connecting...</span>
+              <span id="buffering-countdown-label" class="mono text-accent text-xs font-bold"><i class="fa-solid fa-hourglass-start"></i> Starting soon...</span>
+            </div>
+          </div>
+        </div>
+        <div id="player-buffering-spinner" class="player-buffering-spinner hidden"></div>
+
+        <!-- Dedicated Dual/Secondary Subtitle Overlay (Language Learning Top Position) -->
+        <div id="player-secondary-cue" class="player-secondary-cue hidden"></div>
+
+        <!-- Dedicated On-Screen Subtitle Display Overlay (Positioned directly over viewport) -->
+        <div id="player-active-cue" class="player-active-cue hidden"></div>
+        <!-- Floating Subtitle Notification / Jump-to-Dialogue Pill -->
+        <div id="player-sub-status-pill" class="player-sub-status-pill hidden" onclick="jumpToFirstCue()"></div>
+        <!-- Floating Unmute / Volume Booster Banner (Auto-dismisses when sound is confirmed) -->
+        <div id="player-unmute-overlay" class="player-unmute-overlay hidden" onclick="unmuteAndBoostVideo()">
+          <i class="fa-solid fa-volume-xmark text-accent"></i>
+          <span class="mono text-xs">Browser may have muted audio. Click here to Unmute & Maximize Volume!</span>
+        </div>
+
+        <!-- Netflix-Grade Floating Skip Intro / Outro Button -->
+        <button id="player-skip-btn" class="player-skip-btn hidden" onclick="handleSkipIntroOutro()">
+          <i class="fa-solid fa-forward-step text-accent"></i>
+          <span id="player-skip-btn-text">Skip Intro</span>
+        </button>
+
+        <!-- Netflix-Grade Binge Countdown Next-Episode Card -->
+        <div id="player-next-ep-card" class="player-next-ep-card hidden">
+          <div class="next-ep-info">
+            <span class="next-ep-badge">UP NEXT</span>
+            <div id="next-ep-title" class="next-ep-title">S01E02 · Episode Title</div>
+            <div id="next-ep-countdown" class="next-ep-countdown mono text-xs text-dim">Playing in 10s...</div>
+          </div>
+          <div class="next-ep-actions">
+            <button class="btn btn-sm btn-primary" onclick="playNextEpisode(true)">
+              <i class="fa-solid fa-play"></i> Play Now
+            </button>
+            <button class="btn btn-sm btn-ghost" onclick="cancelNextEpisodeCountdown()">
+              Cancel
+            </button>
+          </div>
+        </div>
+
+        <!-- In-Player Episode Selector Drawer -->
+        <div id="player-episodes-drawer" class="player-episodes-drawer hidden">
+          <div class="episodes-drawer-header">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-list-ol text-green"></i>
+              <span id="player-episodes-drawer-title" class="mono font-bold text-xs uppercase text-accent">Episodes</span>
+            </div>
+            <button class="btn btn-icon btn-ghost" style="padding:0.2rem 0.5rem;" onclick="togglePlayerEpisodesDrawer(false)">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+          <div class="episodes-drawer-seasons" id="player-episodes-seasons-bar"></div>
+          <div class="episodes-drawer-list" id="player-episodes-drawer-list"></div>
+        </div>
+
+        <!-- Netflix-Grade Custom Player Bottom Controls HUD -->
+        <div id="player-bottom-controls" class="player-bottom-controls">
+          <!-- Timeline Container -->
+          <div class="player-timeline-container" id="player-timeline-container">
+            <div id="player-hover-time" class="player-hover-time hidden">00:00:00</div>
+            <div class="player-timeline-track" id="player-timeline-track">
+              <div class="player-timeline-buffered" id="player-buffered-bar"></div>
+              <div class="player-timeline-progress" id="player-progress-bar">
+                <div class="player-timeline-scrubber" id="player-scrubber-dot"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Controls Bar Row -->
+          <div class="player-controls-row">
+            <!-- Left Controls -->
+            <div class="player-controls-left">
+              <button id="btn-player-play" class="player-btn" onclick="togglePlayerPlay()" title="Play / Pause (Space / K)">
+                <i class="fa-solid fa-play"></i>
+              </button>
+              <button id="btn-player-rw" class="player-btn" onclick="skipPlayerSeconds(-10)" title="Rewind 10s (← / J)">
+                <i class="fa-solid fa-rotate-left"></i>
+                <span class="player-skip-num">10</span>
+              </button>
+              <button id="btn-player-ff" class="player-btn" onclick="skipPlayerSeconds(10)" title="Forward 10s (→ / L)">
+                <i class="fa-solid fa-rotate-right"></i>
+                <span class="player-skip-num">10</span>
+              </button>
+
+              <!-- Volume Control -->
+              <div class="player-volume-wrap">
+                <button id="btn-player-vol" class="player-btn" onclick="togglePlayerMute()" title="Mute / Unmute (M)">
+                  <i class="fa-solid fa-volume-high"></i>
+                </button>
+                <div class="player-volume-slider-wrap">
+                  <input type="range" id="player-volume-slider" min="0" max="1" step="0.05" value="1" oninput="setPlayerVolume(this.value)">
+                </div>
+              </div>
+
+              <!-- Time Counter -->
+              <div class="player-time-display" id="player-time-display" onclick="toggleTimeRemaining()" title="Click to toggle remaining time">
+                <span id="player-cur-time" class="mono">00:00:00</span>
+                <span class="text-dim">/</span>
+                <span id="player-total-time" class="mono text-dim">00:00:00</span>
+              </div>
+
+              <!-- In-Player Episode Drawer Toggle (Visible only on episodic series/anime) -->
+              <button id="btn-hud-episodes" class="player-btn hidden" onclick="togglePlayerEpisodesDrawer()" title="Episodes Drawer (E)">
+                <i class="fa-solid fa-list-ol text-green"></i>
+                <span class="mono text-xs">Episodes</span>
+              </button>
+            </div>
+
+            <!-- Right Controls -->
+            <div class="player-controls-right">
+              <span id="player-hud-stream-badge" class="tag tag-dim mono text-xs">1080p | AAC</span>
+
+              <!-- Playback Speed dropdown -->
+              <div class="player-dropdown-wrap">
+                <button id="btn-hud-speed" class="player-btn" onclick="toggleSpeedDropdown()" title="Playback Speed ([ / ])">
+                  <i class="fa-solid fa-gauge-high"></i>
+                  <span id="player-hud-speed-label" class="mono text-xs">1.0x</span>
+                </button>
+                <div id="player-speed-menu" class="player-dropdown-menu hidden"></div>
+              </div>
+
+              <!-- Aspect Ratio & Ultrawide Zoom -->
+              <button id="btn-hud-aspect" class="player-btn" onclick="cyclePlayerAspectRatio()" title="Aspect Ratio & Ultrawide Zoom (A)">
+                <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
+                <span id="player-hud-aspect-label" class="mono text-xs">Fit</span>
+              </button>
+
+              <!-- Night Dialogue Mode (Compressor) -->
+              <button id="btn-hud-nightmode" class="player-btn" onclick="toggleNightDialogueMode()" title="Night Dialogue Mode (Boosts quiet speech, compresses loud SFX) (N)">
+                <i class="fa-solid fa-moon"></i>
+              </button>
+
+              <!-- Ambient Glow Lighting -->
+              <button id="btn-hud-ambilight" class="player-btn" onclick="toggleAmbilight()" title="Ambilight Ambient Glow">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+              </button>
+
+              <!-- Picture-in-Picture -->
+              <button id="btn-hud-pip" class="player-btn" onclick="togglePlayerPiP()" title="Picture-in-Picture (P)">
+                <i class="fa-solid fa-clone"></i>
+              </button>
+
+              <!-- Audio selector dropdown -->
+              <div class="player-dropdown-wrap">
+                <button id="btn-hud-audio" class="player-btn" onclick="toggleAudioDropdown()" title="Switch Audio Track">
+                  <i class="fa-solid fa-headphones"></i>
+                  <span id="player-hud-audio-lang" class="mono text-xs">Audio</span>
+                </button>
+                <div id="player-audio-menu" class="player-dropdown-menu hidden"></div>
+              </div>
+
+              <!-- Subtitles button -->
+              <button id="btn-hud-subs" class="player-btn" onclick="toggleSubtitleDrawer()" title="Subtitles Hub & Audio Sync (C)">
+                <i class="fa-solid fa-closed-captioning"></i>
+              </button>
+
+              <!-- Swarm & Piece Map Inspector -->
+              <button id="btn-hud-swarm" class="player-btn" onclick="toggleSwarmInspectorModal(true)" title="Swarm & Piece Map Inspector (S)">
+                <i class="fa-solid fa-circle-nodes text-green"></i>
+              </button>
+
+              <!-- Casting to TV / Chromecast -->
+              <button id="btn-hud-cast" class="player-btn" onclick="promptCastMedia()" title="Cast to Chromecast / Smart TV">
+                <i class="fa-brands fa-chromecast text-accent"></i>
+              </button>
+
+              <!-- Offline Download -->
+              <button id="btn-hud-download" class="player-btn" onclick="triggerOfflineDownload()" title="Download Media for Offline Playback">
+                <i class="fa-solid fa-download"></i>
+              </button>
+
+              <!-- Keyboard Shortcuts Help -->
+              <button id="btn-hud-help" class="player-btn" onclick="toggleShortcutsModal()" title="Keyboard Shortcuts (?)">
+                <i class="fa-solid fa-circle-question"></i>
+              </button>
+
+              <!-- Torrent Files Inspector & Switcher -->
+              <button id="btn-hud-files" class="player-btn" onclick="openActiveStreamFilesModal()" title="View & Switch Files in Torrent">
+                <i class="fa-solid fa-folder-tree text-accent"></i>
+                <span id="player-hud-files-label" class="mono text-xs">Files</span>
+              </button>
+
+              <!-- Universal External Player Launcher (VLC, MPV, MPC-HC, PotPlayer) -->
+              <div class="player-dropdown-wrap">
+                <button id="btn-hud-extplayer" class="player-btn player-btn-vlc" onclick="toggleExtPlayerDropdown()" title="Launch in Native Desktop Media Player">
+                  <i class="fa-solid fa-rocket"></i>
+                  <span id="player-hud-extplayer-label" class="mono text-xs">VLC</span>
+                  <i class="fa-solid fa-chevron-down text-dim" style="font-size:0.55rem; margin-left:2px;"></i>
+                </button>
+                <div id="player-extplayer-menu" class="player-dropdown-menu hidden" style="min-width:160px; right:0; bottom:120%;">
+                  <div class="dropdown-item" onclick="switchPlayerToExternal('vlc')"><i class="fa-solid fa-rocket text-orange"></i> VLC Player</div>
+                  <div class="dropdown-item" onclick="switchPlayerToExternal('mpv')"><i class="fa-solid fa-play text-accent"></i> MPV Player</div>
+                  <div class="dropdown-item" onclick="switchPlayerToExternal('mpc-hc')"><i class="fa-solid fa-film text-blue"></i> MPC-HC / BE</div>
+                  <div class="dropdown-item" onclick="switchPlayerToExternal('potplayer')"><i class="fa-solid fa-tv text-green"></i> PotPlayer</div>
+                </div>
+              </div>
+
+              <!-- Fullscreen button -->
+              <button id="btn-hud-fullscreen" class="player-btn" onclick="togglePlayerFullscreen()" title="Fullscreen (F)">
+                <i class="fa-solid fa-expand"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Subtitle Control Drawer (Collapsible HUD Overlay) -->
+        <div id="player-sub-drawer" class="player-sub-drawer hidden">
+          <div class="sub-drawer-header">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-closed-captioning text-green"></i>
+              <span class="mono font-bold text-xs uppercase text-accent">Subtitles Hub & Real-Time Sync</span>
+            </div>
+            <button class="btn btn-icon btn-ghost" style="padding:0.2rem 0.5rem;" onclick="toggleSubtitleDrawer(false)">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+
+          <div class="sub-drawer-body">
+            <!-- REAL-TIME SYNC CONTROLLER -->
+            <div class="sub-sync-panel">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs mono text-dim"><i class="fa-solid fa-clock-rotate-left"></i> REAL-TIME SYNC DELAY:</span>
+                <span id="sub-sync-val" class="mono text-xs font-bold text-green">0.0s (In Sync)</span>
+              </div>
+              <div class="flex items-center gap-1">
+                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-1.0)">-1.0s</button>
+                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.5)">-0.5s</button>
+                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.1)">-0.1s</button>
+                <input type="range" id="sub-sync-slider" min="-10" max="10" step="0.1" value="0" class="sub-sync-slider" oninput="setSubtitleSync(parseFloat(this.value))">
+                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.1)">+0.1s</button>
+                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.5)">+0.5s</button>
+                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(1.0)">+1.0s</button>
+                <button class="btn btn-xs btn-ghost text-red" onclick="resetSubtitleSync()" title="Reset delay to 0.0s">Reset</button>
+              </div>
+              <div class="text-xs text-dim mono mt-1" style="font-size:0.68rem;">
+                Tip: Press <kbd class="kbd">G</kbd> to delay subtitles (-0.1s) or <kbd class="kbd">H</kbd> to advance (+0.1s) while watching.
+              </div>
+            </div>
+
+            <!-- REAL-TIME AUDIO SYNC & DELAY CONTROLLER -->
+            <div class="sub-sync-panel" style="margin-top:0.6rem; border-top: 1px solid rgba(255,255,255,0.06); padding-top:0.6rem;">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs mono text-dim"><i class="fa-solid fa-volume-high text-accent"></i> AUDIO DELAY CALIBRATION:</span>
+                <span id="audio-sync-val" class="mono text-xs font-bold text-accent">0.00s (In Sync)</span>
+              </div>
+              <div class="flex items-center gap-1">
+                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(-0.5)">-0.5s</button>
+                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(-0.1)">-0.1s</button>
+                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(-0.05)">-50ms</button>
+                <input type="range" id="audio-sync-slider" min="-5" max="5" step="0.05" value="0" class="sub-sync-slider" oninput="setAudioSync(parseFloat(this.value))">
+                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(0.05)">+50ms</button>
+                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(0.1)">+0.1s</button>
+                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(0.5)">+0.5s</button>
+                <button class="btn btn-xs btn-ghost text-red" onclick="resetAudioSync()" title="Reset audio delay to 0.0s">Reset</button>
+              </div>
+              <div class="text-xs text-dim mono mt-1" style="font-size:0.68rem;">
+                Calibrate out-of-sync audio in real time (&plusmn;5.0s in 50ms increments).
+              </div>
+            </div>
+
+            <!-- SUBTITLE CUSTOMIZATION STUDIO -->
+            <div class="sub-sync-panel" style="margin-top:0.6rem; border-top: 1px solid rgba(255,255,255,0.06); padding-top:0.6rem;">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs mono text-dim"><i class="fa-solid fa-sliders text-green"></i> SUBTITLE STUDIO & STYLING:</span>
+                <span id="sub-style-preview" class="mono text-xs font-bold text-accent">Preview: Subtitle Font</span>
+              </div>
+              <div class="flex items-center gap-2 mb-2">
+                <label class="text-xs mono text-dim" style="min-width:65px;">Size:</label>
+                <input type="range" id="sub-style-size" min="70" max="240" step="5" value="100" class="sub-sync-slider" oninput="applySubtitleStyles()">
+                <span id="sub-style-size-val" class="mono text-xs" style="min-width:40px;">100%</span>
+              </div>
+              <div class="flex items-center gap-2 mb-2">
+                <label class="text-xs mono text-dim" style="min-width:65px;">Color:</label>
+                <div class="flex gap-1">
+                  <button class="btn btn-xs sub-color-swatch active" style="background:#ffffff; color:#000; padding:0.15rem 0.5rem;" onclick="setSubtitleColor('#ffffff')">White</button>
+                  <button class="btn btn-xs sub-color-swatch" style="background:#ffeb3b; color:#000; padding:0.15rem 0.5rem;" onclick="setSubtitleColor('#ffeb3b')">Yellow</button>
+                  <button class="btn btn-xs sub-color-swatch" style="background:#00e5ff; color:#000; padding:0.15rem 0.5rem;" onclick="setSubtitleColor('#00e5ff')">Cyan</button>
+                  <button class="btn btn-xs sub-color-swatch" style="background:#00e676; color:#000; padding:0.15rem 0.5rem;" onclick="setSubtitleColor('#00e676')">Green</button>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 mb-1">
+                <label class="text-xs mono text-dim" style="min-width:65px;">Bottom Offset:</label>
+                <input type="range" id="sub-style-pos" min="2" max="15" step="0.5" value="4.5" class="sub-sync-slider" oninput="applySubtitleStyles()">
+                <span id="sub-style-pos-val" class="mono text-xs" style="min-width:40px;">4.5rem</span>
+              </div>
+            </div>
+
+            <!-- MANUAL LOAD & SEARCH SECTION -->
+            <div class="sub-manual-panel">
+              <div class="flex items-center gap-2">
+                <label class="btn btn-xs btn-outline" title="Upload local .srt or .vtt file from your PC" style="cursor:pointer;">
+                  <i class="fa-solid fa-file-arrow-up text-accent"></i> Load Local .SRT / .VTT
+                  <input type="file" id="local-sub-input" accept=".srt,.vtt,.txt" style="display:none;" onchange="handleLocalSubtitleUpload(event)">
+                </label>
+                <div class="flex-1 flex gap-1">
+                  <input type="text" id="player-manual-sub-query" class="search-input sub-manual-input" placeholder="Search other title or scene subs..." onkeydown="if(event.key==='Enter')searchPlayerSubtitles()">
+                  <button class="btn btn-xs btn-green" onclick="searchPlayerSubtitles()"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- LANGUAGE TABS & TRACKS LIST -->
+            <div class="sub-tracks-section">
+              <div class="sub-lang-bar">
+                <button class="sub-lang-tab active" data-sublang="all" onclick="filterSubtitleLang('all')">All</button>
+                <button class="sub-lang-tab" data-sublang="en" onclick="filterSubtitleLang('en')">🇬🇧 EN</button>
+                <button class="sub-lang-tab" data-sublang="es" onclick="filterSubtitleLang('es')">🇪🇸 ES</button>
+                <button class="sub-lang-tab" data-sublang="fr" onclick="filterSubtitleLang('fr')">🇫🇷 FR</button>
+                <button class="sub-lang-tab" data-sublang="ar" onclick="filterSubtitleLang('ar')">🇸🇦 AR</button>
+                <button class="sub-lang-tab" data-sublang="de" onclick="filterSubtitleLang('de')">🇩🇪 DE</button>
+                <button class="sub-lang-tab" data-sublang="it" onclick="filterSubtitleLang('it')">🇮🇹 IT</button>
+                <button class="sub-lang-tab" data-sublang="pt" onclick="filterSubtitleLang('pt')">🇧🇷 PT</button>
+                <button class="sub-lang-tab" data-sublang="ru" onclick="filterSubtitleLang('ru')">🇷🇺 RU</button>
+                <button class="btn btn-xs btn-ghost text-red" onclick="disableSubtitles()" style="margin-left:auto;">
+                  <i class="fa-solid fa-ban"></i> Turn Off Subs
+                </button>
+              </div>
+
+              <div id="player-subs-list" class="sub-items-list">
+                <div class="text-xs text-dim p-3 text-center">
+                  <i class="fa-solid fa-spinner fa-spin text-accent"></i> Searching OpenSubtitles, Gestdown & YIFY...
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Player Footer HUD -->
+      <div class="player-hud-footer">
+        <div class="flex items-center gap-2">
+          <span id="player-swarm-stat"><i class="fa-solid fa-circle-nodes text-green"></i> P2P Swarm Buffering...</span>
+        </div>
+        <div class="flex items-center gap-3 text-dim">
+          <span><i class="fa-solid fa-bolt text-accent"></i> HTTP 206 Byte-Range</span>
+          <span>Space: Play/Pause · ←/→: ±10s · F: Fullscreen · G/H: Sync Subs · V: VLC</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcut Cheat Sheet Modal -->
+  <div id="player-shortcuts-modal" class="modal-overlay hidden" onclick="if(event.target===this)toggleShortcutsModal(false)">
+    <div class="modal-box" style="max-width: 620px;">
+      <div class="modal-header">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-keyboard text-green"></i>
+          <span class="font-bold text-sm uppercase mono text-accent">EvoScrapper Player Shortcuts</span>
+        </div>
+        <button class="btn btn-icon btn-ghost" onclick="toggleShortcutsModal(false)" title="Close Shortcuts (Esc)"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body" style="padding: 1.1rem 1.25rem;">
+        <table class="shortcuts-table" style="width:100%; border-collapse:collapse; font-size:0.84rem;">
+          <tbody>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">Space</kbd> / <kbd class="kbd">K</kbd></td><td class="text-dim">Play / Pause stream</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">&larr;</kbd> / <kbd class="kbd">&rarr;</kbd></td><td class="text-dim">Seek backwards / forwards 10s</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">J</kbd> / <kbd class="kbd">L</kbd></td><td class="text-dim">Seek 10s (YouTube / Stremio style)</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">&uarr;</kbd> / <kbd class="kbd">&darr;</kbd></td><td class="text-dim">Adjust volume &plusmn;10%</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">M</kbd></td><td class="text-dim">Mute / Unmute audio</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">F</kbd></td><td class="text-dim">Toggle True Edge-to-Edge Fullscreen</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">P</kbd></td><td class="text-dim">Toggle Picture-in-Picture (PiP) Window</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">[</kbd> / <kbd class="kbd">]</kbd></td><td class="text-dim">Decrease / Increase Speed (0.5x &ndash; 2.0x)</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">A</kbd></td><td class="text-dim">Cycle Aspect Ratio (Fit, 21:9 Ultrawide, Fill)</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">N</kbd></td><td class="text-dim">Toggle Night Dialogue Compressor (boost voices)</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">C</kbd></td><td class="text-dim">Toggle Subtitles & Audio Calibration Drawer</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">S</kbd></td><td class="text-dim">Toggle P2P Swarm & Piece Map Inspector</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">E</kbd></td><td class="text-dim">Toggle In-Player Episodes Drawer</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">V</kbd></td><td class="text-dim">Launch in Native External Player (VLC, MPV, MPC-HC)</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">D</kbd></td><td class="text-dim">Download Media for Offline Playback</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">Esc</kbd></td><td class="text-dim">Exit Fullscreen / Dismiss Modals</td></tr>
+            <tr><td style="padding:0.45rem 0;"><kbd class="kbd">?</kbd></td><td class="text-dim">Toggle this Keyboard Shortcut Cheat Sheet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive YouTube Trailer Modal (Phase 7) -->
+  <div id="trailer-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeTrailerModal()">
+    <div class="modal-box" style="max-width: 860px; padding: 0; background: #000; overflow: hidden; border: 1px solid var(--border-subtle);">
+      <div class="modal-header" style="padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.08);">
+        <div class="flex items-center gap-2">
+          <i class="fa-brands fa-youtube text-red"></i>
+          <span id="trailer-modal-title" class="mono font-bold text-sm text-accent">Official Trailer</span>
+        </div>
+        <button class="btn btn-icon btn-ghost" onclick="closeTrailerModal()" title="Close Trailer (Esc)"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="trailer-aspect-wrap">
+        <iframe id="trailer-iframe" src="" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+      </div>
+    </div>
+  </div>
+
+  <!-- P2P Swarm & Piece Map Inspector Modal (Phase 5) -->
+  <div id="swarm-inspector-modal" class="modal-overlay hidden" onclick="if(event.target===this)toggleSwarmInspectorModal(false)">
+    <div class="modal-box" style="max-width: 680px;">
+      <div class="modal-header">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-circle-nodes text-green"></i>
+          <span class="font-bold text-sm uppercase mono text-accent">P2P Swarm & Piece Map Inspector</span>
+        </div>
+        <button class="btn btn-icon btn-ghost" onclick="toggleSwarmInspectorModal(false)" title="Close Swarm Inspector (Esc)"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body" style="padding: 1.25rem;">
+        <div class="grid grid-3 gap-2 mb-3">
+          <div class="stat-card p-2 text-center" style="background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+            <div class="text-xs text-dim mono">DOWNLOAD SPEED</div>
+            <div id="swarm-inspector-down" class="mono font-bold text-green text-base mt-1">0.0 MB/s</div>
+          </div>
+          <div class="stat-card p-2 text-center" style="background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+            <div class="text-xs text-dim mono">CONNECTED PEERS</div>
+            <div id="swarm-inspector-peers" class="mono font-bold text-accent text-base mt-1">0 Peers</div>
+          </div>
+          <div class="stat-card p-2 text-center" style="background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+            <div class="text-xs text-dim mono">PIECES DOWNLOADED</div>
+            <div id="swarm-inspector-pieces" class="mono font-bold text-white text-base mt-1">0 / 0</div>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <div class="flex items-center justify-between text-xs mono text-dim mb-1">
+            <span><i class="fa-solid fa-layer-group text-accent"></i> 64-PIECE SLIDING WINDOW BITFIELD:</span>
+            <span id="swarm-inspector-pct" class="text-green font-bold">0%</span>
+          </div>
+          <div id="swarm-inspector-piecemap" class="piece-map-grid"></div>
+        </div>
+
+        <div>
+          <div class="text-xs mono text-dim mb-1"><i class="fa-solid fa-network-wired text-accent"></i> CONNECTED PEER CLIENT SOFTWARE:</div>
+          <div id="swarm-inspector-peer-list" class="peer-clients-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Torrent Files Inspector & Switcher -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="torrent-files-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeTorrentFilesModal()">
+    <div class="modal-box" style="max-width: 720px; max-height: 85vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: #0c0f17; border: 1px solid rgba(255,255,255,0.12);">
+      <div class="modal-header" style="flex-shrink: 0; padding: 0.85rem 1.1rem; border-bottom: 1px solid rgba(255,255,255,0.08);">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-folder-tree text-accent"></i>
+          <span id="torrent-files-modal-title" class="mono font-bold text-sm">Torrent Files</span>
+        </div>
+        <button class="modal-close" onclick="closeTorrentFilesModal()">&times;</button>
+      </div>
+      <div style="padding: 0.65rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.06); flex-shrink: 0; display: flex; gap: 0.6rem; align-items: center; background: rgba(255,255,255,0.02);">
+        <input type="text" id="torrent-files-filter" class="input input-sm" style="flex: 1;" placeholder="Filter files (e.g. S01, 1080p, 001)..." oninput="filterTorrentFilesList(this.value)">
+        <span id="torrent-files-count" class="tag tag-dim mono text-xs self-center">0 files</span>
+      </div>
+      <div id="torrent-files-list" style="overflow-y: auto; padding: 0.75rem 1rem; flex: 1; display: flex; flex-direction: column; gap: 0.45rem; max-height: 55vh;">
+        <div class="empty-state" style="padding: 2rem;">
+          <div class="empty-icon loading-pulse"><i class="fa-solid fa-folder-open text-accent"></i></div>
+          <h3>Inspecting torrent files...</h3>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: System Control Center & Settings Hub (Matches Video Modal Size)-->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="settings-modal" class="modal-overlay hidden" onclick="if(event.target===this)toggleSettingsModal(false)">
+    <div class="modal-box settings-modal-box">
+      <!-- Modal Header -->
+      <div class="modal-header settings-modal-header">
+        <div class="flex items-center gap-3">
+          <div class="settings-header-icon"><i class="fa-solid fa-sliders text-accent"></i></div>
+          <div>
+            <div class="mono font-bold text-sm text-accent uppercase flex items-center gap-2">
+              <span>EvoScrapper Control Center & System Hub</span>
+              <span class="tag tag-green mono text-xs"><i class="fa-solid fa-satellite-dish"></i> v2.5 Online</span>
+            </div>
+            <div class="text-xs text-dim">Engine parameters, APIs, CDNs, P2P network & diagnostics</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="btn btn-xs btn-outline" onclick="runDiagnosticsTest()" title="Run Quick Self-Test">
+            <i class="fa-solid fa-vial-circle-check text-green"></i> Test System
+          </button>
+          <button class="btn btn-icon btn-ghost" onclick="toggleSettingsModal(false)" title="Close Settings (Esc)">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Modal Body (Two-Column Layout) -->
+      <div class="settings-modal-body">
+        <!-- Left Navigation Sidebar -->
+        <aside class="settings-nav-sidebar">
+          <button class="settings-nav-btn active" data-settings-tab="interface" onclick="switchSettingsTab('interface')">
+            <i class="fa-solid fa-palette"></i>
+            <div class="settings-nav-text">
+              <span class="settings-nav-title">Interface & Player</span>
+              <span class="settings-nav-desc">Palettes, scale & playback</span>
+            </div>
+          </button>
+
+          <button class="settings-nav-btn" data-settings-tab="apis" onclick="switchSettingsTab('apis')">
+            <i class="fa-solid fa-server"></i>
+            <div class="settings-nav-text">
+              <span class="settings-nav-title">APIs & Scrapers</span>
+              <span class="settings-nav-desc">Cinemeta, timeouts & limits</span>
+            </div>
+          </button>
+
+          <button class="settings-nav-btn" data-settings-tab="network" onclick="switchSettingsTab('network')">
+            <i class="fa-solid fa-network-wired"></i>
+            <div class="settings-nav-text">
+              <span class="settings-nav-title">P2P, Trackers & CDNs</span>
+              <span class="settings-nav-desc">WebTorrent, UPnP & mesh</span>
+            </div>
+          </button>
+
+          <button class="settings-nav-btn" data-settings-tab="storage" onclick="switchSettingsTab('storage')">
+            <i class="fa-solid fa-hard-drive"></i>
+            <div class="settings-nav-text">
+              <span class="settings-nav-title">Cache & Storage</span>
+              <span class="settings-nav-desc">Pieces cache & disk usage</span>
+            </div>
+          </button>
+
+          <button class="settings-nav-btn" data-settings-tab="addons" onclick="switchSettingsTab('addons')">
+            <i class="fa-solid fa-puzzle-piece"></i>
+            <div class="settings-nav-text">
+              <span class="settings-nav-title">Stremio Addons</span>
+              <span class="settings-nav-desc">V3 manifest catalog & streams</span>
+            </div>
+          </button>
+
+          <button class="settings-nav-btn" data-settings-tab="diagnostics" onclick="switchSettingsTab('diagnostics')">
+            <i class="fa-solid fa-vial-circle-check text-green"></i>
+            <div class="settings-nav-text">
+              <span class="settings-nav-title">System Diagnostics</span>
+              <span class="settings-nav-desc">Live self-test & connectivity</span>
+            </div>
+          </button>
+        </aside>
+
+        <!-- Right Content Viewport -->
+        <main class="settings-tab-viewport">
+          <!-- ── TAB 1: INTERFACE & PLAYER ── -->
+          <div id="settings-tab-interface" class="settings-pane">
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-palette text-accent"></i> Interface Palette Theme</span>
+                <span class="mono text-xs text-dim">5 High-Contrast Colorways</span>
+              </div>
+              <div class="flex flex-wrap gap-2 mb-3">
+                <button class="btn btn-xs btn-outline" data-theme-btn="emerald" onclick="setTheme('emerald')"><i class="fa-solid fa-gem text-green"></i> Emerald Matrix</button>
+                <button class="btn btn-xs btn-outline" data-theme-btn="cyberpunk" onclick="setTheme('cyberpunk')"><i class="fa-solid fa-bolt text-cyan"></i> Cyberpunk Neon</button>
+                <button class="btn btn-xs btn-outline" data-theme-btn="oled" onclick="setTheme('oled')"><i class="fa-solid fa-moon"></i> OLED Midnight</button>
+                <button class="btn btn-xs btn-outline" data-theme-btn="netflix" onclick="setTheme('netflix')"><i class="fa-solid fa-play text-red"></i> Netflix Red</button>
+                <button class="btn btn-xs btn-outline" data-theme-btn="obsidian" onclick="setTheme('obsidian')"><i class="fa-solid fa-meteor text-purple"></i> Obsidian Amethyst</button>
+              </div>
+              <div class="settings-field-desc">Themes persist seamlessly across sessions in browser storage.</div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-text-height text-accent"></i> GUI Scale & Typography</span>
+                <span id="settings-gui-scale-badge" class="tag tag-accent mono text-xs">100% (15.5px)</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="mono text-xs text-dim">80%</span>
+                <input type="range" id="settings-gui-scale-input" min="13" max="22" step="0.5" value="15.5" class="scale-slider flex-1" oninput="handleSettingsScaleInput(this.value)">
+                <span class="mono text-xs text-dim">140%</span>
+                <button class="btn btn-xs btn-ghost" onclick="resetGuiScale()"><i class="fa-solid fa-rotate-left"></i> Reset</button>
+              </div>
+            </div>
+
+            <div class="settings-grid-2">
+              <div class="settings-card">
+                <div class="settings-card-header">
+                  <span class="settings-card-title"><i class="fa-solid fa-film text-accent"></i> Default Aspect Ratio</span>
+                </div>
+                <select id="settings-default-aspect" class="search-input sub-manual-input w-full" onchange="handleSettingChange('aspect_ratio', this.value)">
+                  <option value="contain">Contain / Original (Black bars as needed)</option>
+                  <option value="cover">Cover / 21:9 Ultrawide Cinema Crop</option>
+                  <option value="16:9">16:9 Standard Television Fill</option>
+                  <option value="fill">Fill / Anamorphic Stretch</option>
+                </select>
+                <div class="settings-field-desc">Configures the initial viewport scaling mode when launching any stream.</div>
+              </div>
+
+              <div class="settings-card">
+                <div class="settings-card-header">
+                  <span class="settings-card-title"><i class="fa-solid fa-wand-magic-sparkles text-accent"></i> Ambient Ambilight Glow</span>
+                  <input type="checkbox" id="settings-toggle-ambilight" checked onchange="handleSettingChange('ambilight_enabled', this.checked)">
+                </div>
+                <div class="settings-field-desc mb-2">Projects dynamic edge-sampled ambient backlight glow onto the theater backdrop layer.</div>
+                <div class="flex items-center justify-between text-xs mono text-dim mb-1">
+                  <span>GLOW DIFFUSION RADIUS:</span>
+                  <span id="settings-ambilight-blur-val" class="text-accent font-bold">45px</span>
+                </div>
+                <input type="range" id="settings-ambilight-blur-input" min="20" max="85" step="5" value="45" class="scale-slider w-full" oninput="handleAmbilightBlurInput(this.value)">
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-forward-step text-green"></i> Binge-Watching Automations</span>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">Auto-Play Next Episode with 10s Countdown</div>
+                  <div class="settings-field-desc">Displays Netflix-style countdown card in last 25s and auto-transitions to the next episode.</div>
+                </div>
+                <input type="checkbox" id="settings-toggle-autoplay" checked onchange="handleSettingChange('autoplay_next', this.checked)">
+              </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">Skip Intro & Credits Fast-Action Floating Button</div>
+                  <div class="settings-field-desc">Shows 1-click floating button to instantly skip 85s intros and 150s closing theme credits.</div>
+                </div>
+                <input type="checkbox" id="settings-toggle-skipintro" checked onchange="handleSettingChange('skip_intro', this.checked)">
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TAB 2: APIS & SCRAPERS ── -->
+          <div id="settings-tab-apis" class="settings-pane hidden">
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-globe text-accent"></i> Catalog & Metadata API Base URL</span>
+                <button class="btn btn-xs btn-ghost text-accent" onclick="resetCinemetaUrl()"><i class="fa-solid fa-rotate-left"></i> Restore Default</button>
+              </div>
+              <div class="flex gap-2">
+                <input type="text" id="settings-cinemeta-url" class="search-input sub-manual-input flex-1" value="https://v3-cinemeta.strem.io" placeholder="https://v3-cinemeta.strem.io">
+                <button class="btn btn-xs btn-outline" onclick="testCinemetaEndpoint()"><i class="fa-solid fa-plug"></i> Test</button>
+              </div>
+              <div class="settings-field-desc">Primary metadata provider powering search queries, season catalogs, and jacket poster art.</div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-key text-accent"></i> Custom TMDB API Key / Proxy (Optional)</span>
+              </div>
+              <input type="password" id="settings-tmdb-key" class="search-input sub-manual-input w-full" placeholder="Enter custom TMDB v3 Key or leave blank for default gateway">
+              <div class="settings-field-desc">Allows high-frequency discover and trending queries without shared gateway rate limits.</div>
+            </div>
+
+            <div class="settings-grid-2">
+              <div class="settings-card">
+                <div class="settings-card-header">
+                  <span class="settings-card-title"><i class="fa-solid fa-stopwatch text-accent"></i> Scraping Request Timeout</span>
+                  <span id="settings-timeout-badge" class="tag tag-accent mono text-xs">12 Seconds</span>
+                </div>
+                <input type="range" id="settings-timeout-input" min="5" max="30" step="1" value="12" class="scale-slider w-full" oninput="handleTimeoutInput(this.value)">
+                <div class="settings-field-desc">Maximum waiting threshold before concluding multi-tracker scraping for slow providers.</div>
+              </div>
+
+              <div class="settings-card">
+                <div class="settings-card-header">
+                  <span class="settings-card-title"><i class="fa-solid fa-cubes-stacked text-accent"></i> Provider Concurrency</span>
+                  <span id="settings-concurrency-badge" class="tag tag-green mono text-xs">4 Parallel Queries</span>
+                </div>
+                <input type="range" id="settings-concurrency-input" min="2" max="8" step="1" value="4" class="scale-slider w-full" oninput="handleConcurrencyInput(this.value)">
+                <div class="settings-field-desc">Parallel asynchronous workers querying simultaneous torrent scrapers (1337x, YTS, EZTV, Nyaa, etc.).</div>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-filter text-accent"></i> Search Results Filtering & Ranking</span>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">Minimum Seeders Filter Threshold</div>
+                  <div class="settings-field-desc">Exclude zero-seeder torrents to ensure immediate buffer responsiveness.</div>
+                </div>
+                <select id="settings-min-seeders" class="search-input sub-manual-input" style="width:130px;" onchange="handleSettingChange('min_seeders', this.value)">
+                  <option value="0">Show All (0+)</option>
+                  <option value="1" selected>1+ Seeders</option>
+                  <option value="3">3+ Seeders</option>
+                  <option value="5">5+ Seeders</option>
+                  <option value="10">10+ Seeders</option>
+                </select>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">Auto-Fallback to Stremio Addons</div>
+                  <div class="settings-field-desc">Automatically fetch addon streams (Torrentio/Cyberflix) if torrent scrapers return under 3 results.</div>
+                </div>
+                <input type="checkbox" id="settings-toggle-fallback-addons" checked onchange="handleSettingChange('fallback_addons', this.checked)">
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TAB 3: NETWORK & TRACKERS ── -->
+          <div id="settings-tab-network" class="settings-pane hidden">
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-satellite-dish text-accent"></i> WebTorrent Streaming Micro-Daemon</span>
+                <span class="tag tag-green mono text-xs"><i class="fa-solid fa-check"></i> 127.0.0.1:8889</span>
+              </div>
+              <div class="mono text-xs text-dim mb-2">Loopback streaming endpoint powering the HTML5 HTTP 206 byte-range media player.</div>
+              <div class="flex items-center justify-between p-2 rounded" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06);">
+                <div class="mono text-xs">
+                  <span class="text-dim">Daemon URL:</span> <span class="text-accent">http://127.0.0.1:8889</span>
+                </div>
+                <button class="btn btn-xs btn-outline" onclick="pingDaemonDirect()"><i class="fa-solid fa-heart-pulse"></i> Ping Daemon</button>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-tower-broadcast text-accent"></i> Public Announce Trackers List</span>
+                <button class="btn btn-xs btn-ghost text-accent" onclick="resetDefaultTrackers()"><i class="fa-solid fa-rotate-left"></i> Restore Defaults</button>
+              </div>
+              <textarea id="settings-trackers-textarea" class="search-input sub-manual-input w-full mono text-xs" style="height:120px; line-height:1.45; resize:vertical;"></textarea>
+              <div class="settings-field-desc">Public UDP and WebSocket trackers injected into magnet links to discover maximum active peers.</div>
+            </div>
+
+            <div class="settings-grid-2">
+              <div class="settings-card">
+                <div class="settings-card-header">
+                  <span class="settings-card-title"><i class="fa-solid fa-users text-accent"></i> Maximum Swarm Peers</span>
+                  <span id="settings-max-peers-badge" class="tag tag-accent mono text-xs">55 Peers</span>
+                </div>
+                <input type="range" id="settings-max-peers-input" min="15" max="150" step="5" value="55" class="scale-slider w-full" oninput="handleMaxPeersInput(this.value)">
+                <div class="settings-field-desc">Balances swarm bandwidth against system router socket exhaustion.</div>
+              </div>
+
+              <div class="settings-card">
+                <div class="settings-card-header">
+                  <span class="settings-card-title"><i class="fa-solid fa-layer-group text-accent"></i> Dynamic Sliding-Window Buffer</span>
+                  <span id="settings-buffer-size-badge" class="tag tag-green mono text-xs">30 MB Window</span>
+                </div>
+                <input type="range" id="settings-buffer-size-input" min="10" max="90" step="5" value="30" class="scale-slider w-full" oninput="handleBufferSizeInput(this.value)">
+                <div class="settings-field-desc">Prioritizes immediate sequential piece allocation for instantaneous stream playback.</div>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-network-wired text-accent"></i> Networking Protocols</span>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">UPnP & NAT-PMP Automatic Port Forwarding</div>
+                  <div class="settings-field-desc">Requests automatic port mapping from router for inbound swarm peer connections.</div>
+                </div>
+                <input type="checkbox" id="settings-toggle-upnp" checked onchange="handleSettingChange('upnp_enabled', this.checked)">
+              </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">P2P Media Loader WebRTC Browser Mesh Sharing</div>
+                  <div class="settings-field-desc">Permits peer-to-peer segment sharing across other local browser viewers on the network.</div>
+                </div>
+                <input type="checkbox" id="settings-toggle-p2p-mesh" checked onchange="handleSettingChange('p2p_mesh_enabled', this.checked)">
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TAB 4: STORAGE & CACHE ── -->
+          <div id="settings-tab-storage" class="settings-pane hidden">
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-hard-drive text-accent"></i> Local Disk Storage Allocation</span>
+                <span id="settings-disk-free-badge" class="tag tag-green mono text-xs">Checking Disk...</span>
+              </div>
+              <div class="cache-storage-box mb-3">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="mono text-xs text-dim">Cached Stream Pieces (.stream_cache):</span>
+                  <span id="settings-cache-usage-detailed" class="mono text-sm font-bold text-green">Checking...</span>
+                </div>
+                <div class="mono text-xs text-dim" style="font-size:0.7rem; word-break:break-all;" id="settings-cache-dir-display">Directory: .stream_cache</div>
+              </div>
+              <div class="flex items-center justify-between">
+                <div class="settings-field-desc">Cached pieces are stored as sparse block files for rapid seeking and resume.</div>
+                <button class="btn btn-sm btn-danger" onclick="clearStreamCache()"><i class="fa-solid fa-trash-can"></i> Clear Stream Cache</button>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-clock-rotate-left text-accent"></i> Automated Cache Cleanup Policy</span>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">Auto-Purge Cache on Tab Exit</div>
+                  <div class="settings-field-desc">Automatically flushes transient .stream_cache pieces when closing the EvoScrapper tab.</div>
+                </div>
+                <input type="checkbox" id="settings-toggle-autopurge" onchange="handleSettingChange('auto_purge_cache', this.checked)">
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TAB 5: STREMIO ADDONS ── -->
+          <div id="settings-tab-addons" class="settings-pane hidden">
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-puzzle-piece text-accent"></i> Install Custom Stremio Community Addon</span>
+              </div>
+              <div class="flex gap-2 mb-2">
+                <input type="text" id="stremio-addon-url-input" class="search-input sub-manual-input flex-1" placeholder="Paste Stremio Addon Manifest URL (e.g. https://torrentio.strem.fun/manifest.json)...">
+                <button class="btn btn-xs btn-green" onclick="addCustomStremioAddon()"><i class="fa-solid fa-plus"></i> Install Addon</button>
+              </div>
+              <div class="settings-field-desc">Supports any standard Stremio V3 Addon manifest endpoint with movie/series stream resolvers.</div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-bolt text-accent"></i> Popular 1-Click Community Presets</span>
+              </div>
+              <div class="grid grid-2 gap-2">
+                <div class="p-2 rounded flex items-center justify-between" style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06);">
+                  <div>
+                    <div class="mono font-bold text-xs text-primary">Cinemeta V3</div>
+                    <div class="text-xs text-dim" style="font-size:0.68rem;">Official IMDb/TheMovieDb metadata & catalogs</div>
+                  </div>
+                  <button class="btn btn-xs btn-outline" onclick="installPresetAddon('cinemeta')"><i class="fa-solid fa-download"></i> Add</button>
+                </div>
+
+                <div class="p-2 rounded flex items-center justify-between" style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06);">
+                  <div>
+                    <div class="mono font-bold text-xs text-primary">Torrentio V3</div>
+                    <div class="text-xs text-dim" style="font-size:0.68rem;">Ultra-fast multi-provider torrent resolver</div>
+                  </div>
+                  <button class="btn btn-xs btn-outline" onclick="installPresetAddon('torrentio')"><i class="fa-solid fa-download"></i> Add</button>
+                </div>
+
+                <div class="p-2 rounded flex items-center justify-between" style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06);">
+                  <div>
+                    <div class="mono font-bold text-xs text-primary">CyberFlix Catalog</div>
+                    <div class="text-xs text-dim" style="font-size:0.68rem;">Curated streaming catalogs from Netflix, Disney, HBO</div>
+                  </div>
+                  <button class="btn btn-xs btn-outline" onclick="installPresetAddon('cyberflix')"><i class="fa-solid fa-download"></i> Add</button>
+                </div>
+
+                <div class="p-2 rounded flex items-center justify-between" style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06);">
+                  <div>
+                    <div class="mono font-bold text-xs text-primary">OpenSubtitles V3</div>
+                    <div class="text-xs text-dim" style="font-size:0.68rem;">Multi-lingual subtitle lookup engine</div>
+                  </div>
+                  <button class="btn btn-xs btn-outline" onclick="installPresetAddon('opensubtitles')"><i class="fa-solid fa-download"></i> Add</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-boxes-stacked text-accent"></i> Installed Community Addons</span>
+              </div>
+              <div id="installed-addons-list" class="space-y-1">
+                <div class="text-xs text-dim p-2">No custom Stremio addons installed yet. Select a preset or paste a manifest URL above.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── TAB 6: DIAGNOSTICS & SELF TEST ── -->
+          <div id="settings-tab-diagnostics" class="settings-pane hidden">
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div>
+                  <span class="settings-card-title"><i class="fa-solid fa-vial-circle-check text-green"></i> System Diagnostic & Connection Self-Test</span>
+                  <div class="settings-field-desc">Probes all local daemons, networking interfaces, media codecs, and cloud APIs.</div>
+                </div>
+                <button id="btn-run-diag" class="btn btn-sm btn-green" onclick="runDiagnosticsTest()">
+                  <i class="fa-solid fa-play"></i> Run All Diagnostics
+                </button>
+              </div>
+
+              <!-- Diagnostic 8-Card Matrix -->
+              <div class="diag-grid">
+                <div class="diag-card" id="diag-card-backend">
+                  <div class="diag-card-title"><span>BACKEND CORE</span> <span class="tag tag-dim text-xs mono" id="diag-tag-backend">Standby</span></div>
+                  <div class="diag-card-status" id="diag-val-backend">FastAPI 8009</div>
+                  <div class="diag-card-sub" id="diag-sub-backend">Python 3.14 · Windows 11</div>
+                </div>
+
+                <div class="diag-card" id="diag-card-daemon">
+                  <div class="diag-card-title"><span>WEBTORRENT DAEMON</span> <span class="tag tag-dim text-xs mono" id="diag-tag-daemon">Standby</span></div>
+                  <div class="diag-card-status" id="diag-val-daemon">Port 8889</div>
+                  <div class="diag-card-sub" id="diag-sub-daemon">Loopback Micro-Daemon</div>
+                </div>
+
+                <div class="diag-card" id="diag-card-ffmpeg">
+                  <div class="diag-card-title"><span>FFMPEG TRANSMUXER</span> <span class="tag tag-dim text-xs mono" id="diag-tag-ffmpeg">Standby</span></div>
+                  <div class="diag-card-status" id="diag-val-ffmpeg">Checking...</div>
+                  <div class="diag-card-sub" id="diag-sub-ffmpeg">Audio & Subtitle Engine</div>
+                </div>
+
+                <div class="diag-card" id="diag-card-players">
+                  <div class="diag-card-title"><span>DESKTOP PLAYERS</span> <span class="tag tag-dim text-xs mono" id="diag-tag-players">Standby</span></div>
+                  <div class="diag-card-status" id="diag-val-players">VLC Detected</div>
+                  <div class="diag-card-sub" id="diag-sub-players">External Player Launcher</div>
+                </div>
+
+                <div class="diag-card" id="diag-card-stremio">
+                  <div class="diag-card-title"><span>STREMIO CATALOG API</span> <span class="tag tag-dim text-xs mono" id="diag-tag-stremio">Standby</span></div>
+                  <div class="diag-card-status" id="diag-val-stremio">Cinemeta V3</div>
+                  <div class="diag-card-sub" id="diag-sub-stremio">Metadata Provider</div>
+                </div>
+
+                <div class="diag-card" id="diag-card-trackers">
+                  <div class="diag-card-title"><span>SWARM TRACKERS</span> <span class="tag tag-dim text-xs mono" id="diag-tag-trackers">Standby</span></div>
+                  <div class="diag-card-status" id="diag-val-trackers">DNS Resolve</div>
+                  <div class="diag-card-sub" id="diag-sub-trackers">OpenTrackr & European Nodes</div>
+                </div>
+
+                <div class="diag-card" id="diag-card-storage">
+                  <div class="diag-card-title"><span>DISK & CACHE</span> <span class="tag tag-dim text-xs mono" id="diag-tag-storage">Standby</span></div>
+                  <div class="diag-card-status" id="diag-val-storage">R/W Ready</div>
+                  <div class="diag-card-sub" id="diag-sub-storage">.stream_cache Space</div>
+                </div>
+
+                <div class="diag-card" id="diag-card-mesh">
+                  <div class="diag-card-title"><span>BROWSER WEBRTC MESH</span> <span class="tag tag-dim text-xs mono" id="diag-tag-mesh">Standby</span></div>
+                  <div class="diag-card-status" id="diag-val-mesh">MSE Active</div>
+                  <div class="diag-card-sub" id="diag-sub-mesh">HTML5 MediaSource Ready</div>
+                </div>
+              </div>
+
+              <!-- Diagnostic Terminal Output Console -->
+              <div class="mono font-bold text-xs text-accent uppercase mb-1 flex items-center gap-2">
+                <i class="fa-solid fa-terminal text-accent"></i> Real-Time Diagnostic Execution Log:
+              </div>
+              <div id="diag-console-output" class="diag-console">Click "Run All Diagnostics" to initiate live system probe...</div>
+            </div>
+          </div>
+        </main>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="modal-footer settings-modal-footer">
+        <div class="flex items-center gap-2 text-xs text-dim mono">
+          <i class="fa-solid fa-circle-check text-green"></i>
+          <span id="settings-status-indicator">All configuration changes persist locally in real-time</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="btn btn-sm btn-ghost" onclick="resetAllSettingsToDefault()">
+            <i class="fa-solid fa-rotate-left"></i> Reset Defaults
+          </button>
+          <button class="btn btn-sm btn-primary" onclick="saveAndApplyAllSettings()">
+            <i class="fa-solid fa-check"></i> Save & Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container"></div>
+
+  <!-- Hls.js & P2P Media Loader Browser Mesh -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/p2p-media-loader-core@0.6.2/build/p2p-media-loader-core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/p2p-media-loader-hlsjs@0.6.2/build/p2p-media-loader-hlsjs.min.js"></script>
+  <script src="/static/p2p-player.js"></script>
+
+  <!-- App Logic -->
+  <script src="/static/app.js"></script>
+</body>
+</html>

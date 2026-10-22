@@ -1,0 +1,2 @@
+import{t as e}from"./custom-media-element-dQqnF2UH.js";import{t}from"./safe-define-DXxmf7BV.js";import{t as n}from"./media-attach-mixin-BA1JRbCc.js";import{t as r}from"./adapter-C-r1v_RG.js";import{t as i}from"./mixin-D8jguX2t.js";const a=i(n(e(`video`,r)));var o=class extends a{},s=class extends o{static{this.tagName=`mux-video`}};t(s);export{s as t};
+//# sourceMappingURL=hls-js-CfvW1XTC.js.map

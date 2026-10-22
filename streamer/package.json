@@ -1,0 +1,11 @@
+{
+  "name": "evoscrapper-streamer",
+  "type": "module",
+  "dependencies": {
+    "@videojs/cdn": "^10.1.0",
+    "@videojs/html": "^10.1.0",
+    "torrent-stream": "^1.2.1",
+    "video.js": "^10.1.0",
+    "webtorrent": "^3.0.21"
+  }
+}
