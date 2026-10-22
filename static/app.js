@@ -3608,6 +3608,9 @@ function startSwarmStatsMonitor(infoHash) {
         const peersBadge = document.getElementById('p2p-peers-count');
         if (peersBadge) peersBadge.innerText = `${peers} Peers`;
 
+        const hudP2p = document.getElementById('player-hud-p2p-text');
+        if (hudP2p) hudP2p.innerText = `${speed} · ${peers} peers · ${pct}%`;
+
         swarmStat.innerHTML = `
           <span class="mono text-xs flex items-center gap-2" style="cursor:pointer;" onclick="toggleSwarmInspectorModal(true)" title="Click to open P2P Swarm & Piece Map Inspector">
             <i class="fa-solid fa-satellite-dish text-green"></i>
@@ -3620,6 +3623,8 @@ function startSwarmStatsMonitor(infoHash) {
         `;
       } else {
         swarmStat.innerHTML = '<span class="mono text-xs text-dim"><i class="fa-solid fa-spinner fa-spin text-accent"></i> Connecting to P2P Swarm & Allocating Multi-Buffer...</span>';
+        const hudP2p = document.getElementById('player-hud-p2p-text');
+        if (hudP2p) hudP2p.innerText = 'Connecting...';
       }
     } catch (_) {}
   };
@@ -4832,10 +4837,32 @@ function updatePlayerTimeline() {
   if (!video || !active) return;
   if (active.isDraggingTimeline) return;
 
+  // Adopt real video.duration whenever finite and positive
+  if (video.duration && isFinite(video.duration) && video.duration > 0) {
+    active.totalDuration = video.duration;
+  }
+
   const currentTotalTime = (active.playbackOffset || 0) + (video.currentTime || 0);
-  const totalDuration = (active.totalDuration > 0)
+
+  // Robust totalDuration fallback resolution (unfreezing 0:00 / 0:00)
+  let totalDuration = (active.totalDuration && isFinite(active.totalDuration) && active.totalDuration > 0)
     ? active.totalDuration
-    : (video.duration && isFinite(video.duration) && video.duration > 0 ? video.duration : 7200);
+    : 0;
+
+  if (totalDuration <= 0) {
+    const detail = state.discover.activeDetail;
+    if (detail && detail.runtime) {
+      totalDuration = parseRuntimeToSeconds(detail.runtime);
+      if (totalDuration > 0) active.totalDuration = totalDuration;
+    }
+  }
+
+  if (totalDuration <= 0) {
+    const detail = state.discover.activeDetail;
+    if (detail && detail.type === 'anime') totalDuration = 1440; // 24 min
+    else if (detail && detail.type === 'series') totalDuration = 2700; // 45 min
+    else totalDuration = 5400; // 90 min default movie runtime
+  }
 
   // Update progress bar
   const pct = totalDuration > 0 ? Math.min(100, Math.max(0, (currentTotalTime / totalDuration) * 100)) : 0;
@@ -4853,7 +4880,7 @@ function updatePlayerTimeline() {
     } catch (_) {}
   }
 
-  // Update time display labels
+  // Update time display labels continuously on each tick
   const curEl = document.getElementById('player-cur-time');
   const totalEl = document.getElementById('player-total-time');
   if (curEl) {
@@ -6847,9 +6874,11 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   const isMkv = Boolean(isMkvHint) || (title || '').toLowerCase().endsWith('.mkv') || /\b(mkv|matroska)\b/i.test(title);
   const isHevcOr10Bit = /\b(x265|hevc|h265|10-?bit|hi10p)\b/i.test(title);
   const isNonBrowserAudio = /\b(ddp|eac-?3|ac-?3|dts|truehd|atmos|flac|[257]\.[01]|surround)\b/i.test(title);
-  const isDirectAacMp4 = !isMkv && !isHevcOr10Bit && !isNonBrowserAudio && /\b(mp4|aac|mp3|yts|yify)\b/i.test(title);
+  const isWebm = (title || '').toLowerCase().endsWith('.webm') || /\b(webm|vp8|vp9|opus)\b/i.test(title);
+  const isDirectStream = (!isMkv && !isHevcOr10Bit && !isNonBrowserAudio && /\b(mp4|aac|mp3|yts|yify|x264|h264|avc)\b/i.test(title)) ||
+                         (!isMkv && !isHevcOr10Bit && isWebm);
 
-  const useTransmux = !isDirectAacMp4;
+  const useTransmux = !isDirectStream;
   // Use lossless video stream copy (-c:v copy) to avoid 100% CPU software re-encoding bottlenecks that stall buffering
   const transcodeVideo = false;
 
@@ -6975,13 +7004,14 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
         }
       })
       .catch((err) => console.warn('[EvoPlayer] Probe notice:', err.message));
-  }, 1500);
+  }, 300);
 
-  // Set Video Source
+  // Set Video Source with duration hint for immediate header injection
   const transcodeParam = transcodeVideo ? '&transcode_video=true' : '';
+  const durationParam = initialDuration > 0 ? `&duration=${initialDuration}` : '';
   const streamUrl = useTransmux
-    ? `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${effectiveFileIdx}&audio_track=0&audio_boost=1.25${transcodeParam}${epParams}${magnetParam}`
-    : `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${effectiveFileIdx}${epParams}${magnetParam}`;
+    ? `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${effectiveFileIdx}&audio_track=0&audio_boost=1.25${transcodeParam}${epParams}${magnetParam}${durationParam}`
+    : `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${effectiveFileIdx}${epParams}${magnetParam}${durationParam}`;
 
   showPlayerBufferingHUD();
 
@@ -6991,7 +7021,21 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   video.src = streamUrl;
   video.load();
 
-  // Video event handlers
+  // Video event handlers with instant duration and time sync
+  video.onloadedmetadata = () => {
+    if (video.duration && isFinite(video.duration) && video.duration > 0) {
+      if (state.discover.activeStream) state.discover.activeStream.totalDuration = video.duration;
+    }
+    updatePlayerTimeline();
+  };
+
+  video.ondurationchange = () => {
+    if (video.duration && isFinite(video.duration) && video.duration > 0) {
+      if (state.discover.activeStream) state.discover.activeStream.totalDuration = video.duration;
+    }
+    updatePlayerTimeline();
+  };
+
   video.ontimeupdate = () => {
     updatePlayerTimeline();
     updateSubtitleOverlay();

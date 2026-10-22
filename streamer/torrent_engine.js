@@ -29,15 +29,23 @@ const DEFAULT_TRACKERS = [
     'udp://9.rarbg.to:2920/announce',
     'udp://tracker.cyberia.is:6969/announce',
     'udp://tracker.moeking.me:6969/announce',
+    'udp://p4p.arenabg.com:1337/announce',
+    'udp://tracker.dler.org:6969/announce',
+    'udp://opentracker.i2p.rocks:6969/announce',
+    'udp://open.tracker.cl:1337/announce',
+    'udp://tracker.filemail.com:6969/announce',
+    'udp://tracker.bitsearch.to:1337/announce',
+    'http://tracker.opentrackr.org:1337/announce',
     'wss://tracker.openwebtorrent.com',
     'wss://tracker.btorrent.xyz',
-    'wss://tracker.webtorrent.dev'
+    'wss://tracker.webtorrent.dev',
+    'wss://tracker.files.fm:7073/announce'
 ];
 
 class TorrentEngine {
     constructor() {
         this.client = new WebTorrent({
-            maxConns: 120,
+            maxConns: 150,
             dht: true,
             tracker: true,
             utp: true,
@@ -183,7 +191,8 @@ class TorrentEngine {
                 announce: DEFAULT_TRACKERS,
                 deselect: true,
                 strategy: 'sequential',
-                storeCacheSlots: 100
+                maxWebConns: 30,
+                storeCacheSlots: 200
             };
 
             let settled = false;
@@ -258,34 +267,39 @@ class TorrentEngine {
         if (!torrent || !torrent.pieces || !torrent.pieceLength || !file) return;
         const pieceLength = torrent.pieceLength;
 
-        // Select the active file pieces at base priority 1 without calling torrent.deselect(),
-        // preventing cancellation of in-flight piece requests on all connected peers.
+        // Select the active file pieces at base priority 1 without deselecting other in-flight pieces
         try {
             if (typeof file.select === 'function') file.select(1);
         } catch (_) {}
 
         const fileStartPiece = Math.floor(file.offset / pieceLength);
         const fileEndPiece = Math.floor((file.offset + file.length - 1) / pieceLength);
+        const totalPieces = Math.max(1, fileEndPiece - fileStartPiece + 1);
 
-        // Container header (EBML / MOOV): First 5 pieces get critical priority (3)
-        const headerEnd = Math.min(fileStartPiece + 4, fileEndPiece);
+        // 1. Critical initial container header / moov atom / EBML headers:
+        // Prioritize first 2% to 5% of the file (min 8 pieces, max 40 pieces) at priority 3
+        const criticalCount = Math.max(8, Math.min(40, Math.ceil(totalPieces * 0.03)));
+        const headerEnd = Math.min(fileStartPiece + criticalCount - 1, fileEndPiece);
         torrent.select(fileStartPiece, headerEnd, 3);
 
-        // Container index / cues (MKV Cues / seek tables): Last 3 pieces get critical priority (3)
-        const indexStart = Math.max(fileStartPiece, fileEndPiece - 2);
+        // 2. Container index / seek tables / cues: Last 3 to 5 pieces at critical priority 3
+        const indexPieceCount = Math.min(5, totalPieces);
+        const indexStart = Math.max(fileStartPiece, fileEndPiece - indexPieceCount + 1);
         torrent.select(indexStart, fileEndPiece, 3);
 
-        // Sliding forward buffer around current byte offset:
-        // - Immediate next 4 pieces: Critical priority 3 (instant frame decoding)
-        // - Next 40MB forward buffer: High priority 2 (smooth continuous playback cache)
+        // 3. Dynamic Sliding Window around current playback cursor (byteOffset):
+        // - Immediate 15 pieces ahead: Priority 3 (instant frame decoding / zero buffering stall)
+        // - Next 35 pieces ahead: Priority 2 (smooth continuous streaming buffer)
+        // - Remaining file pieces remain at base sequential priority 1
         const currentPiece = Math.floor((file.offset + byteOffset) / pieceLength);
         if (currentPiece <= fileEndPiece) {
-            const immediateEnd = Math.min(fileEndPiece, currentPiece + 3);
-            torrent.select(currentPiece, immediateEnd, 3);
+            const cursorPiece = Math.max(fileStartPiece, currentPiece);
+            const immediateWindow = 15;
+            const immediateEnd = Math.min(fileEndPiece, cursorPiece + immediateWindow);
+            torrent.select(cursorPiece, immediateEnd, 3);
 
-            const bufferBytes = 40 * 1024 * 1024;
-            const bufferPieces = Math.ceil(bufferBytes / pieceLength);
-            const bufferEnd = Math.min(fileEndPiece, currentPiece + bufferPieces);
+            const bufferPieces = 35;
+            const bufferEnd = Math.min(fileEndPiece, immediateEnd + bufferPieces);
             if (bufferEnd > immediateEnd) {
                 torrent.select(immediateEnd + 1, bufferEnd, 2);
             }

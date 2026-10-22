@@ -87,6 +87,7 @@ async def stream_raw_torrent(
     magnet: Optional[str] = Query(None, description="Original magnet link with trackers"),
     season: Optional[int] = Query(None, description="Season number (for series/anime)"),
     episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
+    duration: Optional[float] = Query(None, description="Known media duration in seconds"),
 ):
     """
     Direct HTTP 206 Partial Content video stream proxying the P2P engine.
@@ -130,12 +131,15 @@ async def stream_raw_torrent(
         raise HTTPException(status_code=502, detail="Streaming engine unavailable")
 
     resp_headers = {}
-    for key in ("Content-Range", "Accept-Ranges", "Content-Length", "Content-Type", "X-EvoStream-File", "X-EvoStream-Path", "X-EvoStream-Idx"):
+    for key in ("Content-Range", "Accept-Ranges", "Content-Length", "Content-Type", "X-EvoStream-File", "X-EvoStream-Path", "X-EvoStream-Idx", "X-Content-Duration", "Content-Duration"):
         val = upstream_resp.headers.get(key)
         if val:
             resp_headers[key] = val
     if "Accept-Ranges" not in resp_headers:
         resp_headers["Accept-Ranges"] = "bytes"
+    if duration and duration > 0:
+        resp_headers["X-Content-Duration"] = str(round(duration, 2))
+        resp_headers["Content-Duration"] = str(round(duration, 2))
 
     async def stream_generator():
         try:
@@ -165,6 +169,7 @@ async def stream_transmuxed_torrent(
     audio_boost: float = Query(1.25, description="Audio volume boost multiplier"),
     season: Optional[int] = Query(None, description="Season number (for series/anime)"),
     episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
+    duration: Optional[float] = Query(None, description="Known media duration in seconds"),
 ):
     """
     Real-time FFmpeg transmuxing pipeline.
@@ -182,14 +187,19 @@ async def stream_transmuxed_torrent(
         audio_boost=audio_boost,
     )
 
+    resp_hdrs = {
+        "Content-Type": "video/mp4",
+        "X-EvoStream-Audio": f"track_{audio_track}_boost_{audio_boost}",
+    }
+    if duration and duration > 0:
+        resp_hdrs["X-Content-Duration"] = str(round(duration, 2))
+        resp_hdrs["Content-Duration"] = str(round(duration, 2))
+
     return StreamingResponse(
         generator,
         status_code=200,
         media_type="video/mp4",
-        headers={
-            "Content-Type": "video/mp4",
-            "X-EvoStream-Audio": f"track_{audio_track}_boost_{audio_boost}",
-        },
+        headers=resp_hdrs,
     )
 
 

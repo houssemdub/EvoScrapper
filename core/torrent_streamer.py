@@ -33,6 +33,42 @@ def canonical_hash(magnet_or_hash: str) -> str:
                 pass
     if len(s) == 40 and re.match(r"^[0-9a-fA-F]{40}$", s):
         return s.lower()
+
+
+def is_direct_streamable(filename_or_title: str) -> bool:
+    """
+    Evaluates whether a video stream can be directly played in the browser
+    via HTTP 206 partial content without invoking the FFmpeg transmuxing pipeline.
+    Browser-native codecs: MP4 (H.264/AAC/MP3) or WebM (VP8/VP9/AV1/Opus).
+    Requires FFmpeg transmuxing: MKV, AVI, HEVC/x265, 10-bit, AC3, DTS, 5.1/7.1 audio.
+    """
+    if not filename_or_title:
+        return False
+    name = str(filename_or_title).lower()
+
+    # MKV, AVI, TS containers require remuxing for standard HTML5 <video>
+    if name.endswith('.mkv') or name.endswith('.avi') or name.endswith('.ts') or name.endswith('.mov'):
+        return False
+    if re.search(r'\b(mkv|matroska|avi|xvid|divx)\b', name):
+        return False
+
+    # Codecs unsupported directly in standard web browsers
+    if re.search(r'\b(x265|hevc|h265|10-?bit|hi10p)\b', name):
+        return False
+
+    # Audio formats unsupported natively in HTML5 video elements
+    if re.search(r'\b(ddp|eac-?3|ac-?3|dts|truehd|atmos|flac|[257]\.[01]|surround)\b', name):
+        return False
+
+    # Native WebM with VP8/VP9/AV1 + Opus/Vorbis
+    if name.endswith('.webm') or re.search(r'\b(webm|vp8|vp9|opus)\b', name):
+        return True
+
+    # Native MP4 with H.264 / AV1 + AAC / MP3
+    if name.endswith('.mp4') or name.endswith('.m4v') or re.search(r'\b(mp4|aac|mp3|yts|yify|x264|h264|avc)\b', name):
+        return True
+
+    return False
     return s.lower()
 
 

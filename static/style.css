@@ -2365,14 +2365,16 @@ video::cue,
   bottom: 0;
   width: 440px;
   max-width: 90vw;
-  background: rgba(6, 8, 13, 0.94);
-  backdrop-filter: blur(12px);
+  background: rgba(6, 8, 13, 0.96);
+  backdrop-filter: blur(14px);
   border-left: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  z-index: 50;
+  max-height: 100%;
+  overflow: hidden;
+  z-index: 60;
   animation: slideInRight 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.8);
+  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.85);
 }
 
 @keyframes slideInRight {
@@ -2392,10 +2394,12 @@ video::cue,
 .sub-drawer-body {
   padding: 0.75rem;
   overflow-y: auto;
-  flex: 1;
+  overscroll-behavior: contain;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  min-height: 0;
 }
 
 /* Subtitle Sync Panel */
@@ -2431,7 +2435,8 @@ video::cue,
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 180px;
 }
 
 .sub-lang-bar {
@@ -2472,8 +2477,11 @@ video::cue,
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  max-height: 250px;
+  flex: 1 1 auto;
+  min-height: 140px;
+  max-height: 340px;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .sub-item-card {
@@ -2511,6 +2519,7 @@ video::cue,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 320px;
 }
 
 
