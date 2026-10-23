@@ -1,5 +1,7 @@
 import os
 import re
+import shutil
+import subprocess
 import sys
 from unittest.mock import patch
 import pytest
@@ -14,6 +16,25 @@ from core.torrent_streamer import is_direct_streamable
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+def test_javascript_syntax_validity():
+    """Validates that all frontend and streamer JavaScript files have zero syntax errors."""
+    node_bin = shutil.which("node")
+    if not node_bin:
+        pytest.skip("Node.js binary not found on system")
+
+    js_files = [
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "p2p-player.js")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "server.js")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "torrent_engine.js")),
+    ]
+
+    for f in js_files:
+        assert os.path.isfile(f), f"File {f} must exist"
+        proc = subprocess.run([node_bin, "-c", f], capture_output=True, text=True)
+        assert proc.returncode == 0, f"Syntax error in {os.path.basename(f)}: {proc.stderr}"
 
 
 def test_direct_stream_bypass_detection():

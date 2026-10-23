@@ -3168,7 +3168,6 @@ function disableSubtitles() {
   if (activeSubNameEl) activeSubNameEl.innerText = 'No Subtitles Active';
   showToast('Subtitles disabled', 'info');
   toggleSubtitleDrawer(false);
-  const video = document.getElementById('evo-video-player');
   if (video && state.subtitles.wasPlayingBeforeDrawer) {
     video.play().catch(() => {});
     state.subtitles.wasPlayingBeforeDrawer = false;
