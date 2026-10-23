@@ -7284,15 +7284,19 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     updatePlayPauseIcon(false);
   };
 
+  let waitingDebounceTimer = null;
   video.onwaiting = () => {
-    showPlayerBufferingHUD();
+    clearTimeout(waitingDebounceTimer);
+    waitingDebounceTimer = setTimeout(() => {
+      if (video.readyState < 3) showPlayerBufferingHUD();
+    }, 500);
   };
-
   video.oncanplay = () => {
+    clearTimeout(waitingDebounceTimer);
     hidePlayerBufferingHUD();
   };
-
   video.onplaying = () => {
+    clearTimeout(waitingDebounceTimer);
     hidePlayerBufferingHUD();
   };
 

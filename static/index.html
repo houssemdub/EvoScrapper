@@ -1148,55 +1148,30 @@
         <!-- High-End Cinematic Floating Buffering Overlay -->
         <div id="player-buffering-hud" class="player-buffering-hud hidden">
           <div class="buffering-cinematic-stage">
-            <!-- Breathing Pulse Rings -->
-            <div class="buffering-pulse-rings" aria-hidden="true">
-              <span class="pulse-ring ring-outer"></span>
-              <span class="pulse-ring ring-middle"></span>
-              <span class="pulse-ring ring-inner"></span>
-            </div>
+            <!-- Row 1: Wave bars + pill -->
+            <div class="buffering-main-row">
+              <!-- Sleek Audio-Wave Equalizer Lines -->
+              <div class="buffering-audio-waves" aria-hidden="true">
+                <span class="wave-bar bar-1"></span>
+                <span class="wave-bar bar-2"></span>
+                <span class="wave-bar bar-3"></span>
+                <span class="wave-bar bar-4"></span>
+                <span class="wave-bar bar-5"></span>
+              </div>
 
-            <!-- Custom Cyber "Evo" SVG Animated Loader -->
-            <div id="player-buffering-spinner" class="player-buffering-spinner">
-              <div class="loader evo-loader size-xl">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="58" height="58" class="inline-block">
-                  <path stroke-linejoin="round" stroke-linecap="round" stroke-width="8" stroke="url(#b)" d="M 20,20 L 80,20 L 80,27 L 27,27 L 27,50 L 70,50 L 70,57 L 25,57 L 25,80 L 80,80 L 80,87 L 20,87 Z" class="dash" id="E" pathLength="360"></path>
-                </svg>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="58" height="58" class="inline-block">
-                  <path stroke-linejoin="round" stroke-linecap="round" stroke-width="12" stroke="url(#d)" d="M 20,20 L 50,80 L 80,20" class="dash" id="v" pathLength="360"></path>
-                </svg>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="58" height="58" class="inline-block">
-                  <path stroke-linejoin="round" stroke-linecap="round" stroke-width="11" stroke="url(#c)" d="M 50,15 A 35,35 0 0 1 85,50 A 35,35 0 0 1 50,85 A 35,35 0 0 1 15,50 A 35,35 0 0 1 50,15 Z" class="spin" id="o" pathLength="360"></path>
-                </svg>
+              <!-- Minimalist Telemetry Pill -->
+              <div class="buffering-telemetry-pill">
+                <span class="buffering-title mono"><i class="fa-solid fa-satellite-dish text-accent"></i> BUFFERING SWARM</span>
+                <span class="buffering-dot-sep">·</span>
+                <span id="buffering-speed-label" class="mono text-green text-xs">Connecting...</span>
+                <span class="buffering-dot-sep">·</span>
+                <span id="buffering-pct-badge" class="mono text-bright text-xs font-bold">0%</span>
               </div>
             </div>
 
-            <!-- Sleek Audio-Wave Equalizer Lines -->
-            <div class="buffering-audio-waves" aria-hidden="true">
-              <span class="wave-bar bar-1"></span>
-              <span class="wave-bar bar-2"></span>
-              <span class="wave-bar bar-3"></span>
-              <span class="wave-bar bar-4"></span>
-              <span class="wave-bar bar-5"></span>
-            </div>
-
-            <!-- Minimalist Telemetry Pill -->
-            <div class="buffering-telemetry-pill">
-              <span class="buffering-title mono"><i class="fa-solid fa-satellite-dish text-accent"></i> BUFFERING SWARM</span>
-              <span class="buffering-dot-sep">·</span>
-              <span id="buffering-speed-label" class="mono text-green text-xs">Connecting...</span>
-              <span class="buffering-dot-sep">·</span>
-              <span id="buffering-pct-badge" class="mono text-bright text-xs font-bold">0%</span>
-            </div>
-
-            <!-- Luminous Glowing Progress Line -->
+            <!-- Row 2: Progress line -->
             <div class="buffering-progress-line-wrap">
               <div id="buffering-progress-fill" class="buffering-progress-line-fill" style="width: 0%;"></div>
-            </div>
-
-            <!-- Telemetry Details -->
-            <div class="buffering-sub-labels">
-              <span id="buffering-bytes-label" class="mono text-dim text-xs"><i class="fa-solid fa-layer-group"></i> 0.0 / 6.0 MB</span>
-              <span id="buffering-countdown-label" class="mono text-dim text-xs"><i class="fa-solid fa-hourglass-start"></i> Starting soon...</span>
             </div>
           </div>
         </div>
@@ -1298,11 +1273,6 @@
                 <span id="player-total-time" class="mono text-dim">00:00:00</span>
               </div>
 
-              <!-- In-Player Episode Drawer Toggle (Visible only on episodic series/anime) -->
-              <button id="btn-hud-episodes" class="player-btn hidden" onclick="togglePlayerEpisodesDrawer()" title="Episodes Drawer (E)">
-                <i class="fa-solid fa-list-ol text-green"></i>
-                <span class="mono text-xs">Episodes</span>
-              </button>
             </div>
 
             <!-- Right Controls (Cinematic Clean Hierarchy) -->

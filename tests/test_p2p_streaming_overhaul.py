@@ -231,7 +231,7 @@ def test_uiverse_neon_svg_loader_assets():
     assert "#00e5ff" in html  # Cyan accent
     assert "#00ff88" in html  # Neon green accent
     assert "gradientTransform" in html
-    assert 'id="player-buffering-spinner"' in html
+    # player-buffering-spinner removed in slim HUD redesign (Bug 2 fix); SVG loader CSS/JS still present
 
     app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
     with open(app_path, "r", encoding="utf-8") as f:
@@ -272,8 +272,10 @@ def test_player_cinematic_redesign_and_subtitle_studio():
 
     # Cinematic buffering stage elements
     assert "buffering-cinematic-stage" in html
-    assert "buffering-pulse-rings" in html
-    assert "pulse-ring ring-outer" in html
+    # buffering-pulse-rings removed in slim HUD redesign (Bug 2 fix)
+    # assert "buffering-pulse-rings" in html
+    # assert "pulse-ring ring-outer" in html
+    assert "buffering-main-row" in html  # new wrapper row in slim HUD
     assert "buffering-audio-waves" in html
     assert "wave-bar bar-1" in html
     assert "buffering-telemetry-pill" in html
@@ -302,8 +304,10 @@ def test_player_cinematic_redesign_and_subtitle_studio():
 
     # CSS styles and animations
     assert ".buffering-cinematic-stage" in css
-    assert ".buffering-pulse-rings" in css
-    assert "@keyframes pulseOuter" in css
+    # .buffering-pulse-rings and @keyframes pulseOuter removed in slim HUD redesign (Bug 2 fix)
+    # assert ".buffering-pulse-rings" in css
+    # assert "@keyframes pulseOuter" in css
+    assert ".buffering-main-row" in css  # new slim HUD row wrapper
     assert "@keyframes wavePulse" in css
     assert ".player-settings-popover" in css
     assert ".sub-preview-render" in css
