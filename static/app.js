@@ -2735,11 +2735,40 @@ function triggerCardOfflineDownload(infoHash, fileIdx, title, magnet) {
 // SUBTITLES HUB & REAL-TIME SYNC ENGINE
 // ══════════════════════════════════════════════════════════════════════════════
 
+function switchSubDrawerTab(tabId) {
+  const tabs = ['tracks', 'sync', 'style'];
+  tabs.forEach((t) => {
+    const btn = document.getElementById(`sub-tab-${t}`);
+    const panel = document.getElementById(`sub-panel-${t}`);
+    if (btn) btn.classList.toggle('active', t === tabId);
+    if (panel) panel.classList.toggle('hidden', t !== tabId);
+  });
+}
+
 function toggleSubtitleDrawer(forceOpen = null) {
   const drawer = document.getElementById('player-sub-drawer');
   if (!drawer) return;
   const shouldOpen = forceOpen !== null ? forceOpen : drawer.classList.contains('hidden');
-  drawer.classList.toggle('hidden', !shouldOpen);
+  const video = document.getElementById('evo-video-player');
+
+  if (shouldOpen) {
+    // Pause when opening the panel (and remember whether it was playing)
+    if (video && !video.paused) {
+      state.subtitles.wasPlayingBeforeDrawer = true;
+      video.pause();
+    } else if (state.subtitles.wasPlayingBeforeDrawer === undefined) {
+      state.subtitles.wasPlayingBeforeDrawer = false;
+    }
+    drawer.classList.remove('hidden');
+    switchSubDrawerTab('tracks');
+  } else {
+    drawer.classList.add('hidden');
+    // Auto-resume if it was playing before opening the drawer
+    if (video && state.subtitles.wasPlayingBeforeDrawer) {
+      video.play().catch(() => {});
+      state.subtitles.wasPlayingBeforeDrawer = false;
+    }
+  }
 }
 
 function extractCleanMediaInfo(rawTitle) {
@@ -3135,7 +3164,15 @@ function disableSubtitles() {
   const badge = document.getElementById('player-active-sub-badge');
   if (badge) badge.innerText = 'Subs: Off';
   document.querySelectorAll('#player-subs-list .sub-item-card').forEach((c) => c.classList.remove('active'));
+  const activeSubNameEl = document.getElementById('sub-active-name');
+  if (activeSubNameEl) activeSubNameEl.innerText = 'No Subtitles Active';
   showToast('Subtitles disabled', 'info');
+  toggleSubtitleDrawer(false);
+  const video = document.getElementById('evo-video-player');
+  if (video && state.subtitles.wasPlayingBeforeDrawer) {
+    video.play().catch(() => {});
+    state.subtitles.wasPlayingBeforeDrawer = false;
+  }
 }
 
 async function autoLoadSubtitles(title, imdbId, season, episode, releaseTitle = '', infoHash = '') {
@@ -3388,18 +3425,30 @@ function renderSubtitleTracksList(subs) {
 
   const activeUrl = state.subtitles.activeTrack ? state.subtitles.activeTrack.download_url : '';
 
+  const activeSubNameEl = document.getElementById('sub-active-name');
+  if (activeSubNameEl) {
+    if (state.subtitles.activeTrack) {
+      activeSubNameEl.innerText = `${state.subtitles.activeTrack.language || 'English'} (${state.subtitles.activeTrack.provider || 'Active'})`;
+    } else {
+      activeSubNameEl.innerText = 'No Subtitles Active';
+    }
+  }
+
   listEl.innerHTML = filtered.map((s, idx) => {
-    const isActive = s.download_url === activeUrl ? 'active' : '';
+    const isItemActive = s.download_url === activeUrl;
     const isSecActive = state.subtitles.secondaryTrack && state.subtitles.secondaryTrack.download_url === s.download_url ? 'tag-purple' : '';
-    const langFlag = s.lang_code ? `[${s.lang_code.toUpperCase()}]` : '[SUB]';
+    const langFlag = s.lang_code ? s.lang_code.toUpperCase() : 'SUB';
     const title = s.release_name || s.title || `${s.language} Subtitle`;
 
     return `
-      <div class="sub-item-card ${isActive}" data-suburl="${escapeHtml(s.download_url)}" onclick="selectSubtitleByIndex(${idx})">
+      <div class="sub-item-card ${isItemActive ? 'active' : ''}" data-suburl="${escapeHtml(s.download_url)}" onclick="selectSubtitleByIndex(${idx})">
         <div class="sub-item-top">
-          <span class="tag ${s.is_image_based ? 'tag-orange' : 'tag-green'} mono font-bold" style="font-size:0.65rem;">${escapeHtml(langFlag)} ${escapeHtml(s.language || 'English')}</span>
-          <span class="text-xs mono text-dim">${escapeHtml(s.provider || 'Sub')}</span>
-          <button class="btn btn-xs btn-outline ${isSecActive}" style="margin-left:auto; font-size:0.65rem; padding:0.1rem 0.4rem;" onclick="event.stopPropagation(); setSecondarySubtitleByIndex(${idx})" title="Language Learning: Render at top of screen as secondary subtitle">
+          <div class="flex items-center gap-2">
+            <span class="sub-card-check">${isItemActive ? '<i class="fa-solid fa-circle-check text-green"></i>' : '<i class="fa-regular fa-circle text-dim"></i>'}</span>
+            <span class="tag ${s.is_image_based ? 'tag-orange' : 'tag-green'} mono font-bold" style="font-size:0.68rem;">[${escapeHtml(langFlag)}] ${escapeHtml(s.language || 'English')}</span>
+            <span class="sub-provider-badge text-xs mono text-dim">${escapeHtml(s.provider || 'Sub')}</span>
+          </div>
+          <button class="btn btn-xs btn-outline ${isSecActive}" style="margin-left:auto; font-size:0.65rem; padding:0.15rem 0.45rem;" onclick="event.stopPropagation(); setSecondarySubtitleByIndex(${idx})" title="Language Learning: Render at top of screen as secondary subtitle">
             <i class="fa-solid fa-graduation-cap"></i> Dual (Top)
           </button>
         </div>
@@ -3409,7 +3458,7 @@ function renderSubtitleTracksList(subs) {
   }).join('');
 }
 
-function selectSubtitleByIndex(idx) {
+async function selectSubtitleByIndex(idx) {
   const filterLang = state.subtitles.activeLangFilter || 'all';
   const subs = state.subtitles.availableSubs || [];
   const filtered = filterLang === 'all'
@@ -3417,7 +3466,14 @@ function selectSubtitleByIndex(idx) {
     : subs.filter((s) => matchSubtitleLang(s, filterLang));
 
   if (filtered[idx]) {
-    applySubtitle(filtered[idx], false);
+    await applySubtitle(filtered[idx], false);
+    // After choosing the subtitle auto hide the panel then resume playing
+    toggleSubtitleDrawer(false);
+    const video = document.getElementById('evo-video-player');
+    if (video && state.subtitles.wasPlayingBeforeDrawer) {
+      video.play().catch(() => {});
+      state.subtitles.wasPlayingBeforeDrawer = false;
+    }
   }
 }
 
@@ -3538,6 +3594,12 @@ function handleLocalSubtitleUpload(event) {
       if (badge) badge.innerHTML = `<i class="fa-solid fa-file-lines text-green"></i> Local: ${file.name.slice(0, 15)}...`;
 
       showToast(`Loaded local subtitle: ${file.name}`, 'info');
+      toggleSubtitleDrawer(false);
+      const video = document.getElementById('evo-video-player');
+      if (video && state.subtitles.wasPlayingBeforeDrawer) {
+        video.play().catch(() => {});
+        state.subtitles.wasPlayingBeforeDrawer = false;
+      }
     } catch (err) {
       showToast(`Failed to parse local subtitle: ${err.message}`, 'error');
     }
@@ -4706,6 +4768,8 @@ function initPlayerTimelineControls() {
     if (!modal || modal.classList.contains('hidden')) return;
     if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
 
+    handlePlayerActivity();
+
     if (e.code === 'Space' || e.key === 'k' || e.key === 'K') {
       e.preventDefault();
       togglePlayerPlay();
@@ -4794,15 +4858,23 @@ function initPlayerTimelineControls() {
 
   // Keep Fullscreen button icon in sync with true fullscreen state
   const syncFullscreenIcon = () => {
-    const isFs = document.fullscreenElement || document.webkitFullscreenElement;
+    const isFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
     const btn = document.getElementById('btn-hud-fullscreen');
-    if (!btn) return;
-    if (isFs) {
-      btn.innerHTML = '<i class="fa-solid fa-compress"></i>';
-      btn.title = 'Exit Fullscreen (F)';
+    const wrap = document.getElementById('player-video-wrap');
+    if (btn) {
+      if (isFs) {
+        btn.innerHTML = '<i class="fa-solid fa-compress"></i>';
+        btn.title = 'Exit Fullscreen (F)';
+      } else {
+        btn.innerHTML = '<i class="fa-solid fa-expand"></i>';
+        btn.title = 'Fullscreen (F)';
+      }
+    }
+    if (!isFs) {
+      clearTimeout(playerIdleTimer);
+      if (wrap) wrap.classList.remove('user-idle');
     } else {
-      btn.innerHTML = '<i class="fa-solid fa-expand"></i>';
-      btn.title = 'Fullscreen (F)';
+      handlePlayerActivity();
     }
   };
   document.addEventListener('fullscreenchange', syncFullscreenIcon);
@@ -4988,27 +5060,53 @@ function updateVolumeIcon() {
 }
 
 let playerIdleTimer = null;
-function handlePlayerMouseMove() {
+
+function handlePlayerActivity() {
   const wrap = document.getElementById('player-video-wrap');
   if (!wrap) return;
   wrap.classList.remove('user-idle');
   clearTimeout(playerIdleTimer);
+
+  // ONLY hide the bar of the player when in fullscreen mode!
+  const isFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+  if (!isFs) return;
+
   const video = document.getElementById('evo-video-player');
-  if (video && !video.paused) {
+  const subDrawer = document.getElementById('player-sub-drawer');
+  const epDrawer = document.getElementById('player-episodes-drawer');
+  const isDrawerOpen = (subDrawer && !subDrawer.classList.contains('hidden')) ||
+                       (epDrawer && !epDrawer.classList.contains('hidden'));
+
+  // If video is playing and no drawer is open, show for 3 seconds then auto-hide
+  if (video && !video.paused && !isDrawerOpen) {
     playerIdleTimer = setTimeout(() => {
-      wrap.classList.add('user-idle');
-      const audioMenu = document.getElementById('player-audio-menu');
-      if (audioMenu) audioMenu.classList.add('hidden');
-    }, 2800);
+      const isStillFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      if (isStillFs && video && !video.paused) {
+        wrap.classList.add('user-idle');
+        const audioMenu = document.getElementById('player-audio-menu');
+        if (audioMenu) audioMenu.classList.add('hidden');
+        const extMenu = document.getElementById('player-extplayer-menu');
+        if (extMenu) extMenu.classList.add('hidden');
+        const speedMenu = document.getElementById('player-speed-menu');
+        if (speedMenu) speedMenu.classList.add('hidden');
+      }
+    }, 3000);
   }
 }
 
+function handlePlayerMouseMove() {
+  handlePlayerActivity();
+}
+
 function handlePlayerMouseLeave() {
-  const video = document.getElementById('evo-video-player');
+  const isFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
   const wrap = document.getElementById('player-video-wrap');
-  if (wrap && video && !video.paused) {
-    wrap.classList.add('user-idle');
+  if (!isFs) {
+    if (wrap) wrap.classList.remove('user-idle');
+    clearTimeout(playerIdleTimer);
+    return;
   }
+  handlePlayerActivity();
 }
 
 function toggleAudioDropdown() {

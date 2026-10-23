@@ -108,15 +108,17 @@ def test_stream_duration_headers(client):
 
 
 def test_ui_subtitle_drawer_layout_and_telemetry():
-    """Verifies style.css and index.html have proper layout constraints, z-index 60, and live P2P telemetry badge."""
+    """Verifies style.css and index.html have proper layout constraints, wider width, and live P2P telemetry badge."""
     css_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "style.css"))
     with open(css_path, "r", encoding="utf-8") as f:
         css = f.read()
 
-    # Subtitle drawer layout & scrolling
-    assert "z-index: 60;" in css
+    # Subtitle drawer layout & scrolling: wider 520px layout with z-index 65
+    assert "width: 520px;" in css
+    assert "z-index: 65;" in css
     assert "overscroll-behavior: contain;" in css
-    assert "max-width: 320px;" in css or "text-overflow: ellipsis;" in css
+    assert "sub-drawer-nav" in css
+    assert "sub-nav-tab" in css
 
     html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "index.html"))
     with open(html_path, "r", encoding="utf-8") as f:
@@ -125,6 +127,12 @@ def test_ui_subtitle_drawer_layout_and_telemetry():
     # Live P2P telemetry badge in controls HUD
     assert 'id="player-hud-p2p-badge"' in html
     assert 'id="player-hud-p2p-text"' in html
+
+    # Segmented navigation tabs inside redesigned drawer
+    assert 'id="sub-tab-tracks"' in html
+    assert 'id="sub-tab-sync"' in html
+    assert 'id="sub-tab-style"' in html
+    assert 'id="sub-panel-tracks"' in html
 
     app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
     with open(app_path, "r", encoding="utf-8") as f:
@@ -135,3 +143,42 @@ def test_ui_subtitle_drawer_layout_and_telemetry():
     assert "video.ondurationchange" in js
     assert "isDirectStream" in js
     assert "player-hud-p2p-text" in js
+
+
+def test_subtitle_pause_on_open_and_resume_on_select():
+    """Verifies app.js pauses playback when opening the subtitle drawer and auto-resumes after selecting a subtitle."""
+    app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
+    with open(app_path, "r", encoding="utf-8") as f:
+        js = f.read()
+
+    # switchSubDrawerTab function exists
+    assert "function switchSubDrawerTab" in js
+
+    # toggleSubtitleDrawer pauses video on open and records state
+    assert "wasPlayingBeforeDrawer" in js
+    assert "video.pause()" in js
+
+    # selectSubtitleByIndex auto-hides drawer and resumes playback
+    assert "toggleSubtitleDrawer(false)" in js
+    assert "video.play()" in js
+
+
+def test_fullscreen_controls_auto_hide_behavior():
+    """Verifies controls bar only hides in fullscreen mode and stays visible in normal mode with a 3-second activity timer."""
+    css_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "style.css"))
+    with open(css_path, "r", encoding="utf-8") as f:
+        css = f.read()
+
+    # CSS explicitly restricts user-idle hiding to fullscreen selectors
+    assert ":fullscreen.user-idle" in css
+    assert ".player-video-wrap .player-bottom-controls" in css
+
+    app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
+    with open(app_path, "r", encoding="utf-8") as f:
+        js = f.read()
+
+    # JS verifies isFs before setting idle timer
+    assert "handlePlayerActivity" in js
+    assert "document.fullscreenElement" in js
+    # 3-second timer (3000ms)
+    assert "3000" in js

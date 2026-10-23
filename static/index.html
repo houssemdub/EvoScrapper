@@ -1370,121 +1370,158 @@
         </div>
 
         <!-- Subtitle Control Drawer (Collapsible HUD Overlay) -->
-        <div id="player-sub-drawer" class="player-sub-drawer hidden">
+        <div id="player-sub-drawer" class="player-sub-drawer hidden" onclick="event.stopPropagation()">
           <div class="sub-drawer-header">
             <div class="flex items-center gap-2">
-              <i class="fa-solid fa-closed-captioning text-green"></i>
-              <span class="mono font-bold text-xs uppercase text-accent">Subtitles Hub & Real-Time Sync</span>
+              <i class="fa-solid fa-closed-captioning text-green" style="font-size:1.15rem;"></i>
+              <div>
+                <span class="mono font-bold text-sm text-bright">Subtitles Hub</span>
+                <span class="text-xs text-dim block" style="font-size:0.68rem;">Select tracks, calibrate sync & customize</span>
+              </div>
             </div>
-            <button class="btn btn-icon btn-ghost" style="padding:0.2rem 0.5rem;" onclick="toggleSubtitleDrawer(false)">
+            <button class="btn btn-icon btn-ghost sub-drawer-close" onclick="toggleSubtitleDrawer(false)" title="Close (Esc)">
               <i class="fa-solid fa-xmark"></i>
             </button>
           </div>
 
+          <!-- Drawer Navigation Tabs -->
+          <div class="sub-drawer-nav">
+            <button class="sub-nav-tab active" id="sub-tab-tracks" onclick="switchSubDrawerTab('tracks')">
+              <i class="fa-solid fa-list-check"></i> Subtitles
+            </button>
+            <button class="sub-nav-tab" id="sub-tab-sync" onclick="switchSubDrawerTab('sync')">
+              <i class="fa-solid fa-sliders"></i> Sync & Audio
+            </button>
+            <button class="sub-nav-tab" id="sub-tab-style" onclick="switchSubDrawerTab('style')">
+              <i class="fa-solid fa-palette"></i> Style Studio
+            </button>
+          </div>
+
           <div class="sub-drawer-body">
-            <!-- REAL-TIME SYNC CONTROLLER -->
-            <div class="sub-sync-panel">
-              <div class="flex items-center justify-between mb-1">
-                <span class="text-xs mono text-dim"><i class="fa-solid fa-clock-rotate-left"></i> REAL-TIME SYNC DELAY:</span>
-                <span id="sub-sync-val" class="mono text-xs font-bold text-green">0.0s (In Sync)</span>
-              </div>
-              <div class="flex items-center gap-1">
-                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-1.0)">-1.0s</button>
-                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.5)">-0.5s</button>
-                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.1)">-0.1s</button>
-                <input type="range" id="sub-sync-slider" min="-10" max="10" step="0.1" value="0" class="sub-sync-slider" oninput="setSubtitleSync(parseFloat(this.value))">
-                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.1)">+0.1s</button>
-                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.5)">+0.5s</button>
-                <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(1.0)">+1.0s</button>
-                <button class="btn btn-xs btn-ghost text-red" onclick="resetSubtitleSync()" title="Reset delay to 0.0s">Reset</button>
-              </div>
-              <div class="text-xs text-dim mono mt-1" style="font-size:0.68rem;">
-                Tip: Press <kbd class="kbd">G</kbd> to delay subtitles (-0.1s) or <kbd class="kbd">H</kbd> to advance (+0.1s) while watching.
-              </div>
-            </div>
-
-            <!-- REAL-TIME AUDIO SYNC & DELAY CONTROLLER -->
-            <div class="sub-sync-panel" style="margin-top:0.6rem; border-top: 1px solid rgba(255,255,255,0.06); padding-top:0.6rem;">
-              <div class="flex items-center justify-between mb-1">
-                <span class="text-xs mono text-dim"><i class="fa-solid fa-volume-high text-accent"></i> AUDIO DELAY CALIBRATION:</span>
-                <span id="audio-sync-val" class="mono text-xs font-bold text-accent">0.00s (In Sync)</span>
-              </div>
-              <div class="flex items-center gap-1">
-                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(-0.5)">-0.5s</button>
-                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(-0.1)">-0.1s</button>
-                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(-0.05)">-50ms</button>
-                <input type="range" id="audio-sync-slider" min="-5" max="5" step="0.05" value="0" class="sub-sync-slider" oninput="setAudioSync(parseFloat(this.value))">
-                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(0.05)">+50ms</button>
-                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(0.1)">+0.1s</button>
-                <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(0.5)">+0.5s</button>
-                <button class="btn btn-xs btn-ghost text-red" onclick="resetAudioSync()" title="Reset audio delay to 0.0s">Reset</button>
-              </div>
-              <div class="text-xs text-dim mono mt-1" style="font-size:0.68rem;">
-                Calibrate out-of-sync audio in real time (&plusmn;5.0s in 50ms increments).
-              </div>
-            </div>
-
-            <!-- SUBTITLE CUSTOMIZATION STUDIO -->
-            <div class="sub-sync-panel" style="margin-top:0.6rem; border-top: 1px solid rgba(255,255,255,0.06); padding-top:0.6rem;">
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-xs mono text-dim"><i class="fa-solid fa-sliders text-green"></i> SUBTITLE STUDIO & STYLING:</span>
-                <span id="sub-style-preview" class="mono text-xs font-bold text-accent">Preview: Subtitle Font</span>
-              </div>
-              <div class="flex items-center gap-2 mb-2">
-                <label class="text-xs mono text-dim" style="min-width:65px;">Size:</label>
-                <input type="range" id="sub-style-size" min="70" max="240" step="5" value="100" class="sub-sync-slider" oninput="applySubtitleStyles()">
-                <span id="sub-style-size-val" class="mono text-xs" style="min-width:40px;">100%</span>
-              </div>
-              <div class="flex items-center gap-2 mb-2">
-                <label class="text-xs mono text-dim" style="min-width:65px;">Color:</label>
-                <div class="flex gap-1">
-                  <button class="btn btn-xs sub-color-swatch active" style="background:#ffffff; color:#000; padding:0.15rem 0.5rem;" onclick="setSubtitleColor('#ffffff')">White</button>
-                  <button class="btn btn-xs sub-color-swatch" style="background:#ffeb3b; color:#000; padding:0.15rem 0.5rem;" onclick="setSubtitleColor('#ffeb3b')">Yellow</button>
-                  <button class="btn btn-xs sub-color-swatch" style="background:#00e5ff; color:#000; padding:0.15rem 0.5rem;" onclick="setSubtitleColor('#00e5ff')">Cyan</button>
-                  <button class="btn btn-xs sub-color-swatch" style="background:#00e676; color:#000; padding:0.15rem 0.5rem;" onclick="setSubtitleColor('#00e676')">Green</button>
+            <!-- TAB 1: SUBTITLE TRACKS -->
+            <div id="sub-panel-tracks" class="sub-drawer-panel active">
+              <!-- Top Actions: Status & Quick Off -->
+              <div class="sub-panel-toolbar">
+                <div class="flex items-center gap-2 flex-1 min-w-0">
+                  <span id="sub-active-indicator" class="tag tag-dim mono text-xs text-truncate">
+                    <i class="fa-solid fa-closed-captioning text-green"></i> <span id="sub-active-name">No Subtitles Active</span>
+                  </span>
                 </div>
-              </div>
-              <div class="flex items-center gap-2 mb-1">
-                <label class="text-xs mono text-dim" style="min-width:65px;">Bottom Offset:</label>
-                <input type="range" id="sub-style-pos" min="2" max="15" step="0.5" value="4.5" class="sub-sync-slider" oninput="applySubtitleStyles()">
-                <span id="sub-style-pos-val" class="mono text-xs" style="min-width:40px;">4.5rem</span>
-              </div>
-            </div>
-
-            <!-- MANUAL LOAD & SEARCH SECTION -->
-            <div class="sub-manual-panel">
-              <div class="flex items-center gap-2">
-                <label class="btn btn-xs btn-outline" title="Upload local .srt or .vtt file from your PC" style="cursor:pointer;">
-                  <i class="fa-solid fa-file-arrow-up text-accent"></i> Load Local .SRT / .VTT
-                  <input type="file" id="local-sub-input" accept=".srt,.vtt,.txt" style="display:none;" onchange="handleLocalSubtitleUpload(event)">
-                </label>
-                <div class="flex-1 flex gap-1">
-                  <input type="text" id="player-manual-sub-query" class="search-input sub-manual-input" placeholder="Search other title or scene subs..." onkeydown="if(event.key==='Enter')searchPlayerSubtitles()">
-                  <button class="btn btn-xs btn-green" onclick="searchPlayerSubtitles()"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- LANGUAGE TABS & TRACKS LIST -->
-            <div class="sub-tracks-section">
-              <div class="sub-lang-bar">
-                <button class="sub-lang-tab active" data-sublang="all" onclick="filterSubtitleLang('all')">All</button>
-                <button class="sub-lang-tab" data-sublang="en" onclick="filterSubtitleLang('en')">🇬🇧 EN</button>
-                <button class="sub-lang-tab" data-sublang="es" onclick="filterSubtitleLang('es')">🇪🇸 ES</button>
-                <button class="sub-lang-tab" data-sublang="fr" onclick="filterSubtitleLang('fr')">🇫🇷 FR</button>
-                <button class="sub-lang-tab" data-sublang="ar" onclick="filterSubtitleLang('ar')">🇸🇦 AR</button>
-                <button class="sub-lang-tab" data-sublang="de" onclick="filterSubtitleLang('de')">🇩🇪 DE</button>
-                <button class="sub-lang-tab" data-sublang="it" onclick="filterSubtitleLang('it')">🇮🇹 IT</button>
-                <button class="sub-lang-tab" data-sublang="pt" onclick="filterSubtitleLang('pt')">🇧🇷 PT</button>
-                <button class="sub-lang-tab" data-sublang="ru" onclick="filterSubtitleLang('ru')">🇷🇺 RU</button>
-                <button class="btn btn-xs btn-ghost text-red" onclick="disableSubtitles()" style="margin-left:auto;">
+                <button class="btn btn-xs btn-outline text-red" onclick="disableSubtitles()" title="Turn off active subtitles">
                   <i class="fa-solid fa-ban"></i> Turn Off Subs
                 </button>
               </div>
 
+              <!-- Search & Upload Bar -->
+              <div class="sub-search-row">
+                <div class="sub-search-wrap">
+                  <i class="fa-solid fa-magnifying-glass sub-search-icon"></i>
+                  <input type="text" id="player-manual-sub-query" class="sub-search-input" placeholder="Search other releases or subtitles..." onkeydown="if(event.key==='Enter')searchPlayerSubtitles()">
+                  <button class="btn btn-xs btn-green sub-search-btn" onclick="searchPlayerSubtitles()">Search</button>
+                </div>
+                <label class="btn btn-xs btn-outline sub-upload-btn" title="Upload local .srt/.vtt file from PC" style="cursor:pointer; white-space:nowrap;">
+                  <i class="fa-solid fa-file-arrow-up text-accent"></i> Local File
+                  <input type="file" id="local-sub-input" accept=".srt,.vtt,.txt" style="display:none;" onchange="handleLocalSubtitleUpload(event)">
+                </label>
+              </div>
+
+              <!-- Language Filter Chips -->
+              <div class="sub-lang-chips-wrap">
+                <div class="sub-lang-bar">
+                  <button class="sub-lang-tab active" data-sublang="all" onclick="filterSubtitleLang('all')">All</button>
+                  <button class="sub-lang-tab" data-sublang="en" onclick="filterSubtitleLang('en')">🇬🇧 EN</button>
+                  <button class="sub-lang-tab" data-sublang="es" onclick="filterSubtitleLang('es')">🇪🇸 ES</button>
+                  <button class="sub-lang-tab" data-sublang="fr" onclick="filterSubtitleLang('fr')">🇫🇷 FR</button>
+                  <button class="sub-lang-tab" data-sublang="ar" onclick="filterSubtitleLang('ar')">🇸🇦 AR</button>
+                  <button class="sub-lang-tab" data-sublang="de" onclick="filterSubtitleLang('de')">🇩🇪 DE</button>
+                  <button class="sub-lang-tab" data-sublang="it" onclick="filterSubtitleLang('it')">🇮🇹 IT</button>
+                  <button class="sub-lang-tab" data-sublang="pt" onclick="filterSubtitleLang('pt')">🇧🇷 PT</button>
+                  <button class="sub-lang-tab" data-sublang="ru" onclick="filterSubtitleLang('ru')">🇷🇺 RU</button>
+                  <button class="sub-lang-tab" data-sublang="ja" onclick="filterSubtitleLang('ja')">🇯🇵 JA</button>
+                </div>
+              </div>
+
+              <!-- Subtitles List taking full available height -->
               <div id="player-subs-list" class="sub-items-list">
-                <div class="text-xs text-dim p-3 text-center">
+                <div class="text-xs text-dim p-4 text-center">
                   <i class="fa-solid fa-spinner fa-spin text-accent"></i> Searching OpenSubtitles, Gestdown & YIFY...
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 2: SYNC & CALIBRATION -->
+            <div id="sub-panel-sync" class="sub-drawer-panel hidden">
+              <!-- REAL-TIME SUBTITLE SYNC CONTROLLER -->
+              <div class="sub-card-box">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="mono text-xs font-bold text-bright"><i class="fa-solid fa-clock-rotate-left text-green"></i> SUBTITLE TIMING OFFSET:</span>
+                  <span id="sub-sync-val" class="mono text-xs font-bold text-green">0.0s (In Sync)</span>
+                </div>
+                <div class="flex items-center gap-1 mb-2">
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-1.0)">-1.0s</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.5)">-0.5s</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.1)">-0.1s</button>
+                  <input type="range" id="sub-sync-slider" min="-10" max="10" step="0.1" value="0" class="sub-sync-slider" oninput="setSubtitleSync(parseFloat(this.value))">
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.1)">+0.1s</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.5)">+0.5s</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(1.0)">+1.0s</button>
+                  <button class="btn btn-xs btn-ghost text-red" onclick="resetSubtitleSync()" title="Reset delay to 0.0s">Reset</button>
+                </div>
+                <div class="text-xs text-dim mono" style="font-size:0.7rem;">
+                  Hotkeys: Press <kbd class="kbd">G</kbd> to delay subtitles (-0.1s) or <kbd class="kbd">H</kbd> to advance (+0.1s) anytime while watching.
+                </div>
+              </div>
+
+              <!-- REAL-TIME AUDIO SYNC & DELAY CONTROLLER -->
+              <div class="sub-card-box mt-3">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="mono text-xs font-bold text-bright"><i class="fa-solid fa-volume-high text-accent"></i> AUDIO DELAY CALIBRATION:</span>
+                  <span id="audio-sync-val" class="mono text-xs font-bold text-accent">0.00s (In Sync)</span>
+                </div>
+                <div class="flex items-center gap-1 mb-2">
+                  <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(-0.5)">-0.5s</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(-0.1)">-0.1s</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(-0.05)">-50ms</button>
+                  <input type="range" id="audio-sync-slider" min="-5" max="5" step="0.05" value="0" class="sub-sync-slider" oninput="setAudioSync(parseFloat(this.value))">
+                  <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(0.05)">+50ms</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(0.1)">+0.1s</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustAudioSync(0.5)">+0.5s</button>
+                  <button class="btn btn-xs btn-ghost text-red" onclick="resetAudioSync()" title="Reset audio delay to 0.0s">Reset</button>
+                </div>
+                <div class="text-xs text-dim mono" style="font-size:0.7rem;">
+                  Calibrate out-of-sync audio in real time (&plusmn;5.0s in 50ms increments).
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 3: SUBTITLE STUDIO & STYLING -->
+            <div id="sub-panel-style" class="sub-drawer-panel hidden">
+              <div class="sub-card-box">
+                <div class="flex items-center justify-between mb-3">
+                  <span class="mono text-xs font-bold text-bright"><i class="fa-solid fa-palette text-accent"></i> SUBTITLE APPEARANCE & FONT:</span>
+                  <span id="sub-style-preview" class="mono text-xs font-bold text-accent">Preview: Subtitle Font</span>
+                </div>
+
+                <div class="flex items-center gap-3 mb-3">
+                  <label class="text-xs mono text-dim" style="min-width:90px;">Font Size:</label>
+                  <input type="range" id="sub-style-size" min="70" max="240" step="5" value="100" class="sub-sync-slider" oninput="applySubtitleStyles()">
+                  <span id="sub-style-size-val" class="mono text-xs font-bold text-bright" style="min-width:45px;">100%</span>
+                </div>
+
+                <div class="flex items-center gap-3 mb-3">
+                  <label class="text-xs mono text-dim" style="min-width:90px;">Text Color:</label>
+                  <div class="flex gap-2">
+                    <button class="btn btn-xs sub-color-swatch active" style="background:#ffffff; color:#000; padding:0.25rem 0.65rem;" onclick="setSubtitleColor('#ffffff')">White</button>
+                    <button class="btn btn-xs sub-color-swatch" style="background:#ffeb3b; color:#000; padding:0.25rem 0.65rem;" onclick="setSubtitleColor('#ffeb3b')">Yellow</button>
+                    <button class="btn btn-xs sub-color-swatch" style="background:#00e5ff; color:#000; padding:0.25rem 0.65rem;" onclick="setSubtitleColor('#00e5ff')">Cyan</button>
+                    <button class="btn btn-xs sub-color-swatch" style="background:#00e676; color:#000; padding:0.25rem 0.65rem;" onclick="setSubtitleColor('#00e676')">Green</button>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-3 mb-2">
+                  <label class="text-xs mono text-dim" style="min-width:90px;">Bottom Offset:</label>
+                  <input type="range" id="sub-style-pos" min="2" max="15" step="0.5" value="4.5" class="sub-sync-slider" oninput="applySubtitleStyles()">
+                  <span id="sub-style-pos-val" class="mono text-xs font-bold text-bright" style="min-width:45px;">4.5rem</span>
                 </div>
               </div>
             </div>
