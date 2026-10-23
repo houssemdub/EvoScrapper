@@ -1145,37 +1145,59 @@
           <i class="fa-solid fa-play"></i>
         </div>
 
-        <!-- Buffering Spinner & Modern Progress HUD -->
+        <!-- High-End Cinematic Floating Buffering Overlay -->
         <div id="player-buffering-hud" class="player-buffering-hud hidden">
-          <div class="buffering-card">
-            <div class="buffering-header">
-              <span class="buffering-pulse-ring"></span>
-              <span class="buffering-title mono"><i class="fa-solid fa-satellite-dish text-accent"></i> BUFFERING STREAM</span>
-              <span id="buffering-pct-badge" class="tag tag-accent mono font-bold">0%</span>
+          <div class="buffering-cinematic-stage">
+            <!-- Breathing Pulse Rings -->
+            <div class="buffering-pulse-rings" aria-hidden="true">
+              <span class="pulse-ring ring-outer"></span>
+              <span class="pulse-ring ring-middle"></span>
+              <span class="pulse-ring ring-inner"></span>
             </div>
-            <!-- Animated Striped Progress Bar -->
-            <div class="buffering-progress-track">
-              <div id="buffering-progress-fill" class="buffering-progress-fill" style="width: 0%;"></div>
+
+            <!-- Custom Cyber "Evo" SVG Animated Loader -->
+            <div id="player-buffering-spinner" class="player-buffering-spinner">
+              <div class="loader evo-loader size-xl">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="58" height="58" class="inline-block">
+                  <path stroke-linejoin="round" stroke-linecap="round" stroke-width="8" stroke="url(#b)" d="M 20,20 L 80,20 L 80,27 L 27,27 L 27,50 L 70,50 L 70,57 L 25,57 L 25,80 L 80,80 L 80,87 L 20,87 Z" class="dash" id="E" pathLength="360"></path>
+                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="58" height="58" class="inline-block">
+                  <path stroke-linejoin="round" stroke-linecap="round" stroke-width="12" stroke="url(#d)" d="M 20,20 L 50,80 L 80,20" class="dash" id="v" pathLength="360"></path>
+                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="58" height="58" class="inline-block">
+                  <path stroke-linejoin="round" stroke-linecap="round" stroke-width="11" stroke="url(#c)" d="M 50,15 A 35,35 0 0 1 85,50 A 35,35 0 0 1 50,85 A 35,35 0 0 1 15,50 A 35,35 0 0 1 50,15 Z" class="spin" id="o" pathLength="360"></path>
+                </svg>
+              </div>
             </div>
-            <!-- Telemetry & Countdown Stats -->
-            <div class="buffering-telemetry">
+
+            <!-- Sleek Audio-Wave Equalizer Lines -->
+            <div class="buffering-audio-waves" aria-hidden="true">
+              <span class="wave-bar bar-1"></span>
+              <span class="wave-bar bar-2"></span>
+              <span class="wave-bar bar-3"></span>
+              <span class="wave-bar bar-4"></span>
+              <span class="wave-bar bar-5"></span>
+            </div>
+
+            <!-- Minimalist Telemetry Pill -->
+            <div class="buffering-telemetry-pill">
+              <span class="buffering-title mono"><i class="fa-solid fa-satellite-dish text-accent"></i> BUFFERING SWARM</span>
+              <span class="buffering-dot-sep">·</span>
+              <span id="buffering-speed-label" class="mono text-green text-xs">Connecting...</span>
+              <span class="buffering-dot-sep">·</span>
+              <span id="buffering-pct-badge" class="mono text-bright text-xs font-bold">0%</span>
+            </div>
+
+            <!-- Luminous Glowing Progress Line -->
+            <div class="buffering-progress-line-wrap">
+              <div id="buffering-progress-fill" class="buffering-progress-line-fill" style="width: 0%;"></div>
+            </div>
+
+            <!-- Telemetry Details -->
+            <div class="buffering-sub-labels">
               <span id="buffering-bytes-label" class="mono text-dim text-xs"><i class="fa-solid fa-layer-group"></i> 0.0 / 6.0 MB</span>
-              <span id="buffering-speed-label" class="mono text-green text-xs"><i class="fa-solid fa-gauge-high"></i> Connecting...</span>
-              <span id="buffering-countdown-label" class="mono text-accent text-xs font-bold"><i class="fa-solid fa-hourglass-start"></i> Starting soon...</span>
+              <span id="buffering-countdown-label" class="mono text-dim text-xs"><i class="fa-solid fa-hourglass-start"></i> Starting soon...</span>
             </div>
-          </div>
-        </div>
-        <div id="player-buffering-spinner" class="player-buffering-spinner hidden">
-          <div class="loader evo-loader size-xl">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="56" height="56" class="inline-block">
-              <path stroke-linejoin="round" stroke-linecap="round" stroke-width="8" stroke="url(#b)" d="M 20,20 L 80,20 L 80,27 L 27,27 L 27,50 L 70,50 L 70,57 L 25,57 L 25,80 L 80,80 L 80,87 L 20,87 Z" class="dash" id="E" pathLength="360"></path>
-            </svg>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="56" height="56" class="inline-block">
-              <path stroke-linejoin="round" stroke-linecap="round" stroke-width="12" stroke="url(#d)" d="M 20,20 L 50,80 L 80,20" class="dash" id="v" pathLength="360"></path>
-            </svg>
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="56" height="56" class="inline-block">
-              <path stroke-linejoin="round" stroke-linecap="round" stroke-width="11" stroke="url(#c)" d="M 50,15 A 35,35 0 0 1 85,50 A 35,35 0 0 1 50,85 A 35,35 0 0 1 15,50 A 35,35 0 0 1 50,15 Z" class="spin" id="o" pathLength="360"></path>
-            </svg>
           </div>
         </div>
 
@@ -1283,44 +1305,13 @@
               </button>
             </div>
 
-            <!-- Right Controls -->
+            <!-- Right Controls (Cinematic Clean Hierarchy) -->
             <div class="player-controls-right">
-              <button id="btn-hud-stream-mode" class="player-btn" onclick="toggleStreamPipelineMode()" title="Stream Mode: Direct (Native Seek & Full Buffer) vs Transmux (Stereo Compatibility)">
-                <i class="fa-solid fa-bolt-lightning text-accent"></i>
-                <span id="player-hud-mode-label" class="mono text-xs">Direct</span>
-              </button>
-              <span id="player-hud-stream-badge" class="tag tag-dim mono text-xs">1080p | AAC</span>
-              <span id="player-hud-p2p-badge" class="tag mono text-xs" style="background:rgba(0,255,136,0.12); border:1px solid rgba(0,255,136,0.3); color:var(--green);"><i class="fa-solid fa-bolt"></i> <span id="player-hud-p2p-text">P2P Swarm Ready</span></span>
-
-              <!-- Playback Speed dropdown -->
-              <div class="player-dropdown-wrap">
-                <button id="btn-hud-speed" class="player-btn" onclick="toggleSpeedDropdown()" title="Playback Speed ([ / ])">
-                  <i class="fa-solid fa-gauge-high"></i>
-                  <span id="player-hud-speed-label" class="mono text-xs">1.0x</span>
-                </button>
-                <div id="player-speed-menu" class="player-dropdown-menu hidden"></div>
+              <!-- Stream Telemetry Badge -->
+              <div class="player-hud-pill-wrap" title="Swarm Health & Stream Pipeline">
+                <span id="player-hud-stream-badge" class="player-hud-pill"><i class="fa-solid fa-film text-dim"></i> 1080p | AAC</span>
+                <span id="player-hud-p2p-badge" class="player-hud-pill pill-p2p"><i class="fa-solid fa-bolt text-green"></i> <span id="player-hud-p2p-text">P2P Swarm Ready</span></span>
               </div>
-
-              <!-- Aspect Ratio & Ultrawide Zoom -->
-              <button id="btn-hud-aspect" class="player-btn" onclick="cyclePlayerAspectRatio()" title="Aspect Ratio & Ultrawide Zoom (A)">
-                <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
-                <span id="player-hud-aspect-label" class="mono text-xs">Fit</span>
-              </button>
-
-              <!-- Night Dialogue Mode (Compressor) -->
-              <button id="btn-hud-nightmode" class="player-btn" onclick="toggleNightDialogueMode()" title="Night Dialogue Mode (Boosts quiet speech, compresses loud SFX) (N)">
-                <i class="fa-solid fa-moon"></i>
-              </button>
-
-              <!-- Ambient Glow Lighting -->
-              <button id="btn-hud-ambilight" class="player-btn" onclick="toggleAmbilight()" title="Ambilight Ambient Glow">
-                <i class="fa-solid fa-wand-magic-sparkles"></i>
-              </button>
-
-              <!-- Picture-in-Picture -->
-              <button id="btn-hud-pip" class="player-btn" onclick="togglePlayerPiP()" title="Picture-in-Picture (P)">
-                <i class="fa-solid fa-clone"></i>
-              </button>
 
               <!-- Audio selector dropdown -->
               <div class="player-dropdown-wrap">
@@ -1332,48 +1323,135 @@
               </div>
 
               <!-- Subtitles button -->
-              <button id="btn-hud-subs" class="player-btn" onclick="toggleSubtitleDrawer()" title="Subtitles Hub & Audio Sync (C)">
+              <button id="btn-hud-subs" class="player-btn" onclick="toggleSubtitleDrawer()" title="Subtitles Hub & Styling Studio (C)">
                 <i class="fa-solid fa-closed-captioning"></i>
+                <span class="mono text-xs">Subs</span>
               </button>
 
-              <!-- Swarm & Piece Map Inspector -->
-              <button id="btn-hud-swarm" class="player-btn" onclick="toggleSwarmInspectorModal(true)" title="Swarm & Piece Map Inspector (S)">
-                <i class="fa-solid fa-circle-nodes text-green"></i>
+              <!-- In-Player Episode Drawer Toggle (Visible only on episodic series/anime) -->
+              <button id="btn-hud-episodes" class="player-btn hidden" onclick="togglePlayerEpisodesDrawer()" title="Episodes Drawer (E)">
+                <i class="fa-solid fa-list-ol text-green"></i>
+                <span class="mono text-xs">Episodes</span>
               </button>
 
-              <!-- Casting to TV / Chromecast -->
-              <button id="btn-hud-cast" class="player-btn" onclick="promptCastMedia()" title="Cast to Chromecast / Smart TV">
-                <i class="fa-brands fa-chromecast text-accent"></i>
-              </button>
-
-              <!-- Offline Download -->
-              <button id="btn-hud-download" class="player-btn" onclick="triggerOfflineDownload()" title="Download Media for Offline Playback">
-                <i class="fa-solid fa-download"></i>
-              </button>
-
-              <!-- Keyboard Shortcuts Help -->
-              <button id="btn-hud-help" class="player-btn" onclick="toggleShortcutsModal()" title="Keyboard Shortcuts (?)">
-                <i class="fa-solid fa-circle-question"></i>
-              </button>
-
-              <!-- Torrent Files Inspector & Switcher -->
-              <button id="btn-hud-files" class="player-btn" onclick="openActiveStreamFilesModal()" title="View & Switch Files in Torrent">
-                <i class="fa-solid fa-folder-tree text-accent"></i>
-                <span id="player-hud-files-label" class="mono text-xs">Files</span>
-              </button>
-
-              <!-- Universal External Player Launcher (VLC, MPV, MPC-HC, PotPlayer) -->
+              <!-- Quick Settings & Playback Studio Popover -->
               <div class="player-dropdown-wrap">
-                <button id="btn-hud-extplayer" class="player-btn player-btn-vlc" onclick="toggleExtPlayerDropdown()" title="Launch in Native Desktop Media Player">
-                  <i class="fa-solid fa-rocket"></i>
-                  <span id="player-hud-extplayer-label" class="mono text-xs">VLC</span>
-                  <i class="fa-solid fa-chevron-down text-dim" style="font-size:0.55rem; margin-left:2px;"></i>
+                <button id="btn-hud-settings" class="player-btn" onclick="togglePlayerSettingsMenu()" title="Playback Settings & Studio">
+                  <i class="fa-solid fa-sliders"></i>
                 </button>
-                <div id="player-extplayer-menu" class="player-dropdown-menu hidden" style="min-width:160px; right:0; bottom:120%;">
-                  <div class="dropdown-item" onclick="switchPlayerToExternal('vlc')"><i class="fa-solid fa-rocket text-orange"></i> VLC Player</div>
-                  <div class="dropdown-item" onclick="switchPlayerToExternal('mpv')"><i class="fa-solid fa-play text-accent"></i> MPV Player</div>
-                  <div class="dropdown-item" onclick="switchPlayerToExternal('mpc-hc')"><i class="fa-solid fa-film text-blue"></i> MPC-HC / BE</div>
-                  <div class="dropdown-item" onclick="switchPlayerToExternal('potplayer')"><i class="fa-solid fa-tv text-green"></i> PotPlayer</div>
+                <div id="player-settings-popover" class="player-dropdown-menu player-settings-popover hidden" onclick="event.stopPropagation()">
+                  <div class="popover-header">
+                    <span class="mono text-xs font-bold uppercase text-accent"><i class="fa-solid fa-sliders"></i> Playback Settings</span>
+                    <button class="btn btn-icon btn-ghost btn-xs" onclick="togglePlayerSettingsMenu(false)"><i class="fa-solid fa-xmark"></i></button>
+                  </div>
+
+                  <!-- Stream Pipeline Engine -->
+                  <div class="popover-row">
+                    <div class="popover-label">
+                      <span class="popover-title">Stream Engine</span>
+                      <span class="popover-desc">Direct seekable stream or compatibility transmux</span>
+                    </div>
+                    <button id="btn-hud-stream-mode" class="btn btn-xs btn-outline" onclick="toggleStreamPipelineMode()">
+                      <i class="fa-solid fa-bolt-lightning text-accent"></i>
+                      <span id="player-hud-mode-label" class="mono text-xs">Direct</span>
+                    </button>
+                  </div>
+
+                  <!-- Playback Speed Grid -->
+                  <div class="popover-section">
+                    <div class="popover-label-sm">Playback Speed</div>
+                    <div class="speed-chips-grid">
+                      <button class="speed-chip" data-speed="0.5" onclick="setPlaybackSpeed(0.5)">0.5x</button>
+                      <button class="speed-chip" data-speed="0.75" onclick="setPlaybackSpeed(0.75)">0.75x</button>
+                      <button class="speed-chip active" data-speed="1.0" id="speed-chip-1" onclick="setPlaybackSpeed(1.0)">1.0x</button>
+                      <button class="speed-chip" data-speed="1.25" onclick="setPlaybackSpeed(1.25)">1.25x</button>
+                      <button class="speed-chip" data-speed="1.5" onclick="setPlaybackSpeed(1.5)">1.5x</button>
+                      <button class="speed-chip" data-speed="2.0" onclick="setPlaybackSpeed(2.0)">2.0x</button>
+                    </div>
+                    <div id="player-speed-menu" class="hidden"></div>
+                    <button id="btn-hud-speed" class="hidden"><span id="player-hud-speed-label">1.0x</span></button>
+                  </div>
+
+                  <!-- Aspect Ratio & Ultrawide Zoom -->
+                  <div class="popover-row">
+                    <div class="popover-label">
+                      <span class="popover-title">Aspect Ratio</span>
+                      <span class="popover-desc">Fit, Cover, 16:9, or 21:9 Ultrawide</span>
+                    </div>
+                    <button id="btn-hud-aspect" class="btn btn-xs btn-outline" onclick="cyclePlayerAspectRatio()">
+                      <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
+                      <span id="player-hud-aspect-label" class="mono text-xs">Fit</span>
+                    </button>
+                  </div>
+
+                  <!-- Night Dialogue Mode (Compressor) -->
+                  <div class="popover-row">
+                    <div class="popover-label">
+                      <span class="popover-title">Night Dialogue Mode</span>
+                      <span class="popover-desc">Boost whisper, compress loud SFX</span>
+                    </div>
+                    <button id="btn-hud-nightmode" class="btn btn-xs btn-outline" onclick="toggleNightDialogueMode()">
+                      <i class="fa-solid fa-moon"></i>
+                      <span id="player-hud-night-label" class="mono text-xs">Off</span>
+                    </button>
+                  </div>
+
+                  <!-- Ambient Glow Lighting -->
+                  <div class="popover-row">
+                    <div class="popover-label">
+                      <span class="popover-title">Ambilight Glow</span>
+                      <span class="popover-desc">Cinematic reactive edge lighting</span>
+                    </div>
+                    <button id="btn-hud-ambilight" class="btn btn-xs btn-outline" onclick="toggleAmbilight()">
+                      <i class="fa-solid fa-wand-magic-sparkles text-accent"></i>
+                      <span id="player-hud-ambilight-label" class="mono text-xs">Off</span>
+                    </button>
+                  </div>
+
+                  <div class="popover-divider"></div>
+
+                  <!-- Quick Utilities Grid -->
+                  <div class="popover-actions-grid">
+                    <button id="btn-hud-pip" class="popover-action-btn" onclick="togglePlayerPiP()" title="Picture-in-Picture">
+                      <i class="fa-solid fa-clone text-blue"></i>
+                      <span>Miniplayer (P)</span>
+                    </button>
+                    <button id="btn-hud-cast" class="popover-action-btn" onclick="promptCastMedia()" title="Cast to Smart TV">
+                      <i class="fa-brands fa-chromecast text-accent"></i>
+                      <span>Cast to TV</span>
+                    </button>
+                    <button id="btn-hud-download" class="popover-action-btn" onclick="triggerOfflineDownload()" title="Download Media File">
+                      <i class="fa-solid fa-download text-green"></i>
+                      <span>Download</span>
+                    </button>
+                    <button id="btn-hud-swarm" class="popover-action-btn" onclick="toggleSwarmInspectorModal(true)" title="Swarm & Piece Map">
+                      <i class="fa-solid fa-circle-nodes text-green"></i>
+                      <span>Swarm Map (S)</span>
+                    </button>
+                    <button id="btn-hud-files" class="popover-action-btn" onclick="openActiveStreamFilesModal()" title="View & Switch Files in Torrent">
+                      <i class="fa-solid fa-folder-tree text-accent"></i>
+                      <span id="player-hud-files-label">Files</span>
+                    </button>
+                    <button id="btn-hud-help" class="popover-action-btn" onclick="toggleShortcutsModal()" title="Keyboard Shortcuts">
+                      <i class="fa-solid fa-circle-question text-dim"></i>
+                      <span>Shortcuts (?)</span>
+                    </button>
+                  </div>
+
+                  <div class="popover-divider"></div>
+
+                  <!-- Universal External Player Launcher -->
+                  <div class="popover-row">
+                    <div class="popover-label">
+                      <span class="popover-title">Open in Desktop App</span>
+                    </div>
+                    <div class="flex gap-1">
+                      <button id="btn-hud-extplayer" class="btn btn-xs btn-outline" onclick="switchPlayerToExternal('vlc')"><i class="fa-solid fa-rocket text-orange"></i> <span id="player-hud-extplayer-label">VLC</span></button>
+                      <button class="btn btn-xs btn-outline" onclick="switchPlayerToExternal('mpv')"><i class="fa-solid fa-play text-accent"></i> MPV</button>
+                      <button class="btn btn-xs btn-outline" onclick="switchPlayerToExternal('mpc-hc')"><i class="fa-solid fa-film text-blue"></i> MPC</button>
+                    </div>
+                    <div id="player-extplayer-menu" class="hidden"></div>
+                  </div>
                 </div>
               </div>
 
@@ -1483,20 +1561,31 @@
               <div class="sub-card-box">
                 <div class="flex items-center justify-between mb-2">
                   <span class="mono text-xs font-bold text-bright"><i class="fa-solid fa-clock-rotate-left text-green"></i> SUBTITLE TIMING OFFSET:</span>
-                  <span id="sub-sync-val" class="mono text-xs font-bold text-green">0.0s (In Sync)</span>
+                  <span id="sub-sync-val" class="mono text-xs font-bold text-green">0ms (In Sync)</span>
                 </div>
+                <!-- Millisecond Precision Nudge Buttons -->
+                <div class="sub-sync-nudge-row mb-2">
+                  <span class="text-xs mono text-dim nudge-label">Fine Nudge:</span>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSyncMs(-500)">-500ms</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSyncMs(-100)">-100ms</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSyncMs(-50)">-50ms</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSyncMs(50)">+50ms</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSyncMs(100)">+100ms</button>
+                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSyncMs(500)">+500ms</button>
+                  <button class="btn btn-xs btn-ghost text-red" onclick="resetSubtitleSync()" title="Reset delay to 0.0s">Reset</button>
+                </div>
+                <!-- Slider with second increments -->
                 <div class="flex items-center gap-1 mb-2">
                   <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-1.0)">-1.0s</button>
                   <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.5)">-0.5s</button>
                   <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.1)">-0.1s</button>
-                  <input type="range" id="sub-sync-slider" min="-10" max="10" step="0.1" value="0" class="sub-sync-slider" oninput="setSubtitleSync(parseFloat(this.value))">
+                  <input type="range" id="sub-sync-slider" min="-10" max="10" step="0.05" value="0" class="sub-sync-slider" oninput="setSubtitleSync(parseFloat(this.value))">
                   <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.1)">+0.1s</button>
                   <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.5)">+0.5s</button>
                   <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(1.0)">+1.0s</button>
-                  <button class="btn btn-xs btn-ghost text-red" onclick="resetSubtitleSync()" title="Reset delay to 0.0s">Reset</button>
                 </div>
                 <div class="text-xs text-dim mono" style="font-size:0.7rem;">
-                  Hotkeys: Press <kbd class="kbd">G</kbd> to delay subtitles (-0.1s) or <kbd class="kbd">H</kbd> to advance (+0.1s) anytime while watching.
+                  Hotkeys: Press <kbd class="kbd">G</kbd> to delay subtitles (-100ms) or <kbd class="kbd">H</kbd> to advance (+100ms) anytime during playback.
                 </div>
               </div>
 
@@ -1524,20 +1613,57 @@
 
             <!-- TAB 3: SUBTITLE STUDIO & STYLING -->
             <div id="sub-panel-style" class="sub-drawer-panel hidden">
+              <!-- Live Preview Stage -->
+              <div class="sub-live-preview-box mb-3">
+                <div class="sub-live-preview-header">
+                  <span class="mono text-xs font-bold text-dim"><i class="fa-solid fa-eye text-cyan"></i> LIVE PREVIEW</span>
+                  <span id="sub-style-preview" class="mono text-xs font-bold text-accent">Subtitles Style</span>
+                </div>
+                <div class="sub-live-preview-stage">
+                  <div id="sub-preview-render" class="sub-preview-render">
+                    The quick brown fox jumps over the lazy dog.
+                  </div>
+                </div>
+              </div>
+
               <div class="sub-card-box">
-                <div class="flex items-center justify-between mb-3">
-                  <span class="mono text-xs font-bold text-bright"><i class="fa-solid fa-palette text-accent"></i> SUBTITLE APPEARANCE & FONT:</span>
-                  <span id="sub-style-preview" class="mono text-xs font-bold text-accent">Preview: Subtitle Font</span>
+                <!-- Font Scale Presets + Slider -->
+                <div class="sub-studio-section mb-3">
+                  <div class="flex items-center justify-between mb-1.5">
+                    <label class="text-xs mono font-bold text-bright"><i class="fa-solid fa-text-height text-cyan"></i> Font Scale:</label>
+                    <span id="sub-style-size-val" class="mono text-xs font-bold text-bright">100%</span>
+                  </div>
+                  <div class="sub-preset-chips-row mb-2">
+                    <button class="btn btn-xs sub-scale-chip" onclick="setFontScalePreset(80)">80% Small</button>
+                    <button class="btn btn-xs sub-scale-chip active" onclick="setFontScalePreset(100)">100% Standard</button>
+                    <button class="btn btn-xs sub-scale-chip" onclick="setFontScalePreset(130)">130% Large</button>
+                    <button class="btn btn-xs sub-scale-chip" onclick="setFontScalePreset(170)">170% Huge</button>
+                  </div>
+                  <input type="range" id="sub-style-size" min="70" max="240" step="5" value="100" class="sub-sync-slider w-full" oninput="applySubtitleStyles()">
                 </div>
 
-                <div class="flex items-center gap-3 mb-3">
-                  <label class="text-xs mono text-dim" style="min-width:90px;">Font Size:</label>
-                  <input type="range" id="sub-style-size" min="70" max="240" step="5" value="100" class="sub-sync-slider" oninput="applySubtitleStyles()">
-                  <span id="sub-style-size-val" class="mono text-xs font-bold text-bright" style="min-width:45px;">100%</span>
+                <!-- Background Translucency Selector -->
+                <div class="sub-studio-section mb-3">
+                  <label class="text-xs mono font-bold text-bright block mb-1.5"><i class="fa-solid fa-layer-group text-accent"></i> Background Translucency:</label>
+                  <div class="sub-bg-chips-grid">
+                    <button class="btn btn-xs sub-bg-chip" data-bg="none" onclick="setSubtitleBackground('none')">
+                      <i class="fa-regular fa-square"></i> None (0%)
+                    </button>
+                    <button class="btn btn-xs sub-bg-chip" data-bg="subtle" onclick="setSubtitleBackground('subtle')">
+                      <i class="fa-solid fa-circle-half-stroke"></i> Subtle (35%)
+                    </button>
+                    <button class="btn btn-xs sub-bg-chip active" data-bg="box" onclick="setSubtitleBackground('box')">
+                      <i class="fa-solid fa-square text-dim"></i> Translucent (70%)
+                    </button>
+                    <button class="btn btn-xs sub-bg-chip" data-bg="solid" onclick="setSubtitleBackground('solid')">
+                      <i class="fa-solid fa-square"></i> Solid (95%)
+                    </button>
+                  </div>
                 </div>
 
-                <div class="flex items-center gap-3 mb-3">
-                  <label class="text-xs mono text-dim" style="min-width:90px;">Text Color:</label>
+                <!-- Text Color Palette -->
+                <div class="sub-studio-section mb-3">
+                  <label class="text-xs mono font-bold text-bright block mb-1.5"><i class="fa-solid fa-droplet text-green"></i> Text Color:</label>
                   <div class="flex gap-2">
                     <button class="btn btn-xs sub-color-swatch active" style="background:#ffffff; color:#000; padding:0.25rem 0.65rem;" onclick="setSubtitleColor('#ffffff')">White</button>
                     <button class="btn btn-xs sub-color-swatch" style="background:#ffeb3b; color:#000; padding:0.25rem 0.65rem;" onclick="setSubtitleColor('#ffeb3b')">Yellow</button>
@@ -1546,10 +1672,13 @@
                   </div>
                 </div>
 
-                <div class="flex items-center gap-3 mb-2">
-                  <label class="text-xs mono text-dim" style="min-width:90px;">Bottom Offset:</label>
-                  <input type="range" id="sub-style-pos" min="2" max="15" step="0.5" value="4.5" class="sub-sync-slider" oninput="applySubtitleStyles()">
-                  <span id="sub-style-pos-val" class="mono text-xs font-bold text-bright" style="min-width:45px;">4.5rem</span>
+                <!-- Bottom Offset Slider -->
+                <div class="sub-studio-section">
+                  <div class="flex items-center justify-between mb-1">
+                    <label class="text-xs mono font-bold text-dim"><i class="fa-solid fa-arrows-up-down text-purple"></i> Vertical Elevation:</label>
+                    <span id="sub-style-pos-val" class="mono text-xs font-bold text-bright">4.5rem</span>
+                  </div>
+                  <input type="range" id="sub-style-pos" min="2" max="15" step="0.5" value="4.5" class="sub-sync-slider w-full" oninput="applySubtitleStyles()">
                 </div>
               </div>
             </div>

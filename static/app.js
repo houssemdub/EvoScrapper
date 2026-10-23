@@ -3129,7 +3129,7 @@ function togglePlayerFullscreen() {
 }
 
 function setSubtitleSync(seconds) {
-  const clamped = Math.round(seconds * 10) / 10;
+  const clamped = Math.round(seconds * 1000) / 1000;
   state.subtitles.currentOffset = clamped;
 
   const badge = document.getElementById('player-sync-badge');
@@ -3137,17 +3137,25 @@ function setSubtitleSync(seconds) {
   const syncVal = document.getElementById('sub-sync-val');
 
   const sign = clamped > 0 ? '+' : '';
-  const text = `${sign}${clamped.toFixed(1)}s`;
+  const ms = Math.round(clamped * 1000);
+  const text = `${sign}${ms}ms (${sign}${clamped.toFixed(2)}s)`;
 
-  if (badge) badge.innerText = text;
+  if (badge) badge.innerText = `${sign}${clamped.toFixed(1)}s`;
   if (slider) slider.value = clamped;
   if (syncVal) {
-    syncVal.innerText = clamped === 0 ? '0.0s (In Sync)' : `${text} ${clamped > 0 ? '(Delayed)' : '(Advanced)'}`;
+    syncVal.innerText = clamped === 0 ? '0ms (In Sync)' : `${text} ${clamped > 0 ? '(Delayed)' : '(Advanced)'}`;
     syncVal.className = clamped === 0 ? 'mono text-xs font-bold text-green' : 'mono text-xs font-bold text-accent';
   }
 
   // Update on-screen subtitle cues in real-time
   updateSubtitleOverlay();
+}
+
+function adjustSubtitleSyncMs(msDelta) {
+  const current = state.subtitles.currentOffset || 0;
+  setSubtitleSync(current + (msDelta / 1000));
+  const nowMs = Math.round((state.subtitles.currentOffset || 0) * 1000);
+  showToast(`Subtitle sync: ${(nowMs > 0 ? '+' : '')}${nowMs}ms`, 'info');
 }
 
 function adjustSubtitleSync(delta) {
@@ -3157,7 +3165,7 @@ function adjustSubtitleSync(delta) {
 
 function resetSubtitleSync() {
   setSubtitleSync(0.0);
-  showToast('Subtitle sync reset to 0.0s', 'info');
+  showToast('Subtitle sync reset to 0ms', 'info');
 }
 
 function disableSubtitles() {
@@ -3523,6 +3531,7 @@ function applySubtitleStyles() {
   const sizeInput = document.getElementById('sub-style-size');
   const posInput = document.getElementById('sub-style-pos');
   const preview = document.getElementById('sub-style-preview');
+  const previewRender = document.getElementById('sub-preview-render');
   const sizeVal = document.getElementById('sub-style-size-val');
   const posVal = document.getElementById('sub-style-pos-val');
   const cueBox = document.getElementById('player-active-cue');
@@ -3530,9 +3539,11 @@ function applySubtitleStyles() {
   const size = sizeInput ? parseInt(sizeInput.value, 10) : (state.subtitles.styles.size || 100);
   const pos = posInput ? parseFloat(posInput.value) : (state.subtitles.styles.pos || 4.5);
   const color = state.subtitles.styles.color || '#ffffff';
+  const bg = state.subtitles.styles.bg || 'box';
 
   state.subtitles.styles.size = size;
   state.subtitles.styles.pos = pos;
+  state.subtitles.styles.bg = bg;
 
   if (sizeVal) sizeVal.innerText = `${size}%`;
   if (posVal) posVal.innerText = `${pos.toFixed(1)}rem`;
@@ -3541,15 +3552,49 @@ function applySubtitleStyles() {
     preview.style.fontSize = `${(size / 100) * 0.85}rem`;
   }
 
+  // Live Subtitle Studio Preview Card
+  if (previewRender) {
+    previewRender.style.color = color;
+    previewRender.style.fontSize = `calc(1.15rem * ${size / 100})`;
+    previewRender.classList.remove('sub-bg-none', 'sub-bg-subtle', 'sub-bg-box', 'sub-bg-solid');
+    previewRender.classList.add(`sub-bg-${bg}`);
+  }
+
+  // Active On-Screen Video Cue Box
   if (cueBox) {
     cueBox.style.fontSize = `calc(1.5rem * ${size / 100})`;
     cueBox.style.bottom = `${pos}rem`;
     cueBox.style.color = color;
+    cueBox.classList.remove('sub-bg-none', 'sub-bg-subtle', 'sub-bg-box', 'sub-bg-solid');
+    cueBox.classList.add(`sub-bg-${bg}`);
   }
+
+  // Highlight active scale preset chip
+  document.querySelectorAll('.sub-scale-chip').forEach((chip) => {
+    const chipText = chip.innerText.trim();
+    chip.classList.toggle('active', chipText.startsWith(`${size}%`));
+  });
+
+  // Highlight active background translucency chip
+  document.querySelectorAll('.sub-bg-chip').forEach((chip) => {
+    chip.classList.toggle('active', chip.getAttribute('data-bg') === bg);
+  });
 
   try {
     localStorage.setItem('evo_sub_styles', JSON.stringify(state.subtitles.styles));
   } catch (_) {}
+}
+
+function setFontScalePreset(percent) {
+  const sizeInput = document.getElementById('sub-style-size');
+  if (sizeInput) sizeInput.value = percent;
+  state.subtitles.styles.size = percent;
+  applySubtitleStyles();
+}
+
+function setSubtitleBackground(bg) {
+  state.subtitles.styles.bg = bg;
+  applySubtitleStyles();
 }
 
 function setSubtitleColor(hex) {
@@ -4834,10 +4879,37 @@ function initPlayerTimelineControls() {
     } else if (e.key === 'd' || e.key === 'D') {
       e.preventDefault();
       triggerOfflineDownload();
+    } else if (e.key === 'g' || e.key === 'G') {
+      e.preventDefault();
+      adjustSubtitleSyncMs(-100);
+    } else if (e.key === 'h' || e.key === 'H') {
+      e.preventDefault();
+      adjustSubtitleSyncMs(100);
+    } else if (e.key >= '0' && e.key <= '9') {
+      const video = document.getElementById('evo-video-player');
+      if (video && isFinite(video.duration) && video.duration > 0) {
+        e.preventDefault();
+        const pct = parseInt(e.key, 10) * 0.1;
+        video.currentTime = video.duration * pct;
+        showToast(`Seek to ${parseInt(e.key, 10) * 10}%`, 'info');
+      }
+    } else if (e.key === ',' || e.key === '<') {
+      e.preventDefault();
+      togglePlayerSettingsMenu();
     } else if (e.key === '?') {
       e.preventDefault();
       toggleShortcutsModal();
     } else if (e.key === 'Escape') {
+      const settingsPopover = document.getElementById('player-settings-popover');
+      if (settingsPopover && !settingsPopover.classList.contains('hidden')) {
+        togglePlayerSettingsMenu(false);
+        return;
+      }
+      const subDrawer = document.getElementById('player-sub-drawer');
+      if (subDrawer && !subDrawer.classList.contains('hidden')) {
+        toggleSubtitleDrawer(false);
+        return;
+      }
       const trailerModal = document.getElementById('trailer-modal');
       if (trailerModal && !trailerModal.classList.contains('hidden')) {
         closeTrailerModal();
@@ -5228,6 +5300,22 @@ function renderSpeedMenu() {
   `).join('');
 }
 
+function togglePlayerSettingsMenu(force = null) {
+  const popover = document.getElementById('player-settings-popover');
+  if (!popover) return;
+  const shouldOpen = force !== null ? force : popover.classList.contains('hidden');
+  popover.classList.toggle('hidden', !shouldOpen);
+
+  if (shouldOpen) {
+    const video = document.getElementById('evo-video-player');
+    const curSpeed = video ? video.playbackRate : 1.0;
+    document.querySelectorAll('.speed-chip').forEach((chip) => {
+      const s = parseFloat(chip.getAttribute('data-speed'));
+      chip.classList.toggle('active', Math.abs(s - curSpeed) < 0.01);
+    });
+  }
+}
+
 function setPlaybackSpeed(speed, showNotice = false) {
   const video = document.getElementById('evo-video-player');
   const label = document.getElementById('player-hud-speed-label');
@@ -5243,6 +5331,13 @@ function setPlaybackSpeed(speed, showNotice = false) {
 
   if (label) label.innerText = `${speed}x`;
   if (menu) menu.classList.add('hidden');
+
+  // Update speed chips in Quick Settings popover
+  document.querySelectorAll('.speed-chip').forEach((chip) => {
+    const s = parseFloat(chip.getAttribute('data-speed'));
+    chip.classList.toggle('active', Math.abs(s - speed) < 0.01);
+  });
+
   if (showNotice) showToast(`Speed: ${speed}x`, 'info');
 }
 
@@ -6507,6 +6602,12 @@ document.addEventListener('click', (e) => {
   if (backupMenu && !backupMenu.classList.contains('hidden') && !e.target.closest('.library-backup-dropdown-wrap')) {
     backupMenu.classList.add('hidden');
   }
+  const settingsPopover = document.getElementById('player-settings-popover');
+  if (settingsPopover && !settingsPopover.classList.contains('hidden')) {
+    if (!e.target.closest('#player-settings-popover') && !e.target.closest('#btn-hud-settings')) {
+      settingsPopover.classList.add('hidden');
+    }
+  }
 });
 
 window.addEventListener('scroll', () => {
@@ -7290,6 +7391,7 @@ function closePlayerModal() {
   }
   stopSwarmStatsMonitor();
   toggleSubtitleDrawer(false);
+  togglePlayerSettingsMenu(false);
   const modal = document.getElementById('player-modal');
   const video = document.getElementById('evo-video-player');
   const unmuteOverlay = document.getElementById('player-unmute-overlay');

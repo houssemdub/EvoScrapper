@@ -263,3 +263,64 @@ def test_direct_stream_default_and_duration_unfreezing():
     assert "formatPlayerDuration" in js
     assert "player-hud-mode-label" in js
 
+
+def test_player_cinematic_redesign_and_subtitle_studio():
+    """Verifies the cinematic buffering stage, quick settings popover, and subtitle studio enhancements."""
+    html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "index.html"))
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    # Cinematic buffering stage elements
+    assert "buffering-cinematic-stage" in html
+    assert "buffering-pulse-rings" in html
+    assert "pulse-ring ring-outer" in html
+    assert "buffering-audio-waves" in html
+    assert "wave-bar bar-1" in html
+    assert "buffering-telemetry-pill" in html
+    assert "buffering-progress-line-wrap" in html
+
+    # Controls hierarchy & Quick Settings popover
+    assert 'id="player-settings-popover"' in html
+    assert 'id="btn-hud-settings"' in html
+    assert "speed-chips-grid" in html
+    assert "popover-actions-grid" in html
+
+    # Subtitle Studio: Live preview, font scale presets, background translucency, ms nudge
+    assert "sub-live-preview-box" in html
+    assert 'id="sub-preview-render"' in html
+    assert "sub-preset-chips-row" in html
+    assert "sub-scale-chip" in html
+    assert "sub-bg-chips-grid" in html
+    assert "sub-bg-chip" in html
+    assert "sub-sync-nudge-row" in html
+    assert "adjustSubtitleSyncMs(-500)" in html
+    assert "adjustSubtitleSyncMs(100)" in html
+
+    css_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "style.css"))
+    with open(css_path, "r", encoding="utf-8") as f:
+        css = f.read()
+
+    # CSS styles and animations
+    assert ".buffering-cinematic-stage" in css
+    assert ".buffering-pulse-rings" in css
+    assert "@keyframes pulseOuter" in css
+    assert "@keyframes wavePulse" in css
+    assert ".player-settings-popover" in css
+    assert ".sub-preview-render" in css
+    assert ".sub-bg-none" in css
+    assert ".sub-bg-subtle" in css
+    assert ".sub-bg-box" in css
+    assert ".sub-bg-solid" in css
+
+    app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
+    with open(app_path, "r", encoding="utf-8") as f:
+        js = f.read()
+
+    # Controller methods
+    assert "function togglePlayerSettingsMenu" in js
+    assert "function setFontScalePreset" in js
+    assert "function setSubtitleBackground" in js
+    assert "function adjustSubtitleSyncMs" in js
+    assert "sub-preview-render" in js
+
+
