@@ -203,3 +203,63 @@ def test_fullscreen_controls_auto_hide_behavior():
     assert "document.fullscreenElement" in js
     # 3-second timer (3000ms)
     assert "3000" in js
+
+
+def test_uiverse_neon_svg_loader_assets():
+    """Verifies that the Uiverse.io animated SVG loader (E-v-o paths) is implemented with theme styles and CSS animations."""
+    css_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "style.css"))
+    with open(css_path, "r", encoding="utf-8") as f:
+        css = f.read()
+
+    # CSS classes and animations
+    assert ".loader" in css or ".evo-loader" in css
+    assert "@keyframes dashArray" in css
+    assert "@keyframes spinDashArray" in css
+    assert "@keyframes dashOffset" in css
+    assert "@keyframes evoSpin" in css
+    assert "stroke-dashoffset" in css
+    assert "transform: rotate" in css
+
+    html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "index.html"))
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    # SVG Defs & Gradient definitions with theme colors
+    assert 'id="b"' in html or 'id="evo-grad-b"' in html
+    assert 'id="c"' in html or 'id="evo-grad-c"' in html
+    assert 'id="d"' in html or 'id="evo-grad-d"' in html
+    assert "#00e5ff" in html  # Cyan accent
+    assert "#00ff88" in html  # Neon green accent
+    assert "gradientTransform" in html
+    assert 'id="player-buffering-spinner"' in html
+
+    app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
+    with open(app_path, "r", encoding="utf-8") as f:
+        js = f.read()
+
+    # Site-wide helper and usage
+    assert "getEvoLoaderHtml" in js
+    assert "evo-loader" in js
+    assert "evo-loader-container" in js
+
+
+def test_direct_stream_default_and_duration_unfreezing():
+    """Verifies that EvoScrapper defaults to direct /play streaming and guarantees duration display."""
+    app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
+    with open(app_path, "r", encoding="utf-8") as f:
+        js = f.read()
+
+    # Default to direct stream (/api/v1/stream/play)
+    assert "/api/v1/stream/play?" in js
+    assert "useTransmux = false;" in js or "const useTransmux = false;" in js
+    assert "toggleStreamPipelineMode" in js
+
+    # Automatic fallback on video error
+    assert "video.onerror" in js
+    assert "/api/v1/stream/transmux" in js
+
+    # Immediate total-time display initialization
+    assert "player-total-time" in js
+    assert "formatPlayerDuration" in js
+    assert "player-hud-mode-label" in js
+

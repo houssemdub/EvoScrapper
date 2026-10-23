@@ -431,9 +431,7 @@ async function handleTorrentSearch(e) {
 
     container.innerHTML = `
       <div class="empty-state">
-        <div class="empty-icon loading-pulse"><i class="fa-solid fa-satellite-dish text-accent"></i></div>
-        <h3>Streaming Results</h3>
-        <p>Receiving live deduplicated streams from indexers…</p>
+        ${getEvoLoaderHtml('lg', 'Streaming Results', 'Receiving live deduplicated streams from indexers…')}
       </div>
     `;
 
@@ -485,9 +483,7 @@ async function handleTorrentSearch(e) {
     try {
       container.innerHTML = `
         <div class="empty-state">
-          <div class="empty-icon loading-pulse"><i class="fa-solid fa-circle-notch spinner text-accent"></i></div>
-          <h3>Querying Indexers</h3>
-          <p>Contacting trackers and running deduplication…</p>
+          ${getEvoLoaderHtml('lg', 'Querying Indexers', 'Contacting trackers and running deduplication…')}
         </div>
       `;
 
@@ -972,9 +968,7 @@ async function handleSubtitlesSearch(e) {
 
   container.innerHTML = `
     <div class="empty-state">
-      <div class="empty-icon loading-pulse"><i class="fa-solid fa-closed-captioning text-green"></i></div>
-      <h3>Resolving Subtitles</h3>
-      <p class="text-dim">Searching OpenSubtitles, Gestdown, YIFY, and AnimeTosho…</p>
+      ${getEvoLoaderHtml('lg', 'Resolving Subtitles', 'Searching OpenSubtitles, Gestdown, YIFY, and AnimeTosho…')}
     </div>
   `;
 
@@ -1092,9 +1086,7 @@ async function openSubtitlesModal(title, infoHash) {
 
   modalList.innerHTML = `
     <div class="empty-state">
-      <div class="empty-icon loading-pulse"><i class="fa-solid fa-circle-notch spinner text-green"></i></div>
-      <h3>Searching Subtitles</h3>
-      <p>Resolving synchronized subtitles across all providers…</p>
+      ${getEvoLoaderHtml('lg', 'Searching Subtitles', 'Resolving synchronized subtitles across all providers…')}
     </div>
   `;
 
@@ -1181,9 +1173,7 @@ async function openMediaModal(title, infoHash, magnet) {
 
   content.innerHTML = `
     <div style="text-align:center;padding:3rem 1rem;width:100%;">
-      <div class="empty-icon loading-pulse"><i class="fa-solid fa-circle-notch spinner text-accent" style="font-size:2rem;"></i></div>
-      <h3 style="margin-top:1rem;font-family:var(--font-mono);font-size:0.95rem;">Resolving Media & Jacket Artwork</h3>
-      <p style="font-size:0.75rem;color:var(--text-dim);margin-top:0.25rem;">Extracting IMDb code, high-res posters, ratings and synopsis…</p>
+      ${getEvoLoaderHtml('lg', 'Resolving Media & Jacket Artwork', 'Extracting IMDb code, high-res posters, ratings and synopsis…')}
     </div>
   `;
 
@@ -1396,9 +1386,7 @@ async function loadTrending() {
   if (metaBar) metaBar.classList.add('hidden');
   container.innerHTML = `
     <div class="empty-state">
-      <div class="empty-icon loading-pulse"><i class="fa-solid fa-fire text-amber"></i></div>
-      <h3>Loading Trending Releases</h3>
-      <p>Fetching top torrents from YTS, ThePirateBay, and Nyaa…</p>
+      ${getEvoLoaderHtml('lg', 'Loading Trending Releases', 'Fetching top torrents from YTS, ThePirateBay, and Nyaa…')}
     </div>
   `;
 
@@ -1747,6 +1735,38 @@ function escapeJs(str) {
     .replace(/"/g, '\\"')
     .replace(/\n/g, '\\n')
     .replace(/\r/g, '\\r');
+}
+
+// ── Custom Uiverse.io Neon Cyber SVG Loader (E-v-o) Component ────────────────
+function getEvoLoaderHtml(size = 'md', label = '', subtext = '') {
+  const sizeMap = {
+    xs: 16,
+    sm: 22,
+    md: 36,
+    lg: 52,
+    xl: 68,
+  };
+  const px = sizeMap[size] || 36;
+  const labelHtml = label ? `<div class="evo-loader-title">${escapeHtml(label)}</div>` : '';
+  const subHtml = subtext ? `<div class="evo-loader-sub">${escapeHtml(subtext)}</div>` : '';
+
+  return `
+    <div class="evo-loader-container size-${size}">
+      <div class="loader evo-loader size-${size}">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="${px}" height="${px}" class="inline-block evo-svg-e">
+          <path stroke-linejoin="round" stroke-linecap="round" stroke-width="8" stroke="url(#b)" d="M 20,20 L 80,20 L 80,27 L 27,27 L 27,50 L 70,50 L 70,57 L 25,57 L 25,80 L 80,80 L 80,87 L 20,87 Z" class="dash" id="E" pathLength="360"></path>
+        </svg>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="${px}" height="${px}" class="inline-block evo-svg-v">
+          <path stroke-linejoin="round" stroke-linecap="round" stroke-width="12" stroke="url(#d)" d="M 20,20 L 50,80 L 80,20" class="dash" id="v" pathLength="360"></path>
+        </svg>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="${px}" height="${px}" class="inline-block evo-svg-o">
+          <path stroke-linejoin="round" stroke-linecap="round" stroke-width="11" stroke="url(#c)" d="M 50,15 A 35,35 0 0 1 85,50 A 35,35 0 0 1 50,85 A 35,35 0 0 1 15,50 A 35,35 0 0 1 50,15 Z" class="spin" id="o" pathLength="360"></path>
+        </svg>
+      </div>
+      ${labelHtml}
+      ${subHtml}
+    </div>
+  `;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2110,9 +2130,7 @@ async function openDiscoverModal(id, type) {
   backdrop.style.backgroundImage = 'none';
   content.innerHTML = `
     <div class="empty-state" style="padding: 3rem 1rem;">
-      <div class="empty-icon loading-pulse"><i class="fa-solid fa-compass"></i></div>
-      <h3>Loading title details...</h3>
-      <p class="text-dim">Fetching 4K backdrops, synopsis, and episode tree</p>
+      ${getEvoLoaderHtml('lg', 'Loading Title Details', 'Fetching 4K backdrops, synopsis, and episode tree…')}
     </div>
   `;
 
@@ -2260,9 +2278,7 @@ async function openDiscoverModal(id, type) {
 
         <div id="discover-streams-container">
           <div class="empty-state" style="padding: 1.5rem;">
-            <div class="empty-icon loading-pulse"><i class="fa-solid fa-bolt"></i></div>
-            <h3>Resolving 4K, 1080p, and 720p streams...</h3>
-            <p class="text-dim">Aggregating 1337x, YTS, TorrentGalaxy, EZTV, Nyaa, and PirateBay</p>
+            ${getEvoLoaderHtml('md', 'Resolving 4K, 1080p, and 720p streams...', 'Aggregating 1337x, YTS, TorrentGalaxy, EZTV, Nyaa, and PirateBay')}
           </div>
         </div>
       </div>
@@ -2400,9 +2416,7 @@ async function resolveStreamsForCurrentSelection() {
 
   container.innerHTML = `
     <div class="empty-state" style="padding: 1.5rem;">
-      <div class="empty-icon loading-pulse"><i class="fa-solid fa-satellite-dish"></i></div>
-      <h3>Resolving streams for ${escapeHtml(targetDesc)}...</h3>
-      <p class="text-dim">Ranking 4K, 1080p, 720p streams by seeds & health</p>
+      ${getEvoLoaderHtml('md', `Resolving streams for ${escapeHtml(targetDesc)}...`, 'Ranking 4K, 1080p, 720p streams by seeds & health')}
     </div>
   `;
 
@@ -3614,7 +3628,7 @@ async function searchPlayerSubtitles() {
 
   const listEl = document.getElementById('player-subs-list');
   if (listEl) {
-    listEl.innerHTML = `<div class="text-xs text-dim p-3 text-center"><i class="fa-solid fa-spinner fa-spin text-accent"></i> Searching subtitles for "${escapeHtml(q)}"...</div>`;
+    listEl.innerHTML = `<div class="p-4 text-center">${getEvoLoaderHtml('sm', `Searching subtitles for "${escapeHtml(q)}"...`)}</div>`;
   }
 
   try {
@@ -4913,12 +4927,17 @@ function updatePlayerTimeline() {
     active.totalDuration = video.duration;
   }
 
-  const currentTotalTime = (active.playbackOffset || 0) + (video.currentTime || 0);
+  const currentTotalTime = (active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
 
   // Robust totalDuration fallback resolution (unfreezing 0:00 / 0:00)
   let totalDuration = (active.totalDuration && isFinite(active.totalDuration) && active.totalDuration > 0)
     ? active.totalDuration
     : 0;
+
+  if (video.duration && isFinite(video.duration) && video.duration > 0) {
+    totalDuration = video.duration;
+    active.totalDuration = video.duration;
+  }
 
   if (totalDuration <= 0) {
     const detail = state.discover.activeDetail;
@@ -4933,6 +4952,7 @@ function updatePlayerTimeline() {
     if (detail && detail.type === 'anime') totalDuration = 1440; // 24 min
     else if (detail && detail.type === 'series') totalDuration = 2700; // 45 min
     else totalDuration = 5400; // 90 min default movie runtime
+    active.totalDuration = totalDuration;
   }
 
   // Update progress bar
@@ -4945,7 +4965,7 @@ function updatePlayerTimeline() {
   if (bufferedEl && video.buffered.length > 0) {
     try {
       const end = video.buffered.end(video.buffered.length - 1);
-      const bufferedTotalTime = (active.playbackOffset || 0) + end;
+      const bufferedTotalTime = (active.useTransmux ? (active.playbackOffset || 0) : 0) + end;
       const bufPct = totalDuration > 0 ? Math.min(100, Math.max(0, (bufferedTotalTime / totalDuration) * 100)) : 0;
       bufferedEl.style.width = `${bufPct}%`;
     } catch (_) {}
@@ -4962,7 +4982,7 @@ function updatePlayerTimeline() {
       curEl.innerText = formatPlayerDuration(currentTotalTime);
     }
   }
-  if (totalEl && totalDuration > 0) {
+  if (totalEl) {
     totalEl.innerText = formatPlayerDuration(totalDuration);
   }
 
@@ -6845,7 +6865,7 @@ let playerBufferingStartTime = 0;
 function showPlayerBufferingHUD() {
   const hud = document.getElementById('player-buffering-hud');
   const spinner = document.getElementById('player-buffering-spinner');
-  if (spinner) spinner.classList.add('hidden');
+  if (spinner) spinner.classList.remove('hidden');
   if (!hud) return;
 
   hud.classList.remove('hidden');
@@ -6962,21 +6982,24 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   const season = (seasonOverride !== null && seasonOverride !== undefined) ? seasonOverride : (isEpisodic ? state.discover.activeSeason : (meta.season || null));
   const episode = (episodeOverride !== null && episodeOverride !== undefined) ? episodeOverride : (isEpisodic ? state.discover.activeEpisode : (meta.episode || null));
 
-  // Determine initial duration from metadata
+  // Determine initial duration from metadata or defaults
   let initialDuration = 0;
   if (detail && detail.runtime) {
     initialDuration = parseRuntimeToSeconds(detail.runtime);
   }
+  if (initialDuration <= 0) {
+    if (detail && detail.type === 'anime') initialDuration = 1440; // 24 min
+    else if (detail && detail.type === 'series') initialDuration = 2700; // 45 min
+    else initialDuration = 5400; // 90 min default movie runtime
+  }
 
   const isMkv = Boolean(isMkvHint) || (title || '').toLowerCase().endsWith('.mkv') || /\b(mkv|matroska)\b/i.test(title);
-  const isHevcOr10Bit = /\b(x265|hevc|h265|10-?bit|hi10p)\b/i.test(title);
-  const isNonBrowserAudio = /\b(ddp|eac-?3|ac-?3|dts|truehd|atmos|flac|[257]\.[01]|surround)\b/i.test(title);
-  const isWebm = (title || '').toLowerCase().endsWith('.webm') || /\b(webm|vp8|vp9|opus)\b/i.test(title);
-  const isDirectStream = (!isMkv && !isHevcOr10Bit && !isNonBrowserAudio && /\b(mp4|aac|mp3|yts|yify|x264|h264|avc)\b/i.test(title)) ||
-                         (!isMkv && !isHevcOr10Bit && isWebm);
+  const isDirectStream = (!isMkv && /\b(mp4|aac|mp3|yts|yify|x264|h264|avc)\b/i.test(title)) ||
+                         (!isMkv && /\b(webm|vp8|vp9|opus)\b/i.test(title));
 
-  const useTransmux = !isDirectStream;
-  // Use lossless video stream copy (-c:v copy) to avoid 100% CPU software re-encoding bottlenecks that stall buffering
+  // Default to Direct Stream (RFC 7233 HTTP 206 Partial Content byte ranges).
+  // Streams the whole movie natively, calculates exact file duration, and enables fluid timeline seeking without FFmpeg chunk stalling.
+  const useTransmux = false;
   const transcodeVideo = false;
 
   const numFileIdx = (fileIdx !== null && fileIdx !== undefined && !isNaN(fileIdx)) ? Number(fileIdx) : 0;
@@ -7032,18 +7055,22 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     })
     .catch(() => {});
 
-  // Update initial time display
+  // Update initial time display immediately
   const totalEl = document.getElementById('player-total-time');
-  if (totalEl && initialDuration > 0) {
+  if (totalEl) {
     totalEl.innerText = formatPlayerDuration(initialDuration);
   }
   const curEl = document.getElementById('player-cur-time');
   if (curEl) curEl.innerText = '00:00:00';
+  updatePlayerTimeline();
+
+  const modeBadge = document.getElementById('player-hud-mode-label');
+  if (modeBadge) modeBadge.innerText = useTransmux ? 'Transmux' : 'Direct';
 
   updateAudioHudButtons();
 
   if (swarmStat) {
-    swarmStat.innerHTML = '<span class="mono text-xs text-dim"><i class="fa-solid fa-circle-nodes text-green"></i> Initializing P2P Swarm & Allocating Multi-Buffer...</span>';
+    swarmStat.innerHTML = '<span class="mono text-xs text-dim flex items-center gap-2"><i class="fa-solid fa-circle-nodes text-green"></i> Initializing P2P Swarm & Allocating Multi-Buffer...</span>';
   }
 
   startSwarmStatsMonitor(infoHash);
@@ -7122,6 +7149,8 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   video.onloadedmetadata = () => {
     if (video.duration && isFinite(video.duration) && video.duration > 0) {
       if (state.discover.activeStream) state.discover.activeStream.totalDuration = video.duration;
+      const tEl = document.getElementById('player-total-time');
+      if (tEl) tEl.innerText = formatPlayerDuration(video.duration);
     }
     updatePlayerTimeline();
   };
@@ -7129,6 +7158,8 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   video.ondurationchange = () => {
     if (video.duration && isFinite(video.duration) && video.duration > 0) {
       if (state.discover.activeStream) state.discover.activeStream.totalDuration = video.duration;
+      const tEl = document.getElementById('player-total-time');
+      if (tEl) tEl.innerText = formatPlayerDuration(video.duration);
     }
     updatePlayerTimeline();
   };
@@ -7181,15 +7212,25 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   video.onvolumechange = checkMuteState;
 
   video.onerror = () => {
-    console.warn('[EvoPlayer] Stream error occurred. Retrying stream handshake...');
-    showToast('Re-syncing audio/video streams...', 'info');
-    setTimeout(() => {
-      if (state.discover.activeStream) {
-        video.src = streamUrl;
-        video.load();
-        video.play().catch(() => {});
-      }
-    }, 1500);
+    const err = video.error;
+    console.warn('[EvoPlayer] Video playback notice:', err ? err.code : 'unknown', err ? err.message : '');
+    const active = state.discover.activeStream;
+    // Auto fallback to FFmpeg compatibility transmuxer if browser rejects native container/codec
+    if (active && !active.useTransmux) {
+      console.log('[EvoPlayer] Direct play failed; falling back to FFmpeg transmuxer...');
+      showToast('Unsupported browser codec; switching to real-time compatibility player...', 'info');
+      active.useTransmux = true;
+      active.playbackOffset = video.currentTime || 0;
+      const mBadge = document.getElementById('player-hud-mode-label');
+      if (mBadge) mBadge.innerText = 'Transmux';
+      const fallbackUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}&audio_track=0&audio_boost=1.25${epParams}${magnetParam}${durationParam}`;
+      video.src = fallbackUrl;
+      video.load();
+      video.play().catch(() => {});
+    } else {
+      showToast('Stream error. Swarm may be starved or file unreachable.', 'error');
+      hidePlayerBufferingHUD();
+    }
   };
 
   video.play().then(() => {
@@ -7198,12 +7239,49 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     video.volume = 1.0;
     checkMuteState();
     updatePlayPauseIcon(true);
-    if (spinner) spinner.classList.add('hidden');
+    hidePlayerBufferingHUD();
   }).catch((err) => {
     console.log('[EvoPlayer] Autoplay notice:', err.message);
     if (unmuteOverlay) unmuteOverlay.classList.remove('hidden');
-    if (spinner) spinner.classList.add('hidden');
+    hidePlayerBufferingHUD();
   });
+}
+
+function toggleStreamPipelineMode() {
+  const active = state.discover.activeStream;
+  const video = document.getElementById('evo-video-player');
+  if (!active || !video) return;
+
+  active.useTransmux = !active.useTransmux;
+  const curTime = (active.useTransmux ? 0 : (active.playbackOffset || 0)) + (video.currentTime || 0);
+  active.playbackOffset = curTime;
+
+  const modeBadge = document.getElementById('player-hud-mode-label');
+  const epParams = (active.season !== null && active.episode !== null && active.season !== undefined && active.episode !== undefined)
+    ? `&season=${active.season}&episode=${active.episode}`
+    : '';
+  const magnetParam = active.magnet ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
+  const durationParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
+
+  showPlayerBufferingHUD();
+
+  if (active.useTransmux) {
+    if (modeBadge) modeBadge.innerText = 'Transmux';
+    showToast('Switched to Compatibility Transmuxer (Stereo AAC)', 'info');
+    const startParam = curTime > 0 ? `&start_time=${curTime.toFixed(1)}` : '';
+    const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}${startParam}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${epParams}${magnetParam}${durationParam}`;
+    video.src = newUrl;
+  } else {
+    if (modeBadge) modeBadge.innerText = 'Direct';
+    showToast('Switched to Direct Stream (Full Seek & Buffer)', 'info');
+    const newUrl = `/api/v1/stream/play?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}${epParams}${magnetParam}${durationParam}`;
+    video.src = newUrl;
+  }
+
+  video.load();
+  video.currentTime = curTime;
+  video.play().catch(() => {});
+  updatePlayerTimeline();
 }
 
 function closePlayerModal() {
@@ -7452,9 +7530,7 @@ async function openTorrentFilesModal(infoHash, magnet = '', title = '') {
 
   listEl.innerHTML = `
     <div class="empty-state" style="padding: 2rem;">
-      <div class="empty-icon loading-pulse"><i class="fa-solid fa-folder-open text-accent"></i></div>
-      <h3>Fetching torrent file tree...</h3>
-      <p class="text-dim">Retrieving metadata and file list from swarm</p>
+      ${getEvoLoaderHtml('md', 'Fetching Torrent File Tree', 'Retrieving metadata and file list from swarm…')}
     </div>
   `;
 

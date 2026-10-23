@@ -1165,7 +1165,19 @@
             </div>
           </div>
         </div>
-        <div id="player-buffering-spinner" class="player-buffering-spinner hidden"></div>
+        <div id="player-buffering-spinner" class="player-buffering-spinner hidden">
+          <div class="loader evo-loader size-xl">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="56" height="56" class="inline-block">
+              <path stroke-linejoin="round" stroke-linecap="round" stroke-width="8" stroke="url(#b)" d="M 20,20 L 80,20 L 80,27 L 27,27 L 27,50 L 70,50 L 70,57 L 25,57 L 25,80 L 80,80 L 80,87 L 20,87 Z" class="dash" id="E" pathLength="360"></path>
+            </svg>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="56" height="56" class="inline-block">
+              <path stroke-linejoin="round" stroke-linecap="round" stroke-width="12" stroke="url(#d)" d="M 20,20 L 50,80 L 80,20" class="dash" id="v" pathLength="360"></path>
+            </svg>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="56" height="56" class="inline-block">
+              <path stroke-linejoin="round" stroke-linecap="round" stroke-width="11" stroke="url(#c)" d="M 50,15 A 35,35 0 0 1 85,50 A 35,35 0 0 1 50,85 A 35,35 0 0 1 15,50 A 35,35 0 0 1 50,15 Z" class="spin" id="o" pathLength="360"></path>
+            </svg>
+          </div>
+        </div>
 
         <!-- Dedicated Dual/Secondary Subtitle Overlay (Language Learning Top Position) -->
         <div id="player-secondary-cue" class="player-secondary-cue hidden"></div>
@@ -1273,6 +1285,10 @@
 
             <!-- Right Controls -->
             <div class="player-controls-right">
+              <button id="btn-hud-stream-mode" class="player-btn" onclick="toggleStreamPipelineMode()" title="Stream Mode: Direct (Native Seek & Full Buffer) vs Transmux (Stereo Compatibility)">
+                <i class="fa-solid fa-bolt-lightning text-accent"></i>
+                <span id="player-hud-mode-label" class="mono text-xs">Direct</span>
+              </button>
               <span id="player-hud-stream-badge" class="tag tag-dim mono text-xs">1080p | AAC</span>
               <span id="player-hud-p2p-badge" class="tag mono text-xs" style="background:rgba(0,255,136,0.12); border:1px solid rgba(0,255,136,0.3); color:var(--green);"><i class="fa-solid fa-bolt"></i> <span id="player-hud-p2p-text">P2P Swarm Ready</span></span>
 
@@ -1443,8 +1459,20 @@
 
               <!-- Subtitles List taking full available height -->
               <div id="player-subs-list" class="sub-items-list">
-                <div class="text-xs text-dim p-4 text-center">
-                  <i class="fa-solid fa-spinner fa-spin text-accent"></i> Searching OpenSubtitles, Gestdown & YIFY...
+                <div class="evo-loader-container" style="padding: 2.5rem 1rem;">
+                  <div class="loader evo-loader size-md">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="32" height="32" class="inline-block">
+                      <path stroke-linejoin="round" stroke-linecap="round" stroke-width="8" stroke="url(#b)" d="M 20,20 L 80,20 L 80,27 L 27,27 L 27,50 L 70,50 L 70,57 L 25,57 L 25,80 L 80,80 L 80,87 L 20,87 Z" class="dash" id="E" pathLength="360"></path>
+                    </svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="32" height="32" class="inline-block">
+                      <path stroke-linejoin="round" stroke-linecap="round" stroke-width="12" stroke="url(#d)" d="M 20,20 L 50,80 L 80,20" class="dash" id="v" pathLength="360"></path>
+                    </svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="32" height="32" class="inline-block">
+                      <path stroke-linejoin="round" stroke-linecap="round" stroke-width="11" stroke="url(#c)" d="M 50,15 A 35,35 0 0 1 85,50 A 35,35 0 0 1 50,85 A 35,35 0 0 1 15,50 A 35,35 0 0 1 50,15 Z" class="spin" id="o" pathLength="360"></path>
+                    </svg>
+                  </div>
+                  <div class="evo-loader-title">Searching Subtitles</div>
+                  <div class="evo-loader-sub">Querying OpenSubtitles, Gestdown & YIFY...</div>
                 </div>
               </div>
             </div>
@@ -2144,6 +2172,54 @@
       </div>
     </div>
   </div>
+
+  <!-- Global Neon Cyber Loader SVG Definitions (Uiverse.io by Lissy2019 customized for EvoScrapper) -->
+  <svg height="0" width="0" viewBox="0 0 100 100" class="absolute" style="position:absolute;width:0;height:0;overflow:hidden;" aria-hidden="true">
+    <defs>
+      <linearGradient id="b" x1="0" y1="62" x2="0" y2="2" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#00e5ff"></stop>
+        <stop stop-color="#00ff88" offset="1.5"></stop>
+      </linearGradient>
+      <linearGradient id="c" x1="0" y1="64" x2="0" y2="0" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#00e5ff"></stop>
+        <stop stop-color="#00ff88" offset="1"></stop>
+        <animateTransform
+          attributeName="gradientTransform"
+          type="rotate"
+          dur="8s"
+          values="0 32 32;-270 32 32;-270 32 32;-540 32 32;-540 32 32;-810 32 32;-810 32 32;-1080 32 32;-1080 32 32"
+          keyTimes="0; 0.125; 0.25; 0.375; 0.5; 0.625; 0.75; 0.875; 1"
+          keySplines=".42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1"
+          repeatCount="indefinite"
+        ></animateTransform>
+      </linearGradient>
+      <linearGradient id="d" x1="0" y1="62" x2="0" y2="2" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#00ff88"></stop>
+        <stop stop-color="#00e5ff" offset="1.5"></stop>
+      </linearGradient>
+      <linearGradient id="evo-grad-b" x1="0" y1="62" x2="0" y2="2" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#00e5ff"></stop>
+        <stop stop-color="#00ff88" offset="1.5"></stop>
+      </linearGradient>
+      <linearGradient id="evo-grad-c" x1="0" y1="64" x2="0" y2="0" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#00e5ff"></stop>
+        <stop stop-color="#00ff88" offset="1"></stop>
+        <animateTransform
+          attributeName="gradientTransform"
+          type="rotate"
+          dur="8s"
+          values="0 32 32;-270 32 32;-270 32 32;-540 32 32;-540 32 32;-810 32 32;-810 32 32;-1080 32 32;-1080 32 32"
+          keyTimes="0; 0.125; 0.25; 0.375; 0.5; 0.625; 0.75; 0.875; 1"
+          keySplines=".42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1;.42,0,.58,1"
+          repeatCount="indefinite"
+        ></animateTransform>
+      </linearGradient>
+      <linearGradient id="evo-grad-d" x1="0" y1="62" x2="0" y2="2" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#00ff88"></stop>
+        <stop stop-color="#00e5ff" offset="1.5"></stop>
+      </linearGradient>
+    </defs>
+  </svg>
 
   <!-- Toast Container -->
   <div id="toast-container"></div>

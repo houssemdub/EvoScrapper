@@ -855,8 +855,138 @@ body::before {
 .quick-tag:hover { color: var(--accent); border-color: var(--accent-dim); }
 
 /* ── Spinner ───────────────────────────────────────────────────────────── */
-.spinner { animation: spin 0.8s linear infinite; display: inline-block; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.spinner { animation: basicSpin 0.8s linear infinite; display: inline-block; }
+@keyframes basicSpin { to { transform: rotate(360deg); } }
+
+/* ── Uiverse.io Neon Cyber SVG Loader (E-v-o) for EvoScrapper ──────────────── */
+.loader, .evo-loader {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0.25em 0;
+  filter: drop-shadow(0 0 10px rgba(0, 229, 255, 0.5));
+}
+
+.loader.absolute {
+  position: absolute;
+}
+
+.loader .inline-block, .evo-loader .inline-block {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.evo-loader-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  text-align: center;
+}
+
+.evo-loader-title {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 10px rgba(0, 229, 255, 0.35);
+}
+
+.evo-loader-sub {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+.evo-loader.size-xs svg, .loader.size-xs svg {
+  width: 16px;
+  height: 16px;
+}
+.evo-loader.size-sm svg, .loader.size-sm svg {
+  width: 22px;
+  height: 22px;
+}
+.evo-loader.size-md svg, .loader.size-md svg {
+  width: 36px;
+  height: 36px;
+}
+.evo-loader.size-lg svg, .loader.size-lg svg {
+  width: 52px;
+  height: 52px;
+}
+.evo-loader.size-xl svg, .loader.size-xl svg {
+  width: 68px;
+  height: 68px;
+}
+
+.dash {
+  animation: dashArray 2s ease-in-out infinite, dashOffset 2s linear infinite;
+}
+
+.spin, .loader .spin, .evo-loader .spin {
+  animation: spinDashArray 2s ease-in-out infinite, evoSpin 8s ease-in-out infinite,
+    dashOffset 2s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes dashArray {
+  0% {
+    stroke-dasharray: 0 1 359 0;
+  }
+  50% {
+    stroke-dasharray: 0 359 1 0;
+  }
+  100% {
+    stroke-dasharray: 359 1 0 0;
+  }
+}
+
+@keyframes spinDashArray {
+  0% {
+    stroke-dasharray: 270 90;
+  }
+  50% {
+    stroke-dasharray: 0 360;
+  }
+  100% {
+    stroke-dasharray: 250 90;
+  }
+}
+
+@keyframes dashOffset {
+  0% {
+    stroke-dashoffset: 385;
+  }
+  100% {
+    stroke-dashoffset: 5;
+  }
+}
+
+@keyframes evoSpin {
+  0% {
+    transform: rotate(0deg);
+  }
+  12.5%,
+  25% {
+    transform: rotate(270deg);
+  }
+  37.5%,
+  50% {
+    transform: rotate(540deg);
+  }
+  62.5%,
+  75% {
+    transform: rotate(810deg);
+  }
+  87.5%,
+  100% {
+    transform: rotate(1080deg);
+  }
+}
 
 .loading-pulse {
   display: inline-block;
@@ -2836,26 +2966,18 @@ video::cue,
   transform: translate(-50%, -50%) scale(1.15);
 }
 
-/* Buffering Spinner */
+/* Buffering Spinner with Cyber Evo Logo */
 .player-buffering-spinner {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 58px;
-  height: 58px;
-  border: 4px solid rgba(0, 229, 255, 0.15);
-  border-top-color: #00e5ff;
-  border-right-color: #00e676;
-  border-radius: 50%;
-  animation: evoPlayerSpin 0.75s linear infinite;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   pointer-events: none;
   z-index: 42;
-  box-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
-}
-
-@keyframes evoPlayerSpin {
-  to { transform: translate(-50%, -50%) rotate(360deg); }
+  filter: drop-shadow(0 0 20px rgba(0, 229, 255, 0.65));
 }
 
 /* Bottom Controls Container */
