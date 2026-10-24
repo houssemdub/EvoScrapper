@@ -45,6 +45,8 @@ const DEFAULT_TRACKERS = [
 class TorrentEngine {
     constructor() {
         this.client = new WebTorrent({
+            torrentPort: 50000,
+            dhtPort: 50001,
             maxConns: 200,
             dht: true,
             tracker: true,
