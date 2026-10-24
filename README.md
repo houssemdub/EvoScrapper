@@ -9,7 +9,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-3776AB.svg?style=flat&logo=python&logoColor=white)](https://python.org)
 [![WebTorrent](https://img.shields.io/badge/WebTorrent-Node.js%20Daemon-brightgreen.svg?style=flat&logo=webtorrent)](https://webtorrent.io)
-[![Tests](https://img.shields.io/badge/Tests-105%2B%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-118%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
 [![Spec-Driven](https://img.shields.io/badge/Architecture-Contract--First%20(SPEC.md)-informational.svg)](SPEC.md)
 [![Security Audit](https://img.shields.io/badge/Security%20Audit-28%20Flaws%20Remediated-blueviolet.svg?style=flat)](FLAWS.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -37,12 +37,15 @@
 
 ### 🎬 3. Multi-Tier Concurrent P2P WebTorrent Streaming
 - **4-Tier Concurrent Swarm Buffering**: Node.js WebTorrent micro-daemon orchestrates a dynamic 100+ piece sliding window across 4 concurrent tiers (Critical Header Lock, Immediate Playback Horizon, Multi-Peer Swarm Horizon, and Deep Predictive Reservoir).
+- **Critical Piece Hotswapping**: Invokes WebTorrent `torrent.critical(cursorPiece, cursorPiece + 3)` to dynamically leapfrog choked peers and burst request immediate playback pieces across all connected wires simultaneously.
+- **Deterministic NAT Traversal (Ports 50000 TCP / 50001 UDP)**: Fixed inbound listener ports support both direct UPnP port mapping and double-NAT forwarding topologies (modem DMZ + router port forwarding), unlocking full bilateral peer connectivity and multi-megabyte swarm throughput.
 - **Continuous Rolling Sliding Window**: Dynamically rolls priority pieces forward as video data streams to guarantee uninterrupted buffer reserves.
 - **Dynamic Virtual HLS**: On-the-fly MPEG-TS segment generation (`/api/v1/stream/hls/segment`) preserving PTS timestamp continuity (`-output_ts_offset`) for uninterrupted Hls.js streaming.
 - **Native VLC Launcher**: Seamless one-click desktop streaming directly to VLC media player with tracked child process PID lifecycle management.
 
 ### 📝 4. Precision Subtitle Engine ("EvoSubs")
 - **Multi-Source Aggregation**: Simultaneous lookups across **OpenSubtitles (v1 & Stremio v3)**, **Gestdown** (zero-auth Addic7ed proxy), **SubDL** (with ZIP extraction and language disambiguation), **SubSource**, **AnimeTosho** (SHA-1 hash softsub extraction), and **YIFY Subtitles**.
+- **Word-Tokenized Language Isolation**: Implements strict language boundary checks preventing substring collisions (e.g. isolating Arabic `ar` from `hungARian` and `bulgARian`) across 20+ language families.
 - **Binary Hash Matching**: 64-bit OpenSubtitles uint64 checksum and Shooter MD5 hashing for byte-perfect subtitle synchronization.
 - **Hardened Subtitle Proxy**: On-the-fly `.srt` to `.vtt` conversion with ASS/SSA drawing vector filtering and strict SSRF defenses blocking intranet and loopback IPs.
 
@@ -51,7 +54,7 @@
 - **Ed25519 Cryptographic Signatures**: All announcements are cryptographically signed and verified using asymmetric keys before being ingested into the distributed catalog.
 
 ### 🎨 6. Cinematic Web Player & Studio Interface
-- **Floating Fullscreen Cinema HUD**: Auto-hiding top bar, bottom control deck, and cursor with smooth cubic-bezier transitions on 3-second mouse inactivity.
+- **Floating Fullscreen Cinema HUD**: Auto-hiding top bar, bottom control deck, and cursor with smooth cubic-bezier transitions on 3-second mouse inactivity. Clean, distraction-free playback canvas without intrusive skip overlays.
 - **Strict Baseline Flexbox Alignment**: Centerline-locked volume controls, 10s skip dials, responsive scrubber timeline, and telemetry pills with generous spacing.
 - **Discover Default Seeds Sort**: Automatically defaults stream resolution in the Discover catalog to *Seeds (High to Low)* for instant playback reliability.
 

@@ -2808,6 +2808,18 @@ const LANG_FAMILIES = {
   tr: ['tr', 'tur', 'turkish'],
   id: ['id', 'ind', 'indonesian'],
   vi: ['vi', 'vie', 'vietnamese'],
+  hu: ['hu', 'hun', 'hungarian', 'magyar'],
+  pl: ['pl', 'pol', 'polish'],
+  nl: ['nl', 'dut', 'nld', 'dutch'],
+  el: ['el', 'ell', 'gre', 'greek'],
+  ro: ['ro', 'rum', 'ron', 'romanian'],
+  cs: ['cs', 'cze', 'ces', 'czech'],
+  sv: ['sv', 'swe', 'swedish'],
+  no: ['no', 'nor', 'norwegian'],
+  da: ['da', 'dan', 'danish'],
+  fi: ['fi', 'fin', 'finnish'],
+  he: ['he', 'heb', 'hebrew'],
+  hi: ['hi', 'hin', 'hindi'],
 };
 
 const LANG_ALIAS_TO_FAMILY = {};
@@ -2823,7 +2835,23 @@ function matchSubtitleLang(sub, targetLang) {
   const code = (sub.lang_code || '').toLowerCase().trim();
   const name = (sub.language || '').toLowerCase().trim();
   const family = LANG_ALIAS_TO_FAMILY[tLow] || LANG_FAMILIES[tLow] || [tLow];
-  return family.some((alias) => code === alias || code.startsWith(alias) || name.includes(alias));
+
+  // Tokenize the language name into clean words (avoids substring false positives like "hungarian".includes("ar"))
+  const nameWords = name.split(/[^a-z0-9]+/);
+
+  return family.some((alias) => {
+    const a = alias.toLowerCase();
+    // 1. Exact language code match or standardized regional code (e.g. 'ar-sa', 'ar_eg', 'pt-br')
+    if (code === a || code.startsWith(a + '-') || code.startsWith(a + '_')) return true;
+
+    // 2. Full language descriptor match (e.g. alias "arabic" matches name "Arabic [CC]" or "Modern Arabic")
+    if (a.length > 3 && name.includes(a)) return true;
+
+    // 3. Short 2-3 char code match strictly against tokenized whole words (NOT generic substrings)
+    if (nameWords.includes(a)) return true;
+
+    return false;
+  });
 }
 
 function isVectorDrawingCue(text) {
@@ -5776,24 +5804,7 @@ function checkBingeAndSkipTriggers(currentTotalTime, totalDuration) {
     epBtn.classList.toggle('hidden', !isEpisodic);
   }
 
-  // 2. Skip Intro & Outro Trigger
-  const skipBtn = document.getElementById('player-skip-btn');
-  const skipText = document.getElementById('player-skip-btn-text');
 
-  if (skipBtn) {
-    if (currentTotalTime >= 5 && currentTotalTime <= 105) {
-      currentSkipMode = 'intro';
-      if (skipText) skipText.innerText = 'Skip Intro (+85s)';
-      skipBtn.classList.remove('hidden');
-    } else if (remaining <= 150 && remaining >= 30) {
-      currentSkipMode = 'outro';
-      if (skipText) skipText.innerText = 'Skip Outro / Credits';
-      skipBtn.classList.remove('hidden');
-    } else {
-      currentSkipMode = 'none';
-      skipBtn.classList.add('hidden');
-    }
-  }
 
   if (!isEpisodic) return;
 
@@ -5830,22 +5841,6 @@ function checkBingeAndSkipTriggers(currentTotalTime, totalDuration) {
   }
 }
 
-function handleSkipIntroOutro() {
-  const active = state.discover.activeStream;
-  const video = document.getElementById('evo-video-player');
-  if (!active || !video) return;
-
-  const currentTotalTime = (active.playbackOffset || 0) + (video.currentTime || 0);
-  const totalDuration = active.totalDuration || 7200;
-
-  if (currentSkipMode === 'intro') {
-    seekPlayer(currentTotalTime + 85);
-    showToast('⏩ Skipped Intro (+85s)', 'info');
-  } else if (currentSkipMode === 'outro') {
-    seekPlayer(Math.max(0, totalDuration - 22));
-    showToast('⏩ Skipped Outro / Rolling Credits', 'info');
-  }
-}
 
 function getNextEpisode() {
   const detail = state.discover.activeDetail;

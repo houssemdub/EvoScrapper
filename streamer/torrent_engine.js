@@ -308,7 +308,8 @@ class TorrentEngine {
                 try { torrent.critical(cursorPiece, Math.min(fileEndPiece, cursorPiece + 3)); } catch (_) {}
             }
 
-            const multiPeerHorizon = 32;
+            const bufferPieces = 32;
+            const multiPeerHorizon = bufferPieces;
             const multiPeerEnd = Math.min(fileEndPiece, immediateEnd + multiPeerHorizon);
             if (multiPeerEnd > immediateEnd) {
                 torrent.select(immediateEnd + 1, multiPeerEnd, 2);

@@ -166,6 +166,37 @@ Direct HTTP video stream with HTTP 206 Partial Content byte-range support. Direc
 - `info_hash` (`string`, required): 40-character hexadecimal torrent infoHash.
 - `file_idx` (`int`, optional): Target video file index inside multi-file torrent.
 
+**Header Semantics:**
+- Client sends: `Range: bytes=10485760-`
+- Server responds: `HTTP/206 Partial Content`, `Accept-Ranges: bytes`, `Content-Range: bytes 10485760-1825361099/1825361100`, `Content-Type: video/mp4` (or `video/x-matroska`).
+- Under the hood, the streaming daemon immediately issues `torrent.critical()` for the requested byte offset, hotswapping piece requests across all connected wires.
+
+---
+
+#### `GET /api/v1/stream/status`
+Returns real-time telemetry from the P2P streaming daemon for a specific active torrent or global swarm metrics.
+
+**Query Parameters:**
+- `info_hash` (`string`, required): 40-character hexadecimal torrent infoHash.
+
+**Example Response (200 OK):**
+```json
+{
+  "info_hash": "c1205d5e0e64cc0aab4f7e60cfb669e4b477bc4c",
+  "name": "Inception.2010.1080p.BluRay.x264.mp4",
+  "progress": 0.142,
+  "download_speed_bps": 8945120,
+  "upload_speed_bps": 234100,
+  "num_peers": 62,
+  "wires_active": 48,
+  "p2p_port_tcp": 50000,
+  "p2p_port_udp": 50001,
+  "buffer_ready": true,
+  "buffer_reserve_bytes": 74317824,
+  "critical_pieces": [12, 13, 14, 15]
+}
+```
+
 ---
 
 #### `GET /api/v1/stream/hls/manifest.m3u8`
@@ -196,7 +227,7 @@ Launches the native desktop VLC media player targeting the stream URL with `--no
 ### 2.3. Subtitles Engine ("EvoSubs") (`/api/v1/subtitles`)
 
 #### `GET /api/v1/subtitles/search`
-Searches subtitles across multiple providers with language filtering.
+Searches subtitles across multiple providers with tokenized lexical language filtering and disambiguation.
 
 **Query Parameters:**
 | Parameter | Type | Required | Description |
@@ -205,8 +236,35 @@ Searches subtitles across multiple providers with language filtering.
 | `imdb_id` | `string` | No | IMDb ID (`tt...`) |
 | `season` | `int` | No | Season number |
 | `episode` | `int` | No | Episode number |
-| `languages` | `string` | No | Comma-separated ISO-639-1 codes (default: `en`) |
+| `languages` | `string` | No | Comma-separated ISO-639-1/2 codes (e.g. `en,ar,es,fr,de,it,pt,ru,ja,ko,zh,hu,pl,nl,el,ro,cs,sv,no,da,fi,he,hi`). Default: `en` |
 | `providers` | `string` | No | Provider list (`opensubtitles,gestdown,subdl,subsource,yifysubs`) |
+
+**Language Disambiguation Behavior:**
+- Short language codes (e.g. `ar` for Arabic, `hu` for Hungarian, `es` for Spanish) are matched strictly against word boundaries and ISO code prefixes (`code === a || code.startsWith(a + '-')`).
+- Prevents false-positive substring matches (e.g., prevents `Hungarian` or `Bulgarian` from appearing in Arabic search results).
+- Multi-language subtitle packs and ZIP archives are automatically inspected via `select_zip_subtitle_member` to extract only matching tracks.
+
+**Example Response (200 OK):**
+```json
+{
+  "query": "Inception",
+  "imdb_id": "tt1375666",
+  "total_results": 18,
+  "items": [
+    {
+      "id": "sub_1092847",
+      "lang": "ar",
+      "label": "Arabic (Standard)",
+      "release_name": "Inception.2010.1080p.BluRay.x264-YTS",
+      "format": "srt",
+      "source": "opensubtitles",
+      "download_url": "http://localhost:8009/api/v1/subtitles/download?url=https%3A%2F%2F...&lang=ar",
+      "vtt_url": "http://localhost:8009/api/v1/subtitles/vtt?url=https%3A%2F%2F...&lang=ar",
+      "rating": 9.4
+    }
+  ]
+}
+```
 
 ---
 

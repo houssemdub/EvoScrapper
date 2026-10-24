@@ -3523,18 +3523,24 @@ p, span, div {
 
 /* User Idle / Auto-Hide State in Fullscreen & Full Player Viewport */
 .player-video-wrap.user-idle,
-#player-video-wrap.user-idle {
+#player-video-wrap.user-idle,
+:fullscreen.user-idle,
+#player-video-wrap:fullscreen.user-idle {
   cursor: none !important;
 }
 
 .player-video-wrap.user-idle *,
-#player-video-wrap.user-idle * {
+#player-video-wrap.user-idle *,
+:fullscreen.user-idle *,
+#player-video-wrap:fullscreen.user-idle * {
   cursor: none !important;
 }
 
 .user-idle .player-hud-header,
 .player-video-wrap.user-idle .player-hud-header,
-#player-video-wrap.user-idle .player-hud-header {
+#player-video-wrap.user-idle .player-hud-header,
+:fullscreen.user-idle .player-hud-header,
+#player-video-wrap:fullscreen.user-idle .player-hud-header {
   opacity: 0 !important;
   pointer-events: none !important;
   transform: translateY(-100%) !important;
@@ -3543,9 +3549,13 @@ p, span, div {
 .user-idle .player-bottom-controls,
 .player-video-wrap.user-idle .player-bottom-controls,
 #player-video-wrap.user-idle .player-bottom-controls,
+:fullscreen.user-idle .player-bottom-controls,
+#player-video-wrap:fullscreen.user-idle .player-bottom-controls,
 .user-idle .player-hud-footer,
 .player-video-wrap.user-idle .player-hud-footer,
-#player-video-wrap.user-idle .player-hud-footer {
+#player-video-wrap.user-idle .player-hud-footer,
+:fullscreen.user-idle .player-hud-footer,
+#player-video-wrap:fullscreen.user-idle .player-hud-footer {
   opacity: 0 !important;
   pointer-events: none !important;
   transform: translateY(100%) !important;
@@ -3797,31 +3807,6 @@ p, span, div {
   border-color: var(--color-green-subtle);
 }
 
-.player-skip-btn {
-  position: absolute;
-  bottom: 5.5rem;
-  right: var(--space-md);
-  z-index: 60;
-  background: oklch(0% 0 0 / 0.85);
-  border: 1px solid var(--color-accent);
-  color: #fff;
-  padding: 0.5rem 1.1rem;
-  border-radius: var(--radius-sm);
-  font-family: var(--font-display);
-  font-size: 0.85rem;
-  font-weight: 700;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
-  transition: background var(--dur-fast) var(--ease-out);
-}
-
-.player-skip-btn:hover {
-  background: var(--color-accent);
-  color: var(--color-accent-ink);
-}
 
 .player-next-ep-card {
   position: absolute;
