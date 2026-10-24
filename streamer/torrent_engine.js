@@ -199,29 +199,54 @@ class TorrentEngine {
 
             let settled = false;
             let torrent = null;
-            const timeoutTimer = setTimeout(() => {
-                if (!settled && !this.sessions.has(hash)) {
+            const startTime = Date.now();
+            let timerId = null;
+
+            const checkTimeout = () => {
+                if (settled || this.sessions.has(hash)) return;
+                const elapsed = Date.now() - startTime;
+                // If peers are connected and exchanging metadata, give extra time (up to 120s for giant anime batches)
+                if (torrent && torrent.numPeers > 0 && elapsed < 120000) {
+                    timerId = setTimeout(checkTimeout, 10000);
+                    return;
+                }
+                if (elapsed >= 90000 && !settled) {
                     settled = true;
                     if (torrent) {
                         try {
-                            this.client.remove(torrent, { destroyStore: true }, () => {});
+                            this.client.remove(torrent, { destroyStore: false }, () => {});
                         } catch (_) {}
                     }
-                    reject(new Error(`Swarm metadata timeout: Unable to fetch torrent metadata within 30s for hash ${hash}`));
+                    reject(new Error(`Swarm metadata timeout: Unable to fetch torrent metadata within ${Math.round(elapsed / 1000)}s for hash ${hash}`));
+                } else if (!settled) {
+                    timerId = setTimeout(checkTimeout, 10000);
                 }
-            }, 30000);
+            };
+            timerId = setTimeout(checkTimeout, 30000);
+
+            const cachedTorrentFile = path.join(CACHE_DIR, `${hash}.torrent`);
+            const targetSource = fs.existsSync(cachedTorrentFile) ? cachedTorrentFile : magnet;
 
             try {
-                torrent = this.client.add(magnet, torrentOpts);
+                torrent = this.client.add(targetSource, torrentOpts);
             } catch (err) {
-                clearTimeout(timeoutTimer);
+                clearTimeout(timerId);
                 return reject(err);
             }
 
             const onReady = () => {
                 if (settled) return;
                 settled = true;
-                clearTimeout(timeoutTimer);
+                clearTimeout(timerId);
+
+                // Cache .torrent metadata to disk for instant zero-latency future loading
+                try {
+                    const torrentFilePath = path.join(CACHE_DIR, `${hash}.torrent`);
+                    if (!fs.existsSync(torrentFilePath) && torrent.torrentFile) {
+                        fs.writeFile(torrentFilePath, torrent.torrentFile, () => {});
+                    }
+                } catch (_) {}
+
                 const entry = {
                     torrent,
                     lastActive: Date.now(),
