@@ -197,4 +197,35 @@ TORBOX_API_KEY=
 # Streaming Cache
 STREAM_CACHE_DIR=.stream_cache
 MAX_DISK_CACHE_GB=15
+PIKPAK_USERNAME=
+PIKPAK_PASSWORD=
 ```
+
+---
+
+## 5. Streaming Engine & Player Architecture
+
+### 5.1. 4-Tier Concurrent Swarm Buffering (streamer/torrent_engine.js)
+To eliminate playback stalls during 4K and 1080p high-bitrate streaming, the WebTorrent streaming engine employs an adaptive 4-tier piece prioritization horizon:
+1. **Tier 1 (Critical Header & Index Lock)**:
+   - Pieces covering container metadata (MP4 `moov` atom, MKV EBML headers) at file start (first 4 pieces) and index/seek tables at file end (last 2 pieces) are locked at **Priority 3**.
+2. **Tier 2 (Immediate Playback Horizon)**:
+   - The current playback piece plus the next 8 pieces ahead (~16MB) are selected at **Priority 3** for instant frame decoding and zero seek-stutter.
+3. **Tier 3 (Multi-Peer Swarm Horizon)**:
+   - The next 32 pieces ahead are prioritized at **Priority 2**, dispatching parallel piece requests across multiple connected swarm wires simultaneously.
+4. **Tier 4 (Predictive Background Reservoir)**:
+   - The next 64 pieces ahead are prioritized at **Priority 1**, filling the disk/RAM cache ahead of time to cushion against swarm network dips.
+5. **Continuous Rolling Sliding Window**:
+   - `createReadStream()` continuously monitors stream consumption. Every 2 pieces transferred, `applySlidingWindow()` rolls the entire 4-tier horizon forward, maintaining an unbroken 64MB–100MB buffer reservoir.
+
+### 5.2. Cinematic Player Viewport & Auto-Hide HUD Overlay
+- **Overlay Hierarchy**: `.player-hud-header`, `.player-bottom-controls`, and `.player-hud-footer` act as floating overlays positioned over `#player-video-wrap` without reducing video canvas area.
+- **Idle Controller**: When playing and no controls/modals are hovered, after 3 seconds of mouse inactivity, `.user-idle` is attached. Header slides up (`translateY(-100%)`), controls slide down (`translateY(100%)`), and cursor hides (`cursor: none`).
+- **Wakeup**: Any mouse move or touch event immediately removes `.user-idle` and restores controls with smooth cubic-bezier transitions.
+- **Centerline Flexbox Alignment**: Volume speaker icon and custom slider track share identical flexbox alignment (`display: inline-flex; align-items: center;`) with 10s skip dials and timestamp counter, separated by generous `0.95rem` / `1.25rem` spacing.
+
+### 5.3. Discover Default Stream Sorting
+- When querying streams for movies or episodic TV series in Discover mode, stream results default to **Seeds (High to Low)** (`seeds_desc`), presenting the most swarm-healthy, high-speed releases first.
+
+### 5.4. Contract-First Testing Suite (SPEC.md)
+- Architectural boundaries and I/O contracts are formally defined in `SPEC.md` and enforced via deterministic unit and regression tests in `tests/test_core_contract.py`, `tests/test_player_and_buffering.py`, and `tests/test_player_alignment_and_discover_sort.py`.

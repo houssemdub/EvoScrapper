@@ -9,11 +9,12 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-3776AB.svg?style=flat&logo=python&logoColor=white)](https://python.org)
 [![WebTorrent](https://img.shields.io/badge/WebTorrent-Node.js%20Daemon-brightgreen.svg?style=flat&logo=webtorrent)](https://webtorrent.io)
-[![Tests](https://img.shields.io/badge/Tests-81%2F81%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-105%2B%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
+[![Spec-Driven](https://img.shields.io/badge/Architecture-Contract--First%20(SPEC.md)-informational.svg)](SPEC.md)
 [![Security Audit](https://img.shields.io/badge/Security%20Audit-28%20Flaws%20Remediated-blueviolet.svg?style=flat)](FLAWS.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-*A unified, next-generation asynchronous media engine that fuses multi-indexer torrent scraping, 6-provider Debrid cloud unrestriction, sequential P2P video streaming, automated subtitle synchronization, and decentralized metadata gossip into an all-in-one REST API and sleek Web UI.*
+*A unified, next-generation asynchronous media engine that fuses multi-indexer torrent scraping, 6-provider Debrid cloud unrestriction, 4-tier concurrent P2P video streaming, automated subtitle synchronization, Stremio v3 protocol support, and decentralized metadata gossip into an all-in-one REST API and cinematic Web UI.*
 
 [Key Features](#-key-features) • [Quick Start](#-quick-start) • [Architecture](#-architecture) • [Documentation](#-documentation) • [API Catalog](#-api-catalog) • [Testing](#-running-tests)
 
@@ -34,8 +35,9 @@
 - **Batch Instant Cache Checking**: Optimized multi-hash queries verify cached status across all providers in sub-second intervals.
 - **Tokenized Stream Proxy**: Resolves and proxies Debrid streams via signed HMAC tokens (`/api/v1/debrid/proxy/{token}`), providing byte-range seeking while shielding credentials.
 
-### 🎬 3. Sequential P2P WebTorrent Streaming
-- **Zero-Wait Browser Playback**: Node.js WebTorrent micro-daemon prioritizes initial file metadata (MP4 `moov` / MKV header clusters) and stream head bytes for instantaneous video playback.
+### 🎬 3. Multi-Tier Concurrent P2P WebTorrent Streaming
+- **4-Tier Concurrent Swarm Buffering**: Node.js WebTorrent micro-daemon orchestrates a dynamic 100+ piece sliding window across 4 concurrent tiers (Critical Header Lock, Immediate Playback Horizon, Multi-Peer Swarm Horizon, and Deep Predictive Reservoir).
+- **Continuous Rolling Sliding Window**: Dynamically rolls priority pieces forward as video data streams to guarantee uninterrupted buffer reserves.
 - **Dynamic Virtual HLS**: On-the-fly MPEG-TS segment generation (`/api/v1/stream/hls/segment`) preserving PTS timestamp continuity (`-output_ts_offset`) for uninterrupted Hls.js streaming.
 - **Native VLC Launcher**: Seamless one-click desktop streaming directly to VLC media player with tracked child process PID lifecycle management.
 
@@ -48,8 +50,13 @@
 - **P2P Torrent & Cache Discovery**: Node.js/Python gossip engine based on CometNet protocol principles.
 - **Ed25519 Cryptographic Signatures**: All announcements are cryptographically signed and verified using asymmetric keys before being ingested into the distributed catalog.
 
-### 🎨 6. Modern Glassmorphism Web Interface
-- Responsive dark-mode single-page application (SPA) with embedded **Video.js** player, interactive audio/subtitle track pickers, keyboard shortcuts, discover suggestions, and watchlist library manager.
+### 🎨 6. Cinematic Web Player & Studio Interface
+- **Floating Fullscreen Cinema HUD**: Auto-hiding top bar, bottom control deck, and cursor with smooth cubic-bezier transitions on 3-second mouse inactivity.
+- **Strict Baseline Flexbox Alignment**: Centerline-locked volume controls, 10s skip dials, responsive scrubber timeline, and telemetry pills with generous spacing.
+- **Discover Default Seeds Sort**: Automatically defaults stream resolution in the Discover catalog to *Seeds (High to Low)* for instant playback reliability.
+
+### 🔌 7. Stremio Addon Protocol Server
+- **Native Stremio Compatibility**: Direct `/manifest.json`, `/catalog/{type}/{id}.json`, and `/stream/{type}/{id}.json` endpoints allowing EvoScrapper to be used as an official Stremio Addon on Android TV, PC, and mobile.
 
 ---
 

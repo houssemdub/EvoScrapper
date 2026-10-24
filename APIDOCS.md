@@ -290,3 +290,31 @@ System diagnostic health check.
 
 #### `GET /api/v1/providers/status`
 Operational snapshot of every indexer and subtitle provider with circuit breaker state, failure counts, and rolling average latency.
+
+---
+
+### 2.7. Stremio Addon Protocol v3 (/)
+
+EvoScrapper is a fully compliant Stremio v3 Addon server. It can be installed directly into the Stremio desktop, mobile, and Android TV clients.
+
+#### `GET /manifest.json`
+Returns the official Stremio Addon manifest containing addon capabilities, catalogs, and supported resources.
+
+#### `GET /catalog/{type}/{id}.json`
+Explores popular and trending catalogs directly within Stremio.
+
+#### `GET /stream/{type}/{id}.json`
+Resolves high-speed streaming links for Stremio playback, querying local torrent indexers and enabled Debrid cloud unrestrictors.
+
+---
+
+### 2.8. CometNet P2P Metadata Mesh (/api/v1/cometnet)
+
+Decentralized metadata and torrent discovery mesh inspired by the CometNet gossip protocol.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/cometnet/status` | Gossip node health, peer count, and cache statistics |
+| `GET` | `/api/v1/cometnet/peers` | Active connected mesh peers |
+| `POST` | `/api/v1/cometnet/announce` | Announce torrent info_hash and cache status with Ed25519 signature |
+| `GET` | `/api/v1/cometnet/lookup/{info_hash}` | Query distributed swarm metadata across connected relay nodes |
