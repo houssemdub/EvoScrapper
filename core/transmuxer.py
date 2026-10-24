@@ -657,8 +657,15 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20.0)
         text = stdout.decode("utf-8", errors="replace")
+        err_text = stderr.decode("utf-8", errors="replace").lower()
         if text.strip():
             return sanitize_webvtt_content(text)
+        if "bitmap" in err_text or "pgs" in err_text:
+            return (
+                "WEBVTT\n\n"
+                "00:00:01.000 --> 00:00:08.000\n"
+                "[Bitmap PGS Subtitle: Image-based track cannot be rendered in HTML5 video. Please select a text subtitle (SRT) from the drawer or launch in VLC/MPV]\n"
+            )
         return "WEBVTT\n\nNOTE Empty or unsupported embedded subtitle track\n"
     except Exception as e:
         return f"WEBVTT\n\nNOTE Extraction error: {str(e)}\n"

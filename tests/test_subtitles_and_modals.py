@@ -79,3 +79,56 @@ def test_fullscreen_exit_and_modal_portal_handling():
     assert "document.addEventListener('mousemove', handleGlobalPlayerActivity" in js_content
     assert "#player-video-wrap:fullscreen:not(.user-idle) .player-bottom-controls" in css_content
     assert "#player-video-wrap:fullscreen.user-idle .player-bottom-controls" in css_content
+
+
+@pytest.mark.asyncio
+async def test_clean_title_for_catalog_and_meta_pipe_split():
+    from routers.subtitles import clean_title_for_catalog
+    from core.media_meta import clean_title_and_extract_meta
+
+    batch_title = "[Judas] Fairy Tail (2009-2014) (Seasons 1-8 + OVAs) [BD 1080p][HEVC x265 10bit][Dual-Audio][Eng-Subs] (Batch) | [Judas] Fairy Tail (2009) - 016.mkv"
+    catalog_title = clean_title_for_catalog(batch_title)
+    assert catalog_title.lower() == "fairy tail"
+
+    clean_meta_title, year, is_series = clean_title_and_extract_meta(batch_title)
+    assert "fairy tail" in clean_meta_title.lower()
+
+
+@pytest.mark.asyncio
+async def test_subtitles_search_sanitizes_non_imdb_ids():
+    from routers.subtitles import search_subtitles
+
+    # Non-IMDb format ID 'kitsu:4502' must be sanitized and resolved into Fairy Tail IMDb ID tt1528406
+    res = await search_subtitles(
+        query="Fairy Tail",
+        imdb_id="kitsu:4502",
+        season=1,
+        episode=16,
+        language="en",
+        limit=10,
+    )
+    assert res.total > 0
+    assert any(s.lang_code == "en" for s in res.data)
+    assert res.imdb_id == "tt1528406"
+
+
+@pytest.mark.asyncio
+async def test_opensubtitles_provider_handles_kitsu_id():
+    from providers.subtitles.opensubtitles import OpenSubtitlesProvider
+
+    provider = OpenSubtitlesProvider()
+    assert provider._clean_imdb("kitsu:4502") == ""
+    assert provider._clean_imdb("tt1528406") == "tt1528406"
+    assert provider._clean_imdb("1528406") == "tt1528406"
+
+    # Direct search with kitsu:4502 should auto-resolve via query
+    results = await provider.search(
+        query="Fairy Tail",
+        imdb_id="kitsu:4502",
+        season=1,
+        episode=16,
+        limit=10,
+    )
+    assert len(results) > 0
+    assert any(s.lang_code == "en" for s in results)
+

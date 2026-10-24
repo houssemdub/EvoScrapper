@@ -23,10 +23,13 @@ class OpenSubtitlesProvider(BaseProvider):
         )
 
     def _clean_imdb(self, imdb_id: str) -> str:
-        imdb_id = imdb_id.strip()
-        if not imdb_id.startswith("tt"):
-            return f"tt{imdb_id}"
-        return imdb_id
+        s = (imdb_id or "").strip()
+        match = re.search(r"tt\d+", s, re.IGNORECASE)
+        if match:
+            return match.group(0).lower()
+        if s.isdigit():
+            return f"tt{s}"
+        return ""
 
     async def _search_stremio_fallback(
         self,
@@ -38,6 +41,8 @@ class OpenSubtitlesProvider(BaseProvider):
         limit: int = 50,
     ) -> List[SubtitleItem]:
         clean_id = self._clean_imdb(imdb_id)
+        if not clean_id and not (video_hash and video_size):
+            return []
         
         if season is not None and episode is not None:
             media_path = f"series/{clean_id}:{season}:{episode}"
@@ -143,19 +148,28 @@ class OpenSubtitlesProvider(BaseProvider):
         limit: int = 50,
         **kwargs,
     ) -> List[SubtitleItem]:
-        # If no explicit imdb_id, check if query contains tt...
-        if not imdb_id and query:
+        clean_id = self._clean_imdb(imdb_id or "")
+
+        # If no valid clean_id, check if query contains tt or resolve via Cinemeta catalog
+        if not clean_id and query:
             match = re.search(r"tt\d+", query, re.IGNORECASE)
             if match:
-                imdb_id = match.group(0)
+                clean_id = match.group(0).lower()
+            else:
+                try:
+                    from routers.subtitles import resolve_imdb_id
+                    resolved = await resolve_imdb_id(query, is_series=bool(season or episode))
+                    if resolved:
+                        clean_id = self._clean_imdb(resolved)
+                except Exception:
+                    pass
 
-        if not imdb_id and not video_hash:
+        if not clean_id and not video_hash:
             return []
 
-        # If OpenSubtitles API key is provided and valid, we could use REST API v1,
-        # but the zero-auth Stremio endpoint is faster and requires no quota consumption.
+        # Zero-auth Stremio endpoint is faster and requires no quota consumption.
         return await self._search_stremio_fallback(
-            imdb_id=imdb_id or "",
+            imdb_id=clean_id,
             season=season,
             episode=episode,
             video_hash=video_hash,

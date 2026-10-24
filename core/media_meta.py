@@ -16,6 +16,11 @@ def clean_title_and_extract_meta(raw_title: str) -> Tuple[str, Optional[int], bo
 
     t = raw_title.strip()
 
+    # Handle composite batch release titles separated by '|' (e.g. "Series Batch | Episode File.mkv")
+    if "|" in t:
+        parts = [p.strip() for p in t.split("|") if p.strip()]
+        t = parts[-1] if len(parts) > 1 else parts[0]
+
     # 1. Check if IMDb ID is already present
     match_imdb = re.search(r"\b(tt\d+)\b", t, re.IGNORECASE)
     if match_imdb:

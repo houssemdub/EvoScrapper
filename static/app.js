@@ -2758,6 +2758,11 @@ function toggleSubtitleDrawer(forceOpen = null) {
 function extractCleanMediaInfo(rawTitle) {
   if (!rawTitle) return { title: '', season: null, episode: null };
   let str = String(rawTitle).trim();
+  let parts = [];
+  if (str.includes('|')) {
+    parts = str.split('|').map((p) => p.trim()).filter(Boolean);
+    str = parts[parts.length - 1] || str;
+  }
   let season = null;
   let episode = null;
 
@@ -2788,7 +2793,16 @@ function extractCleanMediaInfo(rawTitle) {
   clean = clean.replace(/[._\-]/g, ' ').replace(/\s+/g, ' ').trim();
 
   if (clean.length < 2) {
-    clean = str.replace(/\[[^\]]*\]/g, '').replace(/[._]/g, ' ').trim();
+    if (parts.length > 1) {
+      let firstClean = parts[0].replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
+      firstClean = firstClean.replace(/\b(?:1080p|720p|480p|2160p|4k|bdrip|web-?dl|bluray|hevc|x265|x264|dual-audio|multi-audio|flac|aac|remux)\b.*$/i, '');
+      firstClean = firstClean.replace(/\b(19\d\d|20\d\d)\b.*$/i, '');
+      firstClean = firstClean.replace(/[._\-]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (firstClean.length >= 2) clean = firstClean;
+    }
+    if (clean.length < 2) {
+      clean = str.replace(/\[[^\]]*\]/g, '').replace(/[._]/g, ' ').trim();
+    }
   }
   return { title: clean, season, episode };
 }
@@ -3262,7 +3276,8 @@ async function autoLoadSubtitles(title, imdbId, season, episode, releaseTitle = 
       query: searchTitle,
       limit: '80',
     });
-    if (imdbId) params.append('imdb_id', imdbId);
+    const validImdb = (imdbId && typeof imdbId === 'string' && imdbId.startsWith('tt')) ? imdbId : '';
+    if (validImdb) params.append('imdb_id', validImdb);
     if (effectiveSeason) params.append('season', effectiveSeason);
     if (effectiveEpisode) params.append('episode', effectiveEpisode);
     if (infoHash) params.append('info_hash', infoHash);
@@ -3338,20 +3353,22 @@ async function applySubtitle(subItem, isAuto = false) {
         try {
           const active = state.discover.activeStream;
           const searchMeta = extractCleanMediaInfo((active && active.playingFileName) || (active && active.title) || '');
-          const qTitle = searchMeta.title || (state.discover.activeDetail ? state.discover.activeDetail.title : 'Fairy Tail');
-          const qSeason = (active && active.season !== undefined && active.season !== null) ? active.season : (searchMeta.season || 1);
+          const qTitle = searchMeta.title || (state.discover.activeDetail ? state.discover.activeDetail.title : '') || '';
+          const qSeason = (active && active.season !== undefined && active.season !== null) ? active.season : (searchMeta.season || null);
           const qEpisode = (active && active.episode !== undefined && active.episode !== null) ? active.episode : (searchMeta.episode || null);
           const epStr = qEpisode ? `&episode=${qEpisode}` : '';
           const sStr = qSeason ? `&season=${qSeason}` : '';
-          const res = await fetch(`/api/v1/subtitles/search?query=${encodeURIComponent(qTitle)}${sStr}${epStr}&limit=50`);
-          if (res.ok) {
-            const data = await res.json();
-            const fetched = data.data || [];
-            if (fetched.length > 0) {
-              const existingEmbedded = (state.subtitles.availableSubs || []).filter((s) => s.is_embedded);
-              state.subtitles.availableSubs = [...existingEmbedded, ...fetched];
-              renderSubtitleTracksList(state.subtitles.availableSubs);
-              textSub = fetched.find((s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)) || fetched[0];
+          if (qTitle) {
+            const res = await fetch(`/api/v1/subtitles/search?query=${encodeURIComponent(qTitle)}${sStr}${epStr}&limit=50`);
+            if (res.ok) {
+              const data = await res.json();
+              const fetched = data.data || [];
+              if (fetched.length > 0) {
+                const existingEmbedded = (state.subtitles.availableSubs || []).filter((s) => s.is_embedded);
+                state.subtitles.availableSubs = [...existingEmbedded, ...fetched];
+                renderSubtitleTracksList(state.subtitles.availableSubs);
+                textSub = fetched.find((s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)) || fetched[0];
+              }
             }
           }
         } catch (_) {}
@@ -3380,7 +3397,7 @@ async function applySubtitle(subItem, isAuto = false) {
     }
 
     // Check for empty or bitmap PGS tracks that cannot be parsed as text WebVTT
-    if (vttText.includes('NOTE Empty or unsupported') || vttText.includes('Extraction error') || vttText.includes('NOTE Codec: hdmv_pgs')) {
+    if (vttText.includes('NOTE Empty or unsupported') || vttText.includes('Extraction error') || vttText.includes('NOTE Codec: hdmv_pgs') || vttText.includes('Bitmap PGS Subtitle')) {
       const matchLang = subItem.lang_code || 'en';
       let textSub = (state.subtitles.availableSubs || []).find(
         (s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)
@@ -3390,20 +3407,22 @@ async function applySubtitle(subItem, isAuto = false) {
         try {
           const active = state.discover.activeStream;
           const searchMeta = extractCleanMediaInfo((active && active.playingFileName) || (active && active.title) || '');
-          const qTitle = searchMeta.title || (state.discover.activeDetail ? state.discover.activeDetail.title : 'Fairy Tail');
-          const qSeason = (active && active.season !== undefined && active.season !== null) ? active.season : (searchMeta.season || 1);
+          const qTitle = searchMeta.title || (state.discover.activeDetail ? state.discover.activeDetail.title : '') || '';
+          const qSeason = (active && active.season !== undefined && active.season !== null) ? active.season : (searchMeta.season || null);
           const qEpisode = (active && active.episode !== undefined && active.episode !== null) ? active.episode : (searchMeta.episode || null);
           const epStr = qEpisode ? `&episode=${qEpisode}` : '';
           const sStr = qSeason ? `&season=${qSeason}` : '';
-          const res = await fetch(`/api/v1/subtitles/search?query=${encodeURIComponent(qTitle)}${sStr}${epStr}&limit=50`);
-          if (res.ok) {
-            const data = await res.json();
-            const fetched = data.data || [];
-            if (fetched.length > 0) {
-              const existingEmbedded = (state.subtitles.availableSubs || []).filter((s) => s.is_embedded);
-              state.subtitles.availableSubs = [...existingEmbedded, ...fetched];
-              renderSubtitleTracksList(state.subtitles.availableSubs);
-              textSub = fetched.find((s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)) || fetched[0];
+          if (qTitle) {
+            const res = await fetch(`/api/v1/subtitles/search?query=${encodeURIComponent(qTitle)}${sStr}${epStr}&limit=50`);
+            if (res.ok) {
+              const data = await res.json();
+              const fetched = data.data || [];
+              if (fetched.length > 0) {
+                const existingEmbedded = (state.subtitles.availableSubs || []).filter((s) => s.is_embedded);
+                state.subtitles.availableSubs = [...existingEmbedded, ...fetched];
+                renderSubtitleTracksList(state.subtitles.availableSubs);
+                textSub = fetched.find((s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)) || fetched[0];
+              }
             }
           }
         } catch (_) {}
@@ -7647,7 +7666,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
 
   // Auto-Load Subtitles for this release
   const mediaTitle = detail ? detail.title : (meta.title || title);
-  const imdbId = detail ? detail.id : '';
+  const imdbId = (detail && typeof detail.id === 'string' && detail.id.startsWith('tt')) ? detail.id : '';
   autoLoadSubtitles(mediaTitle, imdbId, season, episode, title, infoHash);
 
   const checkMuteState = () => {

@@ -15,11 +15,21 @@ router = APIRouter(prefix="/api/v1/subtitles", tags=["Subtitles"], dependencies=
 
 def clean_title_for_catalog(title: str) -> str:
     """Extracts base show/movie name from torrent release title for catalog search."""
-    s = re.sub(r"^\[[^\]]+\]\s*", "", title)  # remove release group e.g. [SubsPlease]
+    # If title has a batch pipeline divider '|', examine the file segment first
+    raw = title.split("|")[-1] if "|" in title else title
+    s = re.sub(r"^\[[^\]]+\]\s*", "", raw)  # remove release group e.g. [SubsPlease]
     s = re.sub(r"\[[^\]]*\]|\([^\)]*\)", "", s)  # remove tags in brackets/parens
     s = re.sub(r"\b(19\d\d|20\d\d)\b.*$", "", s)
     s = re.sub(r"(?:-|\bS\d+|\bE\d+|\bEp\s*\d+|\bEpisode\s*\d+|1080p|720p|480p|4k|x264|x265|hevc|web-?dl|bluray).*$", "", s, flags=re.I)
-    return s.replace(".", " ").replace("_", " ").strip()
+    cleaned = s.replace(".", " ").replace("_", " ").strip()
+    if not cleaned and "|" in title:
+        raw = title.split("|")[0]
+        s = re.sub(r"^\[[^\]]+\]\s*", "", raw)
+        s = re.sub(r"\[[^\]]*\]|\([^\)]*\)", "", s)
+        s = re.sub(r"\b(19\d\d|20\d\d)\b.*$", "", s)
+        s = re.sub(r"(?:-|\bS\d+|\bE\d+|\bEp\s*\d+|\bEpisode\s*\d+|1080p|720p|480p|4k|x264|x265|hevc|web-?dl|bluray).*$", "", s, flags=re.I)
+        cleaned = s.replace(".", " ").replace("_", " ").strip()
+    return cleaned
 
 
 async def resolve_imdb_id(query: str, is_series: bool = False) -> Optional[str]:
@@ -30,8 +40,16 @@ async def resolve_imdb_id(query: str, is_series: bool = False) -> Optional[str]:
     if match:
         return match.group(0)
 
-    # First attempt with cleaned title, fallback to raw
-    candidates = [clean_title_for_catalog(query), query.strip()]
+    # First attempt with cleaned title, candidate segments for batch torrents, and raw query
+    cleaned = clean_title_for_catalog(query)
+    candidates = [cleaned]
+    if "|" in query:
+        for seg in query.split("|"):
+            c_seg = clean_title_for_catalog(seg)
+            if c_seg and c_seg not in candidates:
+                candidates.append(c_seg)
+    if query.strip() not in candidates:
+        candidates.append(query.strip())
     cat_types = ["series", "movie"] if is_series else ["movie", "series"]
 
     for cand in candidates:
@@ -126,12 +144,17 @@ async def search_subtitles(
             detail="Either 'query', 'imdb_id', or 'info_hash' must be specified.",
         )
 
-    # Automatically resolve IMDb ID from title if missing
+    # Discard non-IMDb format ids (such as 'kitsu:4502' or 'tmdb:123')
+    if imdb_id and not re.match(r"^tt\d+$", str(imdb_id).strip(), re.I):
+        imdb_id = None
+
+    # Automatically resolve IMDb ID from title if missing or non-IMDb
     if not imdb_id and query:
         is_ser = bool(season or episode)
         imdb_id = await resolve_imdb_id(query, is_series=is_ser)
 
-    cache_key = f"sub_search:{provider}:{query}:{imdb_id}:{season}:{episode}:{language}:{info_hash}:{limit}"
+    provider_name = str(getattr(provider, "default", provider) or "all").lower()
+    cache_key = f"sub_search:{provider_name}:{query}:{imdb_id}:{season}:{episode}:{language}:{info_hash}:{limit}"
     cached = await cache.get(cache_key)
     if cached:
         return cached
@@ -139,8 +162,8 @@ async def search_subtitles(
     start = time.time()
     all_results: List[SubtitleItem] = []
 
-    if provider.lower() != "all":
-        p = SUBTITLE_PROVIDERS.get(provider.lower())
+    if provider_name != "all":
+        p = SUBTITLE_PROVIDERS.get(provider_name)
         if p:
             all_results = await p.search(
                 query=query or "",
