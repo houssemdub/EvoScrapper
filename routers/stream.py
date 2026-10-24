@@ -19,6 +19,7 @@ from core.torrent_streamer import (
 import os
 from core.transmuxer import (
     extract_embedded_subtitle_vtt,
+    extract_embedded_sup_stream,
     find_external_player,
     find_vlc,
     launch_external_player_process,
@@ -188,6 +189,7 @@ async def stream_transmuxed_torrent(
     start_time: float = Query(0.0, description="Start playback offset in seconds"),
     duration_slice: Optional[float] = Query(None, description="Optional maximum chunk duration in seconds"),
     transcode_video: bool = Query(False, description="Whether to re-encode video or lossless copy"),
+    burn_sub_idx: Optional[int] = Query(None, description="Subtitle stream index to burn into video frames (e.g. Blu-ray PGS)"),
     audio_track: int = Query(0, description="Audio track index (0 = primary audio)"),
     audio_boost: float = Query(1.25, description="Audio volume boost multiplier"),
     season: Optional[int] = Query(None, description="Season number (for series/anime)"),
@@ -198,6 +200,7 @@ async def stream_transmuxed_torrent(
     Real-time FFmpeg transmuxing pipeline.
     Losslessly copies video (-c:v copy) or transcodes HEVC to 8-bit H.264 (-c:v libx264 -pix_fmt yuv420p)
     and remuxes audio to 2-channel AAC with dialogue boost and timestamp sync.
+    Supports real-time PGS/ASS subtitle burn-in via burn_sub_idx.
     """
     await ensure_streaming_daemon()
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
@@ -206,7 +209,8 @@ async def stream_transmuxed_torrent(
         source_url_or_path=source_url,
         start_seconds=start_time,
         duration_seconds=duration_slice,
-        transcode_video=transcode_video,
+        transcode_video=transcode_video or (burn_sub_idx is not None),
+        burn_sub_idx=burn_sub_idx,
         audio_track=audio_track,
         audio_boost=audio_boost,
     )
@@ -403,6 +407,39 @@ async def get_embedded_subtitles(
         content=vtt,
         media_type="text/vtt; charset=utf-8",
         headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.get("/subtitles/sup")
+async def get_embedded_sup_subtitles(
+    info_hash: str = Query(..., description="Torrent info hash"),
+    file_idx: int = Query(0, description="File index"),
+    sub_index: int = Query(0, description="Subtitle stream index"),
+    magnet: Optional[str] = Query(None),
+    season: Optional[int] = Query(None),
+    episode: Optional[int] = Query(None),
+):
+    """
+    Streams raw binary Blu-ray PGS SUP packets extracted on the fly via FFmpeg.
+    Enables zero-transcode client-side HTML5 canvas overlay rendering.
+    """
+    if info_hash.startswith("cdn_"):
+        raise HTTPException(status_code=400, detail="Web CDN does not support embedded subtitles")
+
+    await ensure_streaming_daemon()
+    source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+    local_file = _find_cached_media_path(info_hash=info_hash, episode=episode)
+    target_source = local_file if local_file else source_url
+
+    generator = extract_embedded_sup_stream(target_source, sub_index)
+    return StreamingResponse(
+        generator,
+        media_type="application/octet-stream",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Content-Disposition": f'inline; filename="track_{sub_index}.sup"',
+            "Cache-Control": "public, max-age=3600",
+        },
     )
 
 

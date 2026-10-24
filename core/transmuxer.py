@@ -204,6 +204,7 @@ async def stream_transmuxed_video(
     start_seconds: float = 0.0,
     duration_seconds: Optional[float] = None,
     transcode_video: bool = False,
+    burn_sub_idx: Optional[int] = None,
     audio_track: int = 0,
     audio_boost: float = 1.25,
     chunk_size: int = 262144,
@@ -212,6 +213,7 @@ async def stream_transmuxed_video(
     Spawns an ultra-low latency FFmpeg pipeline that losslessly transmuxes video into
     fragmented MP4 and converts any audio codec (AC3, EAC3, DTS, TrueHD, 5.1/7.1)
     to crystal-clear 2-channel stereo AAC with perfect sync and dialogue boost.
+    Supports real-time PGS/ASS subtitle burn-in via burn_sub_idx with zero-latency overlay.
     Enforces optional duration clamping and bounds concurrent processes via semaphore.
     """
     ffmpeg_bin = find_ffmpeg() or "ffmpeg"
@@ -241,10 +243,19 @@ async def stream_transmuxed_video(
     if duration_seconds and duration_seconds > 0:
         cmd.extend(["-t", f"{duration_seconds:.2f}"])
 
-    cmd.extend([
-        "-i", source_url_or_path,
-        "-map", "0:V:0?",               # Primary video stream (excludes attached pictures/thumbnails)
-    ])
+    cmd.append("-i")
+    cmd.append(source_url_or_path)
+
+    if burn_sub_idx is not None:
+        transcode_video = True
+        cmd.extend([
+            "-filter_complex", f"[0:V:0][0:s:{burn_sub_idx}]overlay[v]",
+            "-map", "[v]",
+        ])
+    else:
+        cmd.extend([
+            "-map", "0:V:0?",               # Primary video stream (excludes attached pictures/thumbnails)
+        ])
 
     # Map target audio track (with fallback to first audio stream)
     if audio_track > 0:
@@ -669,6 +680,56 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
         return "WEBVTT\n\nNOTE Empty or unsupported embedded subtitle track\n"
     except Exception as e:
         return f"WEBVTT\n\nNOTE Extraction error: {str(e)}\n"
+
+
+async def extract_embedded_sup_stream(source_url: str, sub_stream_index: int = 0) -> AsyncGenerator[bytes, None]:
+    """
+    Extracts an embedded PGS bitmap stream into binary SUP format via direct stream copy.
+    Enables low-overhead client-side decoding onto HTML5 Canvas without server re-encoding.
+    """
+    ffmpeg_bin = find_ffmpeg() or "ffmpeg"
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-loglevel", "error",
+    ]
+    if source_url.startswith("http"):
+        cmd.extend([
+            "-reconnect", "1",
+            "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
+        ])
+    cmd.extend([
+        "-probesize", "500000",
+        "-analyzeduration", "1000000",
+        "-i", source_url,
+        "-vn", "-an",
+        "-map", f"0:s:{sub_stream_index}",
+        "-c:s", "copy",
+        "-f", "sup",
+        "pipe:1",
+    ])
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        while True:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            yield chunk
+    except (asyncio.CancelledError, GeneratorExit):
+        pass
+    finally:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
 
 def find_external_player(player_name: str) -> Optional[str]:

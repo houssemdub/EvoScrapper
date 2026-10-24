@@ -128,6 +128,24 @@ async def test_stream_resolver_async():
     print(f"[+] P2P Streaming Engine Daemon healthy: {healthy}")
 
 
+def test_pgs_burn_in_and_sup_pipeline():
+    """Verifies that the transmuxer and stream router support PGS burn-in and raw SUP streaming."""
+    from core.transmuxer import extract_embedded_sup_stream, stream_transmuxed_video
+    import inspect
+
+    # Verify signature accepts burn_sub_idx
+    sig = inspect.signature(stream_transmuxed_video)
+    assert "burn_sub_idx" in sig.parameters
+
+    # Verify extract_embedded_sup_stream exists and is an async generator function
+    assert inspect.isasyncgenfunction(extract_embedded_sup_stream)
+
+    # Verify route exists in router
+    from routers.stream import router
+    assert any(route.path.endswith("/subtitles/sup") for route in router.routes)
+    assert any(route.path.endswith("/transmux") for route in router.routes)
+
+
 if __name__ == "__main__":
     test_episode_matching()
     test_codec_tools_detection()

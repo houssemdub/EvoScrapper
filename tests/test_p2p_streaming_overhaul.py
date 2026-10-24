@@ -27,6 +27,7 @@ def test_javascript_syntax_validity():
     js_files = [
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js")),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "p2p-player.js")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "pgs-decoder.js")),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "server.js")),
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "torrent_engine.js")),
     ]

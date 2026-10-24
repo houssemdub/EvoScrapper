@@ -83,6 +83,7 @@ const state = {
     activeLangFilter: 'all',
     preferredLang: 'en',
     drawerOpen: false,
+    pgsEngine: (function() { try { return localStorage.getItem('evo_pgs_engine') || 'server_burnin'; } catch(_) { return 'server_burnin'; } })(),
     secondaryTrack: null,
     secondaryCues: [],
     styles: {
@@ -3246,6 +3247,20 @@ function disableSubtitles() {
         video.textTracks[i].mode = 'disabled';
       }
     }
+    if (window.evoPgsDecoder) window.evoPgsDecoder.detach();
+    if (video.src && video.src.includes('burn_sub_idx=')) {
+      const active = state.discover.activeStream;
+      const infoHash = active ? active.infoHash : '';
+      const fileIdx = (active && active.effectiveFileIdx !== undefined) ? active.effectiveFileIdx : ((active && active.fileIdx !== undefined) ? active.fileIdx : 0);
+      const curTime = video.currentTime || 0;
+      const wasPaused = video.paused;
+      const epParam = (active && active.episode !== undefined && active.episode !== null) ? `&episode=${active.episode}` : '';
+      const sParam = (active && active.season !== undefined && active.season !== null) ? `&season=${active.season}` : '';
+      const magParam = (active && active.magnet) ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
+      video.src = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
+      video.currentTime = curTime;
+      if (!wasPaused) video.play().catch(() => {});
+    }
   }
   state.subtitles.rawCues = [];
   state.subtitles.activeTrack = null;
@@ -3356,14 +3371,23 @@ async function applySubtitle(subItem, isAuto = false) {
       }
     }
 
-    // Manual click on an image-based Blu-ray PGS track
+    // Manual click on an image-based Blu-ray PGS track: route to active engine
     if (!isAuto && subItem.is_image_based) {
+      const pgsEngine = state.subtitles.pgsEngine || 'server_burnin';
+      const video = document.getElementById('evo-video-player');
+      const active = state.discover.activeStream;
+      const infoHash = active ? active.infoHash : '';
+      const fileIdx = (active && active.effectiveFileIdx !== undefined) ? active.effectiveFileIdx : ((active && active.fileIdx !== undefined) ? active.fileIdx : 0);
+      const subIdx = (subItem.sub_index !== undefined) ? subItem.sub_index : 0;
+      const epParam = (active && active.episode !== undefined && active.episode !== null) ? `&episode=${active.episode}` : '';
+      const sParam = (active && active.season !== undefined && active.season !== null) ? `&season=${active.season}` : '';
+      const magParam = (active && active.magnet) ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
+
       state.subtitles.rawCues = [];
       state.subtitles.activeTrack = subItem;
-      state.subtitles.activeSubName = subItem.release_name || `${subItem.language} (PGS Image)`;
+      state.subtitles.activeSubName = subItem.release_name || `${subItem.language} (PGS)`;
       state.subtitles.activeLang = subItem.lang_code || 'en';
 
-      const video = document.getElementById('evo-video-player');
       if (video) {
         video.querySelectorAll('track').forEach((t) => t.remove());
         if (video.textTracks) {
@@ -3375,12 +3399,64 @@ async function applySubtitle(subItem, isAuto = false) {
       renderCuesToVideo([], 0.0);
       renderSubtitleTracksList(state.subtitles.availableSubs || []);
 
-      if (badge) {
-        badge.innerText = 'PGS (VLC Only)';
-        badge.title = 'Blu-ray PGS image track selected. HTML5 browsers cannot render bitmap images. Open in VLC for native Blu-ray graphics or select Funimation/Netflix for browser text.';
+      if (pgsEngine === 'server_burnin') {
+        // Mode 1: Server-Side Real-Time Burn-In (FFmpeg overlay)
+        if (window.evoPgsDecoder) window.evoPgsDecoder.detach();
+        const curTime = video ? (video.currentTime || 0) : 0;
+        const wasPaused = video ? video.paused : false;
+        const burnUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&burn_sub_idx=${subIdx}&start_time=${curTime.toFixed(2)}&transcode_video=true${epParam}${sParam}${magParam}`;
+        showToast('Activating real-time Blu-ray PGS Burn-in (100% video-frame sync)...', 'info');
+        if (video) {
+          video.src = burnUrl;
+          video.currentTime = 0;
+          if (!wasPaused) video.play().catch(() => {});
+        }
+        if (badge) {
+          badge.innerText = 'PGS (Burn-In)';
+          badge.title = 'Real-time Blu-ray PGS Burn-in active via FFmpeg overlay';
+        }
+        return;
+      } else {
+        // Mode 2: Client-Side Canvas Overlay (Zero video transcoding)
+        const canvas = document.getElementById('player-pgs-canvas');
+        const supUrl = `/api/v1/stream/subtitles/sup?info_hash=${infoHash}&file_idx=${fileIdx}&sub_index=${subIdx}${epParam}${sParam}${magParam}`;
+        showToast('Downloading Blu-ray PGS stream for Canvas rendering...', 'info');
+        try {
+          const res = await fetch(supUrl);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const arrayBuf = await res.arrayBuffer();
+          if (window.evoPgsDecoder) {
+            const cues = window.evoPgsDecoder.parse(arrayBuf);
+            window.evoPgsDecoder.attach(video, canvas);
+            if (badge) {
+              badge.innerText = `PGS (${cues.length} cues)`;
+              badge.title = `Client-side Canvas PGS active (${cues.length} graphical cues)`;
+            }
+            showToast(`Blu-ray PGS Active on Canvas (${cues.length} cues)`, 'info');
+          }
+        } catch (err) {
+          showToast(`PGS Canvas decode failed: ${err.message}`, 'error');
+        }
+        return;
       }
-      showToast('Blu-ray PGS is an image-based track (not text). Use VLC Player for native PGS graphics, or choose Funimation/Netflix for browser text subtitles.', 'warning');
-      return;
+    }
+
+    // If switching back to a text subtitle (SRT/VTT), clean up any active PGS rendering
+    if (window.evoPgsDecoder) window.evoPgsDecoder.detach();
+    const video = document.getElementById('evo-video-player');
+    if (video && video.src && video.src.includes('burn_sub_idx=')) {
+      const active = state.discover.activeStream;
+      const infoHash = active ? active.infoHash : '';
+      const fileIdx = (active && active.effectiveFileIdx !== undefined) ? active.effectiveFileIdx : ((active && active.fileIdx !== undefined) ? active.fileIdx : 0);
+      const curTime = video.currentTime || 0;
+      const wasPaused = video.paused;
+      const epParam = (active && active.episode !== undefined && active.episode !== null) ? `&episode=${active.episode}` : '';
+      const sParam = (active && active.season !== undefined && active.season !== null) ? `&season=${active.season}` : '';
+      const magParam = (active && active.magnet) ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
+      const cleanUrl = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
+      video.src = cleanUrl;
+      video.currentTime = curTime;
+      if (!wasPaused) video.play().catch(() => {});
     }
 
     let vttText = '';
@@ -3686,6 +3762,31 @@ function loadSubtitleStyles() {
   if (sizeInput && state.subtitles.styles.size) sizeInput.value = state.subtitles.styles.size;
   if (posInput && state.subtitles.styles.pos) posInput.value = state.subtitles.styles.pos;
   applySubtitleStyles();
+
+  // Initialize PGS subtitle engine selection
+  const pgsEngine = state.subtitles.pgsEngine || 'server_burnin';
+  document.querySelectorAll('input[name="pgs-render-engine"]').forEach((r) => {
+    r.checked = (r.value === pgsEngine);
+  });
+}
+
+function setPgsRenderEngine(mode) {
+  state.subtitles.pgsEngine = mode;
+  try {
+    localStorage.setItem('evo_pgs_engine', mode);
+  } catch (_) {}
+  document.querySelectorAll('input[name="pgs-render-engine"]').forEach((r) => {
+    r.checked = (r.value === mode);
+  });
+  const label = mode === 'server_burnin'
+    ? 'Server-Side Real-Time Burn-In (FFmpeg overlay in video frames)'
+    : 'Client-Side Canvas Overlay (Zero video transcoding)';
+  showToast(`Blu-ray PGS Engine: ${label}`, 'info');
+
+  // If a PGS track is currently active, immediately re-apply with the selected engine
+  if (state.subtitles.activeTrack && state.subtitles.activeTrack.is_image_based) {
+    applySubtitle(state.subtitles.activeTrack, false);
+  }
 }
 
 function filterSubtitleLang(lang) {

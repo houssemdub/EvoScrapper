@@ -1141,6 +1141,9 @@
           Your browser does not support HTML5 video streaming.
         </video>
 
+        <!-- Blu-ray PGS Client-side Canvas Overlay -->
+        <canvas id="player-pgs-canvas" class="player-pgs-canvas pointer-events-none hidden"></canvas>
+
         <!-- Big Center Play / Pause Indicator -->
         <div id="player-center-play" class="player-center-play">
           <i class="fa-solid fa-play"></i>
@@ -1648,6 +1651,29 @@
                     <span id="sub-style-pos-val" class="mono text-xs font-bold text-bright">4.5rem</span>
                   </div>
                   <input type="range" id="sub-style-pos" min="2" max="15" step="0.5" value="4.5" class="sub-sync-slider w-full" oninput="applySubtitleStyles()">
+                </div>
+
+                <!-- Blu-ray PGS Engine Selector (Mutual Exclusion) -->
+                <div class="sub-studio-section mt-3 pt-3" style="border-top: 1px solid var(--color-rule);">
+                  <label class="text-xs mono font-bold text-bright block mb-1.5">
+                    <i class="fa-solid fa-compact-disc text-accent"></i> Blu-ray PGS Subtitle Engine:
+                  </label>
+                  <div class="flex flex-col gap-2 mt-1">
+                    <label class="flex items-start gap-2 cursor-pointer text-xs p-2 rounded" style="background:var(--color-paper-2); border:1px solid var(--color-rule);">
+                      <input type="radio" name="pgs-render-engine" value="server_burnin" checked onchange="setPgsRenderEngine('server_burnin')" class="mt-0.5">
+                      <div>
+                        <span class="mono font-bold text-bright block">Server-Side Real-Time Burn-In</span>
+                        <span class="text-dim text-2xs block" style="font-size:0.68rem;">FFmpeg ultrafast overlay directly into video frames. 100% Blu-ray sync, custom signs/fonts.</span>
+                      </div>
+                    </label>
+                    <label class="flex items-start gap-2 cursor-pointer text-xs p-2 rounded" style="background:var(--color-paper-2); border:1px solid var(--color-rule);">
+                      <input type="radio" name="pgs-render-engine" value="client_canvas" onchange="setPgsRenderEngine('client_canvas')" class="mt-0.5">
+                      <div>
+                        <span class="mono font-bold text-bright block">Client-Side Canvas Overlay</span>
+                        <span class="text-dim text-2xs block" style="font-size:0.68rem;">Zero video transcoding. Decodes Blu-ray SUP bitmaps directly onto transparent canvas.</span>
+                      </div>
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2326,6 +2352,9 @@
   <script src="https://cdn.jsdelivr.net/npm/p2p-media-loader-core@0.6.2/build/p2p-media-loader-core.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/p2p-media-loader-hlsjs@0.6.2/build/p2p-media-loader-hlsjs.min.js"></script>
   <script src="/static/p2p-player.js"></script>
+
+  <!-- Blu-ray PGS Canvas Decoder -->
+  <script src="/static/pgs-decoder.js"></script>
 
   <!-- App Logic -->
   <script src="/static/app.js"></script>

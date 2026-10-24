@@ -147,8 +147,30 @@ def test_subtitle_radio_button_sync_and_pgs_handling():
     assert "const activeTrack = state.subtitles.activeTrack;" in js_content
     assert "s.download_url === activeUrl" in js_content or "s.download_url && activeUrl && s.download_url === activeUrl" in js_content
 
-    # 3. PGS image tracks don't hijack manual click and inform the user
-    assert "PGS (VLC Only)" in js_content
-    assert "PGS Image (VLC Recommended)" in js_content
+    # 3. PGS image tracks support both server_burnin and client_canvas
+    assert "burn_sub_idx=" in js_content
+    assert "setPgsRenderEngine" in js_content
+    assert "evoPgsDecoder" in js_content
+
+
+def test_pgs_dual_engine_dom_and_exclusive_settings():
+    """Verify DOM contains PGS canvas overlay and mutually exclusive radio settings."""
+    html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "index.html"))
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    # 1. Canvas element exists for client-side decoding
+    assert 'id="player-pgs-canvas"' in html_content
+    assert 'class="player-pgs-canvas pointer-events-none hidden"' in html_content
+
+    # 2. Mutually exclusive radio options for PGS rendering engine exist
+    assert 'name="pgs-render-engine"' in html_content
+    assert 'value="server_burnin"' in html_content
+    assert 'value="client_canvas"' in html_content
+    assert "setPgsRenderEngine('server_burnin')" in html_content
+    assert "setPgsRenderEngine('client_canvas')" in html_content
+
+    # 3. Decoder script is loaded
+    assert 'src="/static/pgs-decoder.js"' in html_content
 
 
