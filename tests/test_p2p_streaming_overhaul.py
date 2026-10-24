@@ -135,8 +135,8 @@ def test_ui_subtitle_drawer_layout_and_telemetry():
     with open(css_path, "r", encoding="utf-8") as f:
         css = f.read()
 
-    # Subtitle drawer layout & scrolling: wider 520px layout with z-index 65
-    assert "width: 520px;" in css
+    # Subtitle drawer layout & scrolling: wider responsive layout with z-index 65
+    assert ("width: clamp(560px, 38vw, 680px);" in css or "width: 520px;" in css)
     assert "z-index: 65;" in css
     assert "overscroll-behavior: contain;" in css
     assert "sub-drawer-nav" in css

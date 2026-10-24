@@ -151,6 +151,14 @@ def test_subtitle_radio_button_sync_and_pgs_handling():
     assert "burn_sub_idx=" in js_content
     assert "setPgsRenderEngine" in js_content
     assert "evoPgsDecoder" in js_content
+    assert "sub_index: st.sub_idx" in js_content
+    assert "stream_idx: st.stream_idx" in js_content
+
+    # 4. Subtitle drawer width
+    css_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "style.css"))
+    with open(css_path, "r", encoding="utf-8") as f:
+        css = f.read()
+    assert "clamp(560px, 38vw, 680px)" in css
 
 
 def test_pgs_dual_engine_dom_and_exclusive_settings():

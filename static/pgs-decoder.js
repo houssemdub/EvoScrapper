@@ -232,11 +232,15 @@ class EvoPgsDecoder {
 
   /**
    * Attaches the decoder to a video element and target canvas overlay.
+   * @param {HTMLVideoElement} videoEl
+   * @param {HTMLCanvasElement} canvasEl
+   * @param {Function|null} getTimeFn Optional custom timestamp resolver (e.g. for transmux playbackOffset)
    */
-  attach(videoEl, canvasEl) {
+  attach(videoEl, canvasEl, getTimeFn = null) {
     this.detach();
     this.videoEl = videoEl;
     this.canvasEl = canvasEl;
+    this._getTimeFn = getTimeFn;
     if (!videoEl || !canvasEl) return;
 
     this.ctx = canvasEl.getContext('2d');
@@ -244,7 +248,20 @@ class EvoPgsDecoder {
 
     videoEl.addEventListener('timeupdate', this._timeUpdateHandler);
     videoEl.addEventListener('seeked', this._seekHandler);
-    this._renderAtTime(videoEl.currentTime);
+    this._renderAtTime(this._getCurrentTime());
+  }
+
+  /**
+   * Resolves effective video playback time in seconds.
+   */
+  _getCurrentTime() {
+    if (typeof this._getTimeFn === 'function') {
+      try {
+        const t = this._getTimeFn();
+        if (typeof t === 'number' && !isNaN(t)) return t;
+      } catch (_) {}
+    }
+    return this.videoEl ? (this.videoEl.currentTime || 0) : 0;
   }
 
   /**
@@ -256,6 +273,7 @@ class EvoPgsDecoder {
       this.videoEl.removeEventListener('seeked', this._seekHandler);
       this.videoEl = null;
     }
+    this._getTimeFn = null;
     if (this.canvasEl && this.ctx) {
       this.ctx.clearRect(0, 0, this.canvasEl.width, this.canvasEl.height);
       this.canvasEl.classList.add('hidden');
@@ -267,12 +285,12 @@ class EvoPgsDecoder {
 
   _onTimeUpdate() {
     if (!this.videoEl) return;
-    this._renderAtTime(this.videoEl.currentTime);
+    this._renderAtTime(this._getCurrentTime());
   }
 
   _onSeek() {
     if (!this.videoEl) return;
-    this._renderAtTime(this.videoEl.currentTime);
+    this._renderAtTime(this._getCurrentTime());
   }
 
   _renderAtTime(currentTime) {

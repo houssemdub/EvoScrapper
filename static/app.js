@@ -3376,8 +3376,8 @@ async function applySubtitle(subItem, isAuto = false) {
       const pgsEngine = state.subtitles.pgsEngine || 'server_burnin';
       const video = document.getElementById('evo-video-player');
       const active = state.discover.activeStream;
-      const infoHash = active ? active.infoHash : '';
-      const fileIdx = (active && active.effectiveFileIdx !== undefined) ? active.effectiveFileIdx : ((active && active.fileIdx !== undefined) ? active.fileIdx : 0);
+      const infoHash = subItem.info_hash || (active ? active.infoHash : '');
+      const fileIdx = (subItem.file_idx !== undefined) ? subItem.file_idx : (active ? (active.fileIdx ?? active.playingFileIdx ?? 0) : 0);
       const subIdx = (subItem.sub_index !== undefined) ? subItem.sub_index : 0;
       const epParam = (active && active.episode !== undefined && active.episode !== null) ? `&episode=${active.episode}` : '';
       const sParam = (active && active.season !== undefined && active.season !== null) ? `&season=${active.season}` : '';
@@ -3402,13 +3402,17 @@ async function applySubtitle(subItem, isAuto = false) {
       if (pgsEngine === 'server_burnin') {
         // Mode 1: Server-Side Real-Time Burn-In (FFmpeg overlay)
         if (window.evoPgsDecoder) window.evoPgsDecoder.detach();
-        const curTime = video ? (video.currentTime || 0) : 0;
+        const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video ? (video.currentTime || 0) : 0);
         const wasPaused = video ? video.paused : false;
         const burnUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&burn_sub_idx=${subIdx}&start_time=${curTime.toFixed(2)}&transcode_video=true${epParam}${sParam}${magParam}`;
         showToast('Activating real-time Blu-ray PGS Burn-in (100% video-frame sync)...', 'info');
+        if (active) {
+          active.playbackOffset = curTime;
+          active.useTransmux = true;
+        }
         if (video) {
           video.src = burnUrl;
-          video.currentTime = 0;
+          video.load();
           if (!wasPaused) video.play().catch(() => {});
         }
         if (badge) {
@@ -3420,14 +3424,18 @@ async function applySubtitle(subItem, isAuto = false) {
         // Mode 2: Client-Side Canvas Overlay (Zero video transcoding)
         const canvas = document.getElementById('player-pgs-canvas');
         const supUrl = `/api/v1/stream/subtitles/sup?info_hash=${infoHash}&file_idx=${fileIdx}&sub_index=${subIdx}${epParam}${sParam}${magParam}`;
-        showToast('Downloading Blu-ray PGS stream for Canvas rendering...', 'info');
+        showToast('Streaming Blu-ray PGS cues for Canvas rendering...', 'info');
+        if (badge) badge.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-accent"></i> Loading PGS...`;
         try {
           const res = await fetch(supUrl);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const arrayBuf = await res.arrayBuffer();
           if (window.evoPgsDecoder) {
             const cues = window.evoPgsDecoder.parse(arrayBuf);
-            window.evoPgsDecoder.attach(video, canvas);
+            window.evoPgsDecoder.attach(video, canvas, () => {
+              const curAct = state.discover.activeStream;
+              return (curAct && curAct.useTransmux ? (curAct.playbackOffset || 0) : 0) + (video ? (video.currentTime || 0) : 0);
+            });
             if (badge) {
               badge.innerText = `PGS (${cues.length} cues)`;
               badge.title = `Client-side Canvas PGS active (${cues.length} graphical cues)`;
@@ -3436,6 +3444,7 @@ async function applySubtitle(subItem, isAuto = false) {
           }
         } catch (err) {
           showToast(`PGS Canvas decode failed: ${err.message}`, 'error');
+          if (badge) badge.innerText = 'PGS (Error)';
         }
         return;
       }
@@ -3447,14 +3456,19 @@ async function applySubtitle(subItem, isAuto = false) {
     if (video && video.src && video.src.includes('burn_sub_idx=')) {
       const active = state.discover.activeStream;
       const infoHash = active ? active.infoHash : '';
-      const fileIdx = (active && active.effectiveFileIdx !== undefined) ? active.effectiveFileIdx : ((active && active.fileIdx !== undefined) ? active.fileIdx : 0);
-      const curTime = video.currentTime || 0;
+      const fileIdx = (active ? (active.fileIdx ?? active.playingFileIdx ?? 0) : 0);
+      const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
       const wasPaused = video.paused;
       const epParam = (active && active.episode !== undefined && active.episode !== null) ? `&episode=${active.episode}` : '';
       const sParam = (active && active.season !== undefined && active.season !== null) ? `&season=${active.season}` : '';
       const magParam = (active && active.magnet) ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
       const cleanUrl = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
+      if (active) {
+        active.useTransmux = false;
+        active.playbackOffset = 0;
+      }
       video.src = cleanUrl;
+      video.load();
       video.currentTime = curTime;
       if (!wasPaused) video.play().catch(() => {});
     }
@@ -3591,7 +3605,8 @@ function renderSubtitleTracksList(subs) {
       activeTrack && (
         (s.download_url && activeUrl && s.download_url === activeUrl) ||
         (s.id && activeId && s.id === activeId) ||
-        (s.stream_idx !== undefined && activeTrack.stream_idx !== undefined && s.stream_idx === activeTrack.stream_idx)
+        (s.stream_idx !== undefined && activeTrack.stream_idx !== undefined && s.stream_idx === activeTrack.stream_idx) ||
+        (s.sub_index !== undefined && activeTrack.sub_index !== undefined && s.sub_index === activeTrack.sub_index && s.is_embedded && activeTrack.is_embedded)
       )
     );
     const isSecActive = state.subtitles.secondaryTrack && (
@@ -7649,6 +7664,10 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
                 provider: isBitmap ? 'Embedded (PGS Image)' : 'Embedded Text',
                 is_embedded: true,
                 is_image_based: isBitmap,
+                sub_index: st.sub_idx,
+                stream_idx: st.stream_idx,
+                file_idx: probeFileIdx,
+                info_hash: infoHash,
                 download_url: `/api/v1/stream/subtitles?info_hash=${infoHash}&file_idx=${probeFileIdx}&sub_index=${st.sub_idx}${epParams}${magnetParam}`,
               };
             });

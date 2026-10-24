@@ -207,7 +207,7 @@ async def stream_transmuxed_video(
     burn_sub_idx: Optional[int] = None,
     audio_track: int = 0,
     audio_boost: float = 1.25,
-    chunk_size: int = 262144,
+    chunk_size: int = 65536,
 ) -> AsyncGenerator[bytes, None]:
     """
     Spawns an ultra-low latency FFmpeg pipeline that losslessly transmuxes video into
