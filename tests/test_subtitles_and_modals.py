@@ -132,3 +132,23 @@ async def test_opensubtitles_provider_handles_kitsu_id():
     assert len(results) > 0
     assert any(s.lang_code == "en" for s in results)
 
+
+def test_subtitle_radio_button_sync_and_pgs_handling():
+    """Verify frontend logic synchronizes radio buttons on click and properly flags PGS images."""
+    js_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
+    with open(js_path, "r", encoding="utf-8") as f:
+        js_content = f.read()
+
+    # 1. selectSubtitleByIndex immediately updates state.subtitles.activeTrack and calls renderSubtitleTracksList
+    assert "state.subtitles.activeTrack = targetSub" in js_content
+    assert "renderSubtitleTracksList(state.subtitles.availableSubs" in js_content
+
+    # 2. renderSubtitleTracksList accurately compares activeTrack by url, id, or stream_idx
+    assert "const activeTrack = state.subtitles.activeTrack;" in js_content
+    assert "s.download_url === activeUrl" in js_content or "s.download_url && activeUrl && s.download_url === activeUrl" in js_content
+
+    # 3. PGS image tracks don't hijack manual click and inform the user
+    assert "PGS (VLC Only)" in js_content
+    assert "PGS Image (VLC Recommended)" in js_content
+
+

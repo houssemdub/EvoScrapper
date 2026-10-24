@@ -2744,6 +2744,7 @@ function toggleSubtitleDrawer(forceOpen = null) {
       state.subtitles.wasPlayingBeforeDrawer = false;
     }
     drawer.classList.remove('hidden');
+    renderSubtitleTracksList(state.subtitles.availableSubs || []);
     switchSubDrawerTab('tracks');
   } else {
     drawer.classList.add('hidden');
@@ -3248,9 +3249,10 @@ function disableSubtitles() {
   }
   state.subtitles.rawCues = [];
   state.subtitles.activeTrack = null;
+  state.subtitles.activeSubName = null;
   const badge = document.getElementById('player-active-sub-badge');
   if (badge) badge.innerText = 'Subs: Off';
-  document.querySelectorAll('#player-subs-list .sub-item-card').forEach((c) => c.classList.remove('active'));
+  renderSubtitleTracksList(state.subtitles.availableSubs || []);
   const activeSubNameEl = document.getElementById('sub-active-name');
   if (activeSubNameEl) activeSubNameEl.innerText = 'No Subtitles Active';
   showToast('Subtitles disabled', 'info');
@@ -3341,44 +3343,44 @@ async function applySubtitle(subItem, isAuto = false) {
   if (badge) badge.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-accent"></i> Subs: Loading...`;
 
   try {
-    // If user clicked an image-based PGS track, auto-switch to matching text subtitle so dialogue appears on screen!
-    if (subItem.is_image_based) {
+    // Only during initial auto-load: if the candidate is an image-based PGS track, auto-switch to a synced text subtitle
+    if (isAuto && subItem.is_image_based) {
       const matchLang = subItem.lang_code || 'en';
       let textSub = (state.subtitles.availableSubs || []).find(
         (s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)
       );
 
-      // On-demand fetch if no text subtitle in memory yet
-      if (!textSub) {
-        try {
-          const active = state.discover.activeStream;
-          const searchMeta = extractCleanMediaInfo((active && active.playingFileName) || (active && active.title) || '');
-          const qTitle = searchMeta.title || (state.discover.activeDetail ? state.discover.activeDetail.title : '') || '';
-          const qSeason = (active && active.season !== undefined && active.season !== null) ? active.season : (searchMeta.season || null);
-          const qEpisode = (active && active.episode !== undefined && active.episode !== null) ? active.episode : (searchMeta.episode || null);
-          const epStr = qEpisode ? `&episode=${qEpisode}` : '';
-          const sStr = qSeason ? `&season=${qSeason}` : '';
-          if (qTitle) {
-            const res = await fetch(`/api/v1/subtitles/search?query=${encodeURIComponent(qTitle)}${sStr}${epStr}&limit=50`);
-            if (res.ok) {
-              const data = await res.json();
-              const fetched = data.data || [];
-              if (fetched.length > 0) {
-                const existingEmbedded = (state.subtitles.availableSubs || []).filter((s) => s.is_embedded);
-                state.subtitles.availableSubs = [...existingEmbedded, ...fetched];
-                renderSubtitleTracksList(state.subtitles.availableSubs);
-                textSub = fetched.find((s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)) || fetched[0];
-              }
-            }
-          }
-        } catch (_) {}
-      }
-
       if (textSub) {
-        showToast(`Auto-switching from Blu-ray PGS image to synced ${textSub.language || 'English'} dialogue subtitles...`, 'info');
-        await applySubtitle(textSub, false);
+        await applySubtitle(textSub, true);
         return;
       }
+    }
+
+    // Manual click on an image-based Blu-ray PGS track
+    if (!isAuto && subItem.is_image_based) {
+      state.subtitles.rawCues = [];
+      state.subtitles.activeTrack = subItem;
+      state.subtitles.activeSubName = subItem.release_name || `${subItem.language} (PGS Image)`;
+      state.subtitles.activeLang = subItem.lang_code || 'en';
+
+      const video = document.getElementById('evo-video-player');
+      if (video) {
+        video.querySelectorAll('track').forEach((t) => t.remove());
+        if (video.textTracks) {
+          for (let i = 0; i < video.textTracks.length; i++) {
+            video.textTracks[i].mode = 'disabled';
+          }
+        }
+      }
+      renderCuesToVideo([], 0.0);
+      renderSubtitleTracksList(state.subtitles.availableSubs || []);
+
+      if (badge) {
+        badge.innerText = 'PGS (VLC Only)';
+        badge.title = 'Blu-ray PGS image track selected. HTML5 browsers cannot render bitmap images. Open in VLC for native Blu-ray graphics or select Funimation/Netflix for browser text.';
+      }
+      showToast('Blu-ray PGS is an image-based track (not text). Use VLC Player for native PGS graphics, or choose Funimation/Netflix for browser text subtitles.', 'warning');
+      return;
     }
 
     let vttText = '';
@@ -3398,44 +3400,26 @@ async function applySubtitle(subItem, isAuto = false) {
 
     // Check for empty or bitmap PGS tracks that cannot be parsed as text WebVTT
     if (vttText.includes('NOTE Empty or unsupported') || vttText.includes('Extraction error') || vttText.includes('NOTE Codec: hdmv_pgs') || vttText.includes('Bitmap PGS Subtitle')) {
-      const matchLang = subItem.lang_code || 'en';
-      let textSub = (state.subtitles.availableSubs || []).find(
-        (s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)
-      );
-
-      if (!textSub) {
-        try {
-          const active = state.discover.activeStream;
-          const searchMeta = extractCleanMediaInfo((active && active.playingFileName) || (active && active.title) || '');
-          const qTitle = searchMeta.title || (state.discover.activeDetail ? state.discover.activeDetail.title : '') || '';
-          const qSeason = (active && active.season !== undefined && active.season !== null) ? active.season : (searchMeta.season || null);
-          const qEpisode = (active && active.episode !== undefined && active.episode !== null) ? active.episode : (searchMeta.episode || null);
-          const epStr = qEpisode ? `&episode=${qEpisode}` : '';
-          const sStr = qSeason ? `&season=${qSeason}` : '';
-          if (qTitle) {
-            const res = await fetch(`/api/v1/subtitles/search?query=${encodeURIComponent(qTitle)}${sStr}${epStr}&limit=50`);
-            if (res.ok) {
-              const data = await res.json();
-              const fetched = data.data || [];
-              if (fetched.length > 0) {
-                const existingEmbedded = (state.subtitles.availableSubs || []).filter((s) => s.is_embedded);
-                state.subtitles.availableSubs = [...existingEmbedded, ...fetched];
-                renderSubtitleTracksList(state.subtitles.availableSubs);
-                textSub = fetched.find((s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)) || fetched[0];
-              }
-            }
-          }
-        } catch (_) {}
+      if (isAuto) {
+        const matchLang = subItem.lang_code || 'en';
+        let textSub = (state.subtitles.availableSubs || []).find(
+          (s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)
+        );
+        if (textSub) {
+          await applySubtitle(textSub, true);
+          return;
+        }
       }
 
-      if (textSub) {
-        showToast(`Auto-switching to matching ${textSub.language || 'English'} text subtitle for this release...`, 'info');
-        await applySubtitle(textSub, false);
-        return;
-      }
-      if (badge) badge.innerText = 'Subs: PGS Image';
-      showToast('This embedded subtitle is Blu-ray PGS (image-based). Please select a text subtitle (SRT) from the list below, or open in VLC.', 'info');
-      toggleSubtitleDrawer(true);
+      state.subtitles.rawCues = [];
+      state.subtitles.activeTrack = subItem;
+      state.subtitles.activeSubName = subItem.release_name || `${subItem.language} (PGS Image)`;
+      state.subtitles.activeLang = subItem.lang_code || 'en';
+      renderCuesToVideo([], 0.0);
+      renderSubtitleTracksList(state.subtitles.availableSubs || []);
+
+      if (badge) badge.innerText = 'PGS (VLC Only)';
+      showToast('This embedded subtitle is Blu-ray PGS (image-based). HTML5 browsers cannot render bitmap images. Please select a text subtitle (SRT) from the list below, or launch in VLC.', 'warning');
       return;
     }
 
@@ -3487,15 +3471,14 @@ async function applySubtitle(subItem, isAuto = false) {
       }, isStartSilent ? 7000 : 3500);
     }
 
-    // Highlight active card in drawer
-    document.querySelectorAll('#player-subs-list .sub-item-card').forEach((card) => {
-      card.classList.toggle('active', card.getAttribute('data-suburl') === subItem.download_url);
-    });
+    // Highlight active card and radio button in drawer
+    renderSubtitleTracksList(state.subtitles.availableSubs || []);
 
-    showToast(`Active Subtitles: ${subItem.language || 'English'} (${cues.length} cues, 1st at ${firstMmSs})`, 'info');
+    showToast(`Active Subtitles: ${subItem.release_name || subItem.language} (${cues.length} cues, 1st at ${firstMmSs})`, 'info');
   } catch (err) {
     console.error('Subtitle apply error:', err);
     if (badge) badge.innerText = 'Subs: Failed';
+    renderSubtitleTracksList(state.subtitles.availableSubs || []);
     showToast(`Failed to load subtitle: ${err.message}`, 'error');
   }
 }
@@ -3514,30 +3497,44 @@ function renderSubtitleTracksList(subs) {
     return;
   }
 
-  const activeUrl = state.subtitles.activeTrack ? state.subtitles.activeTrack.download_url : '';
+  const activeTrack = state.subtitles.activeTrack;
+  const activeUrl = activeTrack ? (activeTrack.download_url || '') : '';
+  const activeId = activeTrack ? (activeTrack.id || '') : '';
 
   const activeSubNameEl = document.getElementById('sub-active-name');
   if (activeSubNameEl) {
-    if (state.subtitles.activeTrack) {
-      activeSubNameEl.innerText = `${state.subtitles.activeTrack.language || 'English'} (${state.subtitles.activeTrack.provider || 'Active'})`;
+    if (activeTrack) {
+      activeSubNameEl.innerText = `${activeTrack.language || 'English'} (${activeTrack.provider || 'Active'})`;
     } else {
       activeSubNameEl.innerText = 'No Subtitles Active';
     }
   }
 
   listEl.innerHTML = filtered.map((s, idx) => {
-    const isItemActive = s.download_url === activeUrl;
-    const isSecActive = state.subtitles.secondaryTrack && state.subtitles.secondaryTrack.download_url === s.download_url ? 'tag-purple' : '';
+    const isItemActive = Boolean(
+      activeTrack && (
+        (s.download_url && activeUrl && s.download_url === activeUrl) ||
+        (s.id && activeId && s.id === activeId) ||
+        (s.stream_idx !== undefined && activeTrack.stream_idx !== undefined && s.stream_idx === activeTrack.stream_idx)
+      )
+    );
+    const isSecActive = state.subtitles.secondaryTrack && (
+      (s.download_url && s.download_url === state.subtitles.secondaryTrack.download_url) ||
+      (s.id && s.id === state.subtitles.secondaryTrack.id)
+    ) ? 'tag-purple' : '';
+
     const langFlag = s.lang_code ? s.lang_code.toUpperCase() : 'SUB';
     const title = s.release_name || s.title || `${s.language} Subtitle`;
+    const formatBadge = s.is_image_based ? 'PGS Image (VLC Recommended)' : (s.format || 'SRT').toUpperCase();
 
     return `
-      <div class="sub-item-card ${isItemActive ? 'active' : ''}" data-suburl="${escapeHtml(s.download_url)}" onclick="selectSubtitleByIndex(${idx})">
+      <div class="sub-item-card ${isItemActive ? 'active' : ''}" data-suburl="${escapeHtml(s.download_url || '')}" data-subid="${escapeHtml(s.id || '')}" onclick="selectSubtitleByIndex(${idx})">
         <div class="sub-item-top">
           <div class="flex items-center gap-2">
             <span class="sub-card-check">${isItemActive ? '<i class="fa-solid fa-circle-check text-green"></i>' : '<i class="fa-regular fa-circle text-dim"></i>'}</span>
             <span class="tag ${s.is_image_based ? 'tag-orange' : 'tag-green'} mono font-bold" style="font-size:0.68rem;">[${escapeHtml(langFlag)}] ${escapeHtml(s.language || 'English')}</span>
             <span class="sub-provider-badge text-xs mono text-dim">${escapeHtml(s.provider || 'Sub')}</span>
+            <span class="text-2xs mono text-dim">${escapeHtml(formatBadge)}</span>
           </div>
           <button class="btn btn-xs btn-outline ${isSecActive}" style="margin-left:auto; font-size:0.65rem; padding:0.15rem 0.45rem;" onclick="event.stopPropagation(); setSecondarySubtitleByIndex(${idx})" title="Language Learning: Render at top of screen as secondary subtitle">
             <i class="fa-solid fa-graduation-cap"></i> Dual (Top)
@@ -3557,14 +3554,12 @@ async function selectSubtitleByIndex(idx) {
     : subs.filter((s) => matchSubtitleLang(s, filterLang));
 
   if (filtered[idx]) {
-    await applySubtitle(filtered[idx], false);
-    // After choosing the subtitle auto hide the panel then resume playing
-    toggleSubtitleDrawer(false);
-    const video = document.getElementById('evo-video-player');
-    if (video && state.subtitles.wasPlayingBeforeDrawer) {
-      video.play().catch(() => {});
-      state.subtitles.wasPlayingBeforeDrawer = false;
-    }
+    const targetSub = filtered[idx];
+    // Immediate UI feedback on click: mark active radio button
+    state.subtitles.activeTrack = targetSub;
+    renderSubtitleTracksList(state.subtitles.availableSubs || []);
+
+    await applySubtitle(targetSub, false);
   }
 }
 

@@ -154,7 +154,8 @@ async def search_subtitles(
         imdb_id = await resolve_imdb_id(query, is_series=is_ser)
 
     provider_name = str(getattr(provider, "default", provider) or "all").lower()
-    cache_key = f"sub_search:{provider_name}:{query}:{imdb_id}:{season}:{episode}:{language}:{info_hash}:{limit}"
+    limit_val = int(getattr(limit, "default", limit) or 50)
+    cache_key = f"sub_search:{provider_name}:{query}:{imdb_id}:{season}:{episode}:{language}:{info_hash}:{limit_val}"
     cached = await cache.get(cache_key)
     if cached:
         return cached
@@ -172,7 +173,7 @@ async def search_subtitles(
                 episode=episode,
                 language=language or "en",
                 info_hash=info_hash,
-                limit=limit,
+                limit=limit_val,
             )
     else:
         tasks = [
@@ -183,7 +184,7 @@ async def search_subtitles(
                 episode=episode,
                 language=language or "all",
                 info_hash=info_hash,
-                limit=limit,
+                limit=limit_val,
             )
             for p in SUBTITLE_PROVIDERS.values()
         ]
@@ -199,7 +200,7 @@ async def search_subtitles(
             if matches_target_language(s.lang_code, s.language, language)
         ]
 
-    final_results = all_results[:limit]
+    final_results = all_results[:limit_val]
     elapsed = round(time.time() - start, 3)
 
     response = SubtitleSearchResponse(
