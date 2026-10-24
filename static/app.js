@@ -7157,26 +7157,47 @@ function showPlayerBufferingHUD() {
   const targetBytes = 6.0;
 
   playerBufferingInterval = setInterval(() => {
+    const video = document.getElementById('evo-video-player');
     const session = window._lastSwarmSession;
     const fill = document.getElementById('buffering-progress-fill');
     const pctBadge = document.getElementById('buffering-pct-badge');
     const speedLabel = document.getElementById('buffering-speed-label');
 
+    // Calculate actual video playback buffer ahead of current playhead
+    let bufferAheadSec = 0;
+    if (video && video.buffered && video.buffered.length > 0) {
+      const cur = video.currentTime;
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (cur >= video.buffered.start(i) && cur <= video.buffered.end(i)) {
+          bufferAheadSec = Math.max(0, video.buffered.end(i) - cur);
+          break;
+        }
+      }
+    }
+
+    // Auto-dismiss HUD if video has at least 3 seconds of buffer and is ready to render
+    if (video && video.readyState >= 3 && bufferAheadSec >= 2.5) {
+      hidePlayerBufferingHUD();
+      return;
+    }
+
+    // Target 6 seconds of buffer ahead for uninterrupted playback
+    const targetBufferSec = 6.0;
+    const bufferPct = Math.min(99, Math.max(5, Math.round((bufferAheadSec / targetBufferSec) * 100)));
+
     if (session && session.download_speed !== undefined) {
       const spdNum = session.download_speed || 0;
       const spdStr = formatSpeed(spdNum);
       const peers = session.peers || 0;
-      const pct = parseFloat(session.buffer_pct || '0');
-      const displayPct = Math.min(99, Math.max(5, Math.round(pct)));
 
-      if (fill) fill.style.width = `${displayPct}%`;
-      if (pctBadge) pctBadge.innerText = `${displayPct}%`;
+      if (fill) fill.style.width = `${bufferPct}%`;
+      if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
       if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${spdStr} (${peers} peers)`;
     } else {
       const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
-      const displayPct = Math.min(92, Math.max(5, Math.round(elapsedSec * 14)));
-      if (fill) fill.style.width = `${displayPct}%`;
-      if (pctBadge) pctBadge.innerText = `${displayPct}%`;
+      const fallbackPct = Math.min(92, Math.max(5, Math.round(elapsedSec * 20)));
+      if (fill) fill.style.width = `${fallbackPct}%`;
+      if (pctBadge) pctBadge.innerText = `${fallbackPct}%`;
       if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> Allocating P2P swarm...`;
     }
   }, 300);

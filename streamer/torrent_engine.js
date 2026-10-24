@@ -283,6 +283,9 @@ class TorrentEngine {
         const criticalCount = Math.max(2, Math.min(4, Math.ceil(totalPieces * 0.02)));
         const headerEnd = Math.min(fileStartPiece + criticalCount - 1, fileEndPiece);
         torrent.select(fileStartPiece, headerEnd, 3);
+        if (typeof torrent.critical === 'function') {
+            try { torrent.critical(fileStartPiece, Math.min(fileStartPiece + 1, fileEndPiece)); } catch (_) {}
+        }
 
         // 2. Container index / seek tables / cues: Last 2 pieces at priority 3
         const indexPieceCount = Math.min(2, totalPieces);
@@ -299,6 +302,11 @@ class TorrentEngine {
             const immediateWindow = 8;
             const immediateEnd = Math.min(fileEndPiece, cursorPiece + immediateWindow);
             torrent.select(cursorPiece, immediateEnd, 3);
+
+            // Activate WebTorrent native CRITICAL hotswap for the immediate next 3 pieces
+            if (typeof torrent.critical === 'function') {
+                try { torrent.critical(cursorPiece, Math.min(fileEndPiece, cursorPiece + 3)); } catch (_) {}
+            }
 
             const multiPeerHorizon = 32;
             const multiPeerEnd = Math.min(fileEndPiece, immediateEnd + multiPeerHorizon);
