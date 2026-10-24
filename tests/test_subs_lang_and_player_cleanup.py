@@ -35,3 +35,23 @@ def test_arabic_does_not_substring_match_hungarian():
     # Verify exact word tokenization or safe boundary matching exists
     assert "nameWords" in js or "split(/[^a-z0-9]+/)" in js or "words.includes" in js, \
         "matchSubtitleLang must tokenize name to avoid substring collisions like 'ar' matching 'hungarian'"
+
+
+def test_player_unmute_overlay_conditional_guard():
+    """Contract: player-unmute-overlay MUST only show when video is actually muted and auto-dismiss when unmuted."""
+    with open(APP_PATH, "r", encoding="utf-8") as f:
+        js = f.read()
+
+    with open(HTML_PATH, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    # 1. Overlay is hidden by default in HTML
+    assert 'id="player-unmute-overlay" class="player-unmute-overlay hidden"' in html
+
+    # 2. In app.js, catch block must NOT unconditionally call unmuteOverlay.classList.remove('hidden')
+    assert "if (unmuteOverlay) unmuteOverlay.classList.remove('hidden');\n    hidePlayerBufferingHUD();" not in js, \
+        "video.play().catch must NOT unconditionally unhide player-unmute-overlay when not muted"
+
+    # 3. checkMuteState or onplaying verifies unmuted state to hide overlay
+    assert "video.onplaying" in js
+    assert "unmuteAndBoostVideo" in js

@@ -1188,6 +1188,9 @@
         <div id="player-unmute-overlay" class="player-unmute-overlay hidden" onclick="unmuteAndBoostVideo()">
           <i class="fa-solid fa-volume-xmark text-accent"></i>
           <span class="mono text-xs">Browser may have muted audio. Click here to Unmute & Maximize Volume!</span>
+          <button type="button" class="player-unmute-close" onclick="event.stopPropagation(); document.getElementById('player-unmute-overlay').classList.add('hidden');" title="Dismiss">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
         </div>
 
 

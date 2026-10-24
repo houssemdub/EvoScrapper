@@ -4683,8 +4683,14 @@ function unmuteAndBoostVideo() {
   if (video) {
     video.muted = false;
     video.volume = 1.0;
+    if (video.paused) {
+      video.play().catch(() => {});
+    }
   }
   if (overlay) overlay.classList.add('hidden');
+  const slider = document.getElementById('player-volume-slider');
+  if (slider) slider.value = 1.0;
+  updateVolumeIcon();
   showToast('🔊 Audio unmuted & volume set to 100%', 'info');
 }
 
@@ -5210,6 +5216,10 @@ function setPlayerVolume(val) {
   if (!video) return;
   video.volume = parseFloat(val);
   video.muted = (video.volume === 0);
+  const unmuteOverlay = document.getElementById('player-unmute-overlay');
+  if (!video.muted && video.volume > 0 && unmuteOverlay) {
+    unmuteOverlay.classList.add('hidden');
+  }
   updateVolumeIcon();
 }
 
@@ -5231,6 +5241,10 @@ function togglePlayerMute() {
   video.muted = !video.muted;
   const slider = document.getElementById('player-volume-slider');
   if (slider) slider.value = video.muted ? 0 : video.volume;
+  const unmuteOverlay = document.getElementById('player-unmute-overlay');
+  if (!video.muted && video.volume > 0 && unmuteOverlay) {
+    unmuteOverlay.classList.add('hidden');
+  }
   updateVolumeIcon();
   if (video.muted) {
     showPlayerOsd('<i class="fa-solid fa-volume-xmark text-red"></i>', 'Muted');
@@ -5243,7 +5257,12 @@ function togglePlayerMute() {
 function updateVolumeIcon() {
   const video = document.getElementById('evo-video-player');
   const btn = document.getElementById('btn-player-vol');
-  if (!video || !btn) return;
+  const unmuteOverlay = document.getElementById('player-unmute-overlay');
+  if (!video) return;
+  if (!video.muted && video.volume > 0 && unmuteOverlay) {
+    unmuteOverlay.classList.add('hidden');
+  }
+  if (!btn) return;
   if (video.muted || video.volume === 0) {
     btn.innerHTML = '<i class="fa-solid fa-volume-xmark text-accent"></i>';
   } else if (video.volume < 0.5) {
@@ -7274,6 +7293,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   const titleEl = document.getElementById('player-stream-title');
   const swarmStat = document.getElementById('player-swarm-stat');
   const unmuteOverlay = document.getElementById('player-unmute-overlay');
+  if (unmuteOverlay) unmuteOverlay.classList.add('hidden');
   const spinner = document.getElementById('player-buffering-spinner');
 
   const detail = state.discover.activeDetail;
@@ -7585,6 +7605,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   video.ontimeupdate = () => {
     updatePlayerTimeline();
     updateSubtitleOverlay();
+    if (video && !video.muted && video.volume > 0 && unmuteOverlay && !unmuteOverlay.classList.contains('hidden')) {
+      unmuteOverlay.classList.add('hidden');
+    }
   };
 
   video.onseeked = () => {
@@ -7595,6 +7618,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   video.onplay = () => {
     updatePlayPauseIcon(true);
     hidePlayerBufferingHUD();
+    checkMuteState();
   };
 
   video.onpause = () => {
@@ -7618,6 +7642,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   video.onplaying = () => {
     clearTimeout(waitingDebounceTimer);
     hidePlayerBufferingHUD();
+    checkMuteState();
   };
 
   // Auto-Load Subtitles for this release
@@ -7709,8 +7734,15 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
       }
     }
   }).catch((err) => {
-    console.log('[EvoPlayer] Autoplay notice:', err.message);
-    if (unmuteOverlay) unmuteOverlay.classList.remove('hidden');
+    console.log('[EvoPlayer] Autoplay notice:', err ? err.message : '');
+    if (err && err.name === 'NotAllowedError') {
+      video.muted = true;
+      video.play().then(() => {
+        checkMuteState();
+        updatePlayPauseIcon(true);
+      }).catch(() => {});
+    }
+    checkMuteState();
     hidePlayerBufferingHUD();
   });
 }
@@ -7802,6 +7834,7 @@ function closePlayerModal() {
   const modal = document.getElementById('player-modal');
   const video = document.getElementById('evo-video-player');
   const unmuteOverlay = document.getElementById('player-unmute-overlay');
+  if (unmuteOverlay) unmuteOverlay.classList.add('hidden');
   const spinner = document.getElementById('player-buffering-spinner');
   const audioMenu = document.getElementById('player-audio-menu');
   const wrap = document.getElementById('player-video-wrap');

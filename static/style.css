@@ -3341,6 +3341,23 @@ p, span, div {
   transform: translateX(-50%) scale(1.02);
 }
 
+.player-unmute-close {
+  background: transparent;
+  border: none;
+  color: var(--color-ink-dim);
+  cursor: pointer;
+  padding: 0 0 0 var(--space-2xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.player-unmute-close:hover {
+  color: #ffffff;
+}
+
 /* Player Episodes Drawer */
 .player-episodes-drawer {
   position: absolute;
