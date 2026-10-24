@@ -30,12 +30,28 @@ class HttpClient:
 
     def __init__(self):
         self._httpx_client: Optional[httpx.AsyncClient] = None
+        self._client_loop: Optional[asyncio.AbstractEventLoop] = None
         self._curl_session: Optional[CurlAsyncSession] = None
-        self._lock = asyncio.Lock()
+        self._curl_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        current_loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop != current_loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = current_loop
+        return self._lock
 
     async def get_httpx_client(self) -> httpx.AsyncClient:
-        async with self._lock:
-            if self._httpx_client is None or self._httpx_client.is_closed:
+        current_loop = asyncio.get_running_loop()
+        lock = self._get_lock()
+        async with lock:
+            if (
+                self._httpx_client is None
+                or self._httpx_client.is_closed
+                or self._client_loop != current_loop
+            ):
                 proxies = settings.HTTP_PROXY if settings.HTTP_PROXY else None
                 self._httpx_client = httpx.AsyncClient(
                     proxy=proxies,
@@ -44,17 +60,21 @@ class HttpClient:
                     follow_redirects=True,
                     http2=True,
                 )
+                self._client_loop = current_loop
             return self._httpx_client
 
     async def get_curl_session(self) -> CurlAsyncSession:
-        async with self._lock:
-            if self._curl_session is None:
+        current_loop = asyncio.get_running_loop()
+        lock = self._get_lock()
+        async with lock:
+            if self._curl_session is None or self._curl_loop != current_loop:
                 proxy = settings.HTTP_PROXY if settings.HTTP_PROXY else None
                 self._curl_session = CurlAsyncSession(
                     impersonate="chrome120",
                     proxy=proxy,
                     timeout=settings.DEFAULT_TIMEOUT,
                 )
+                self._curl_loop = current_loop
             return self._curl_session
 
     async def get_text(

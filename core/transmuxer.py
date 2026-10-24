@@ -70,21 +70,46 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
     cmd = [
         ffprobe_bin,
         "-v", "error",
-        "-probesize", "1000000",
-        "-analyzeduration", "1000000",
-        "-show_entries", "format=duration,size,bit_rate:stream=index,codec_name,codec_type,channels,channel_layout:stream_tags=language,title",
-        "-of", "json",
-        source_url_or_path,
+        "-probesize", "262144",
+        "-analyzeduration", "500000",
     ]
 
+    if source_url_or_path.startswith("http"):
+        cmd.extend([
+            "-reconnect", "1",
+            "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "4",
+        ])
+
+    cmd.extend([
+        "-show_entries", "format=duration,size,bit_rate:stream=index,codec_name,codec_type,channels,channel_layout,disposition:stream_tags=language,title",
+        "-of", "json",
+        source_url_or_path,
+    ])
+
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15.0)
         data = json.loads(stdout.decode("utf-8", errors="replace"))
+
+        if proc.returncode != 0 or (not data.get("streams") and not data.get("format")):
+            return {
+                "success": False,
+                "error": f"ffprobe exited with code {proc.returncode}",
+                "duration": 0.0,
+                "size": 0,
+                "bit_rate": 0,
+                "video_codec": "unknown",
+                "audio_codec": "unknown",
+                "audio_tracks": [],
+                "subtitle_tracks": [],
+            }
 
         fmt = data.get("format", {})
         raw_duration = fmt.get("duration")
@@ -94,16 +119,27 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
         subtitle_tracks = []
         video_codec = "h264"
         audio_codec = "aac"
+        has_primary_video = False
+        first_video_codec = None
 
         for s in data.get("streams", []):
             stype = s.get("codec_type")
-            cname = s.get("codec_name", "")
+            cname = (s.get("codec_name") or "").lower()
             tags = s.get("tags") or {}
+            disp = s.get("disposition") or {}
             lang = tags.get("language") or "und"
             title = tags.get("title") or ""
+            is_attached_pic = bool(disp.get("attached_pic"))
 
             if stype == "video":
-                video_codec = cname
+                if not first_video_codec:
+                    first_video_codec = cname
+                # Exclude attached pictures (embedded cover art / poster thumbnails e.g. mjpeg/png)
+                if is_attached_pic or cname in ("mjpeg", "png", "bmp", "jpeg"):
+                    continue
+                if not has_primary_video:
+                    video_codec = cname
+                    has_primary_video = True
             elif stype == "audio":
                 audio_tracks.append({
                     "track_idx": len(audio_tracks),
@@ -127,6 +163,9 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
                     "title": title or f"Sub {len(subtitle_tracks) + 1} ({lang.upper()})",
                 })
 
+        if not has_primary_video and first_video_codec:
+            video_codec = first_video_codec
+
         return {
             "success": True,
             "duration": round(duration, 2),
@@ -138,19 +177,32 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
             "subtitle_tracks": subtitle_tracks,
         }
     except Exception as e:
+        if proc and proc.returncode is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
         return {
             "success": False,
             "error": str(e),
             "duration": 0.0,
+            "size": 0,
+            "bit_rate": 0,
+            "video_codec": "unknown",
+            "audio_codec": "unknown",
             "audio_tracks": [],
             "subtitle_tracks": [],
         }
 
 
 
+_FFMPEG_SEMAPHORE = asyncio.Semaphore(4)
+
+
 async def stream_transmuxed_video(
     source_url_or_path: str,
     start_seconds: float = 0.0,
+    duration_seconds: Optional[float] = None,
     transcode_video: bool = False,
     audio_track: int = 0,
     audio_boost: float = 1.25,
@@ -160,6 +212,7 @@ async def stream_transmuxed_video(
     Spawns an ultra-low latency FFmpeg pipeline that losslessly transmuxes video into
     fragmented MP4 and converts any audio codec (AC3, EAC3, DTS, TrueHD, 5.1/7.1)
     to crystal-clear 2-channel stereo AAC with perfect sync and dialogue boost.
+    Enforces optional duration clamping and bounds concurrent processes via semaphore.
     """
     ffmpeg_bin = find_ffmpeg() or "ffmpeg"
 
@@ -179,16 +232,18 @@ async def stream_transmuxed_video(
         ])
 
     cmd.extend([
-        "-probesize", "1000000",        # 1MB probe for ultra-fast stream startup
-        "-analyzeduration", "1000000",  # 1s header analysis
+        "-probesize", "262144",        # 256KB probe for ultra-fast stream startup
+        "-analyzeduration", "500000",  # 0.5s header analysis
     ])
 
     if start_seconds > 0:
         cmd.extend(["-ss", f"{start_seconds:.2f}"])
+    if duration_seconds and duration_seconds > 0:
+        cmd.extend(["-t", f"{duration_seconds:.2f}"])
 
     cmd.extend([
         "-i", source_url_or_path,
-        "-map", "0:v:0?",               # Primary video stream
+        "-map", "0:V:0?",               # Primary video stream (excludes attached pictures/thumbnails)
     ])
 
     # Map target audio track (with fallback to first audio stream)
@@ -229,28 +284,29 @@ async def stream_transmuxed_video(
         "pipe:1",
     ])
 
-    # Use DEVNULL for stderr to prevent pipe buffer deadlocks (which hang ffmpeg when logging warnings)
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    async with _FFMPEG_SEMAPHORE:
+        # Use DEVNULL for stderr to prevent pipe buffer deadlocks (which hang ffmpeg when logging warnings)
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
 
-    try:
-        while True:
-            chunk = await process.stdout.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
-    except (asyncio.CancelledError, GeneratorExit):
-        pass
-    finally:
         try:
-            if process.returncode is None:
-                process.terminate()
-                await process.wait()
-        except Exception:
+            while True:
+                chunk = await process.stdout.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        except (asyncio.CancelledError, GeneratorExit):
             pass
+        finally:
+            try:
+                if process.returncode is None:
+                    process.terminate()
+                    await process.wait()
+            except Exception:
+                pass
 
 
 async def stream_hls_ts_segment(
@@ -283,7 +339,7 @@ async def stream_hls_ts_segment(
         "-ss", f"{start_seconds:.3f}",
         "-t", f"{duration_seconds:.3f}",
         "-i", source_url_or_path,
-        "-map", "0:v:0?",
+        "-map", "0:V:0?",
         "-map", "0:a:0?",
         "-c:v", "copy",
         "-c:a", "aac",

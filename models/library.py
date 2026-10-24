@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -15,6 +15,9 @@ class LibraryItem(BaseModel):
     current_episode: Optional[int] = None
     total_episodes: Optional[int] = 0
     progress_percent: Optional[int] = 0
+    playback_seconds: Optional[float] = 0.0
+    duration_seconds: Optional[float] = 0.0
+    episode_progress: Optional[Dict[str, Any]] = Field(default_factory=dict)
     created_at: float = Field(default_factory=float)
     updated_at: float = Field(default_factory=float)
 

@@ -5,12 +5,16 @@ from core.debrid.base import DebridClient, DebridStreamResult
 from core.debrid.realdebrid import RealDebridClient
 from core.debrid.alldebrid import AllDebridClient
 from core.debrid.torbox import TorboxClient
+from core.debrid.debridlink import DebridLinkClient
+from core.debrid.premiumize import PremiumizeClient
+from core.debrid.pikpak import PikPakClient
 
 
 class DebridManager:
     """
     Central Coordinator for Multi-Debrid cloud streaming.
-    Manages active providers, batches cache availability probing,
+    Manages active providers across Real-Debrid, AllDebrid, TorBox,
+    Debrid-Link, Premiumize.me, and PikPak, batches cache availability probing,
     and resolves direct 1Gbps unthrottled cloud streaming links.
     """
 
@@ -19,6 +23,9 @@ class DebridManager:
             "realdebrid": RealDebridClient(),
             "alldebrid": AllDebridClient(),
             "torbox": TorboxClient(),
+            "debridlink": DebridLinkClient(),
+            "premiumize": PremiumizeClient(),
+            "pikpak": PikPakClient(),
         }
 
     def set_key(self, provider_name: str, key: str):

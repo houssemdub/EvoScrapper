@@ -46,8 +46,31 @@ async def search_torrents(
             )
         results = await p.search(query_str, limit=limit)
     else:
-        # Fan out across all active providers concurrently
-        tasks = [p.search(query_str, limit=limit) for p in TORRENT_PROVIDERS.values()]
+        # Fan out across capable active providers concurrently with bounded concurrency
+        from core.stream_resolver import PROVIDER_MEDIA_CAPABILITIES
+
+        target_cat = (category or "").lower().strip()
+        cat_key = "movie" if target_cat in ("movie", "movies") else (
+            "series" if target_cat in ("tv", "series", "shows") else (
+                "anime" if target_cat in ("anime", "animation") else None
+            )
+        )
+        capable_names = PROVIDER_MEDIA_CAPABILITIES.get(cat_key) if cat_key else None
+        active_providers = [
+            p for name, p in TORRENT_PROVIDERS.items()
+            if capable_names is None or name in capable_names
+        ]
+
+        sem = asyncio.Semaphore(10)
+
+        async def _bounded_search(prov):
+            async with sem:
+                try:
+                    return await prov.search(query_str, limit=limit)
+                except Exception:
+                    return []
+
+        tasks = [_bounded_search(p) for p in active_providers]
         gathered = await asyncio.gather(*tasks, return_exceptions=True)
         results = []
         for r in gathered:
@@ -102,12 +125,15 @@ async def stream_search(
     query_str = query.strip()
 
     async def event_generator():
+        sse_sem = asyncio.Semaphore(8)
+
         async def _run_search(provider):
-            try:
-                results = await provider.search(query_str, limit=limit)
-                return provider.name, results
-            except Exception:
-                return provider.name, []
+            async with sse_sem:
+                try:
+                    results = await provider.search(query_str, limit=limit)
+                    return provider.name, results
+                except Exception:
+                    return provider.name, []
 
         tasks = [asyncio.create_task(_run_search(p)) for p in TORRENT_PROVIDERS.values()]
         for completed_coro in asyncio.as_completed(tasks):

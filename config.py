@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     PORT: int = 8009
     DEBUG: bool = False
     API_KEY: Optional[str] = None
+    ALLOWED_ORIGINS: list[str] = ["*"]
 
     # Proxy settings
     HTTP_PROXY: Optional[str] = None
@@ -30,9 +31,24 @@ class Settings(BaseSettings):
     WYZIE_API_KEY: Optional[str] = None
     JIMAKU_API_KEY: Optional[str] = None
 
+    # Debrid Provider API Keys (Optional - Enables instant high-speed cloud playback)
+    REALDEBRID_API_KEY: Optional[str] = None
+    ALLDEBRID_API_KEY: Optional[str] = None
+    DEBRIDLINK_API_KEY: Optional[str] = None
+    PREMIUMIZE_API_KEY: Optional[str] = None
+    TORBOX_API_KEY: Optional[str] = None
+    PIKPAK_API_KEY: Optional[str] = None
+    PIKPAK_USER: Optional[str] = None
+    PIKPAK_PASSWORD: Optional[str] = None
+
     # Caching
     CACHE_TTL_SEARCH: int = 900  # 15 minutes
     CACHE_TTL_TRENDING: int = 3600  # 1 hour
+
+    # Streaming & Transmuxing Settings
+    STREAM_CACHE_DIR: str = ".stream_cache"
+    MAX_DISK_CACHE_GB: float = 15.0
+    MAX_CONCURRENT_FFMPEG: int = 4
 
     # Debrid Multi-IP Stream Proxy
     DEBRID_PROXY_ENABLED: bool = True

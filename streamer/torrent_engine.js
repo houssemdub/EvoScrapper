@@ -45,7 +45,7 @@ const DEFAULT_TRACKERS = [
 class TorrentEngine {
     constructor() {
         this.client = new WebTorrent({
-            maxConns: 150,
+            maxConns: 200,
             dht: true,
             tracker: true,
             utp: true,
@@ -191,8 +191,8 @@ class TorrentEngine {
                 announce: DEFAULT_TRACKERS,
                 deselect: true,
                 strategy: 'sequential',
-                maxWebConns: 30,
-                storeCacheSlots: 200
+                maxWebConns: 50,
+                storeCacheSlots: 500
             };
 
             let settled = false;
@@ -277,31 +277,37 @@ class TorrentEngine {
         const totalPieces = Math.max(1, fileEndPiece - fileStartPiece + 1);
 
         // 1. Critical initial container header / moov atom / EBML headers:
-        // Prioritize first 2% to 5% of the file (min 8 pieces, max 40 pieces) at priority 3
-        const criticalCount = Math.max(8, Math.min(40, Math.ceil(totalPieces * 0.03)));
+        // Prioritize first 4 pieces (up to ~8MB) at critical priority 3 so the player/FFmpeg gets container headers in milliseconds.
+        const criticalCount = Math.max(2, Math.min(4, Math.ceil(totalPieces * 0.02)));
         const headerEnd = Math.min(fileStartPiece + criticalCount - 1, fileEndPiece);
         torrent.select(fileStartPiece, headerEnd, 3);
 
-        // 2. Container index / seek tables / cues: Last 3 to 5 pieces at critical priority 3
-        const indexPieceCount = Math.min(5, totalPieces);
+        // 2. Container index / seek tables / cues: Last 2 pieces at priority 3
+        const indexPieceCount = Math.min(2, totalPieces);
         const indexStart = Math.max(fileStartPiece, fileEndPiece - indexPieceCount + 1);
         torrent.select(indexStart, fileEndPiece, 3);
 
-        // 3. Dynamic Sliding Window around current playback cursor (byteOffset):
-        // - Immediate 15 pieces ahead: Priority 3 (instant frame decoding / zero buffering stall)
-        // - Next 35 pieces ahead: Priority 2 (smooth continuous streaming buffer)
-        // - Remaining file pieces remain at base sequential priority 1
+        // 3. Multi-Tier Concurrent Sliding Window around playback cursor (byteOffset):
+        // - Tier 1 (Immediate Horizon): Current playback piece + 8 pieces ahead at Priority 3 (instant seek & play, zero stall)
+        // - Tier 2 (Multi-Peer Horizon): Next 32 pieces ahead at Priority 2 (distributes parallel piece requests across multiple swarm wires)
+        // - Tier 3 (Predictive Reservoir): Next 64 pieces ahead at Priority 1 (deep background buffer to saturate swarm throughput)
         const currentPiece = Math.floor((file.offset + byteOffset) / pieceLength);
         if (currentPiece <= fileEndPiece) {
             const cursorPiece = Math.max(fileStartPiece, currentPiece);
-            const immediateWindow = 15;
+            const immediateWindow = 8;
             const immediateEnd = Math.min(fileEndPiece, cursorPiece + immediateWindow);
             torrent.select(cursorPiece, immediateEnd, 3);
 
-            const bufferPieces = 35;
-            const bufferEnd = Math.min(fileEndPiece, immediateEnd + bufferPieces);
-            if (bufferEnd > immediateEnd) {
-                torrent.select(immediateEnd + 1, bufferEnd, 2);
+            const multiPeerHorizon = 32;
+            const multiPeerEnd = Math.min(fileEndPiece, immediateEnd + multiPeerHorizon);
+            if (multiPeerEnd > immediateEnd) {
+                torrent.select(immediateEnd + 1, multiPeerEnd, 2);
+            }
+
+            const backgroundHorizon = 64;
+            const reservoirEnd = Math.min(fileEndPiece, multiPeerEnd + backgroundHorizon);
+            if (reservoirEnd > multiPeerEnd) {
+                torrent.select(multiPeerEnd + 1, reservoirEnd, 1);
             }
         }
     }
@@ -311,11 +317,25 @@ class TorrentEngine {
         this.applySlidingWindow(torrent, file, start);
         const stream = file.createReadStream(opts);
         const hash = this.canonicalHash(torrent.infoHash);
+        const pieceLength = torrent.pieceLength || (1024 * 1024);
+        const slideThreshold = pieceLength * 2;
+        let currentOffset = start;
+        let bytesSinceWindowSlide = 0;
+
         if (hash) {
             const sess = this.sessions.get(hash);
             if (sess) {
                 sess.lastActive = Date.now();
-                stream.on('data', () => { sess.lastActive = Date.now(); });
+                stream.on('data', (chunk) => {
+                    sess.lastActive = Date.now();
+                    const len = chunk ? chunk.length : 0;
+                    currentOffset += len;
+                    bytesSinceWindowSlide += len;
+                    if (bytesSinceWindowSlide >= slideThreshold) {
+                        bytesSinceWindowSlide = 0;
+                        this.applySlidingWindow(torrent, file, currentOffset);
+                    }
+                });
             }
         }
         return stream;

@@ -33,6 +33,12 @@ def canonical_hash(magnet_or_hash: str) -> str:
                 pass
     if len(s) == 40 and re.match(r"^[0-9a-fA-F]{40}$", s):
         return s.lower()
+    if len(s) == 32 and re.match(r"^[2-7A-Za-z]{32}$", s):
+        try:
+            return base64.b32decode(s.upper()).hex().lower()
+        except Exception:
+            pass
+    return None
 
 
 def is_direct_streamable(filename_or_title: str) -> bool:
@@ -69,7 +75,6 @@ def is_direct_streamable(filename_or_title: str) -> bool:
         return True
 
     return False
-    return s.lower()
 
 
 async def get_http_session() -> aiohttp.ClientSession:

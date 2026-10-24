@@ -412,6 +412,7 @@ async def resolve_streams(
     season: Optional[int] = None,
     episode: Optional[int] = None,
     media_type: str = "movie",
+    include_cdn: bool = False,
 ) -> StreamResolveResponse:
     """
     Torrentio-grade multi-tracker stream resolver.
@@ -480,8 +481,6 @@ async def resolve_streams(
     for q in targeted_queries[:3]:
         for p in capable_providers:
             tasks.append(_bounded_search(p, q))
-        if media_type == "anime":
-            tasks.append(_bounded_search(get_nyaa_scraper(), q))
 
     # Add Torrentio fast multi-tracker stream task
     torrentio_task = None
@@ -495,9 +494,9 @@ async def resolve_streams(
             )
         )
 
-    # Add Web CDN scraper task if IMDb ID is available
+    # Add Web CDN scraper task if IMDb ID is available and explicitly requested
     cdn_task = None
-    if imdb_id:
+    if imdb_id and include_cdn:
         cdn_task = asyncio.create_task(
             get_web_cdn_scraper().get_streams(
                 imdb_id=imdb_id,

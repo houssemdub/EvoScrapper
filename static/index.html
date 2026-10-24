@@ -6,15 +6,16 @@
   <link rel="icon" type="image/jpeg" href="/static/logo.jpg">
   <title>EvoScrapper // Terminal</title>
 
-  <!-- Fonts -->
+  <!-- Hallmark 2+1 Typography: Space Grotesk (display), Geist (body), JetBrains Mono (data/code) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 
   <!-- Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
-  <!-- Theme -->
+  <!-- Hallmark Locked Design System Tokens & Styles -->
+  <link rel="stylesheet" href="/static/tokens.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -1085,53 +1086,53 @@
   <!-- ═══════════════════════════════════════════════════════════════════ -->
   <div id="player-modal" class="modal-overlay hidden" onclick="if(event.target===this)closePlayerModal()">
     <div class="player-modal-box">
-      <!-- Player Header HUD -->
-      <div class="player-hud-header">
-        <div class="flex items-center gap-2" style="min-width:0; overflow:hidden;">
-          <span class="tag tag-green mono"><i class="fa-solid fa-satellite-dish"></i> P2P STREAM</span>
-          <span id="player-stream-title" class="mono font-bold text-sm" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">EvoPlayer</span>
-          <span id="player-audio-badge" class="tag tag-green mono text-xs"><i class="fa-solid fa-volume-high"></i> Stereo AAC</span>
-          <div id="player-p2p-hud" class="flex items-center gap-1 mono text-xs ml-2">
-            <span class="tag tag-accent"><i class="fa-solid fa-users"></i> <span id="p2p-peers-count">0 Peers</span></span>
-            <span class="tag tag-blue"><i class="fa-solid fa-chart-pie"></i> <span id="p2p-ratio">Direct P2P Ready</span></span>
-          </div>
-        </div>
-        <div class="flex items-center gap-2">
-          <!-- Audio Track Switcher (for multi-audio releases) -->
-          <button id="btn-cycle-audio-track" class="btn btn-sm btn-ghost" onclick="cycleAudioTrack()" title="Switch Audio Track (Track 1, Track 2...)">
-            <i class="fa-solid fa-headphones text-blue"></i>
-            <span id="player-audio-track-badge" class="mono text-xs">Track 1</span>
-          </button>
-          <!-- Subtitle Menu & Sync Controls -->
-          <button id="btn-toggle-subs" class="btn btn-sm btn-ghost" onclick="toggleSubtitleDrawer()" title="Subtitles Menu & Auto-Loader">
-            <i class="fa-solid fa-closed-captioning text-green"></i>
-            <span id="player-active-sub-badge" class="mono text-xs">Subs: Auto</span>
-          </button>
-          <button id="btn-jump-first-cue" class="btn btn-sm btn-ghost hidden" title="Jump straight to first spoken dialogue line" onclick="jumpToFirstCue()">
-            <i class="fa-solid fa-forward-step text-green"></i>
-            <span id="player-first-cue-text" class="mono text-xs">1st Line</span>
-          </button>
-          <button id="btn-sync-subs" class="btn btn-sm btn-ghost" onclick="toggleSubtitleDrawer(true)" title="Subtitle Real-time Sync & Timing">
-            <i class="fa-solid fa-clock text-accent"></i>
-            <span id="player-sync-badge" class="mono text-xs">0.0s</span>
-          </button>
-          <button class="btn btn-sm btn-stream-vlc" onclick="switchPlayerToVlc()" title="Launch external VLC Player in foreground">
-            <i class="fa-solid fa-rocket"></i> Launch in VLC
-          </button>
-          <button id="btn-player-m3u" class="btn btn-sm btn-ghost" onclick="downloadActiveM3u()" title="Download M3U Playlist file for instant VLC / MPV opening">
-            <i class="fa-solid fa-file-arrow-down text-blue"></i> .M3U
-          </button>
-          <button id="btn-player-fullscreen" class="btn btn-icon btn-ghost" onclick="togglePlayerFullscreen()" title="Fullscreen (F)">
-            <i class="fa-solid fa-expand"></i>
-          </button>
-          <button class="btn btn-icon btn-ghost" onclick="closePlayerModal()" title="Close Player (Esc)">
-            <i class="fa-solid fa-xmark"></i>
-          </button>
-        </div>
-      </div>
-
       <!-- Native Video Viewport -->
       <div class="player-video-wrap" id="player-video-wrap" onmousemove="handlePlayerMouseMove()" onmouseleave="handlePlayerMouseLeave()">
+        <!-- Player Header HUD (inside viewport so it remains visible & interactive in fullscreen) -->
+        <div class="player-hud-header">
+          <div class="flex items-center gap-2" style="min-width:0; overflow:hidden;">
+            <span class="tag tag-green mono"><i class="fa-solid fa-satellite-dish"></i> P2P STREAM</span>
+            <span id="player-stream-title" class="mono font-bold text-sm" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">EvoPlayer</span>
+            <span id="player-audio-badge" class="tag tag-green mono text-xs"><i class="fa-solid fa-volume-high"></i> Stereo AAC</span>
+            <div id="player-p2p-hud" class="flex items-center gap-1 mono text-xs ml-2">
+              <span class="tag tag-accent"><i class="fa-solid fa-users"></i> <span id="p2p-peers-count">0 Peers</span></span>
+              <span class="tag tag-blue"><i class="fa-solid fa-chart-pie"></i> <span id="p2p-ratio">Direct P2P Ready</span></span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <!-- Audio Track Switcher (for multi-audio releases) -->
+            <button id="btn-cycle-audio-track" class="btn btn-sm btn-ghost" onclick="cycleAudioTrack()" title="Switch Audio Track (Track 1, Track 2...)">
+              <i class="fa-solid fa-headphones text-blue"></i>
+              <span id="player-audio-track-badge" class="mono text-xs">Track 1</span>
+            </button>
+            <!-- Subtitle Menu & Sync Controls -->
+            <button id="btn-toggle-subs" class="btn btn-sm btn-ghost" onclick="toggleSubtitleDrawer()" title="Subtitles Menu & Auto-Loader">
+              <i class="fa-solid fa-closed-captioning text-green"></i>
+              <span id="player-active-sub-badge" class="mono text-xs">Subs: Auto</span>
+            </button>
+            <button id="btn-jump-first-cue" class="btn btn-sm btn-ghost hidden" title="Jump straight to first spoken dialogue line" onclick="jumpToFirstCue()">
+              <i class="fa-solid fa-forward-step text-green"></i>
+              <span id="player-first-cue-text" class="mono text-xs">1st Line</span>
+            </button>
+            <button id="btn-sync-subs" class="btn btn-sm btn-ghost" onclick="toggleSubtitleDrawer(true)" title="Subtitle Real-time Sync & Timing">
+              <i class="fa-solid fa-clock text-accent"></i>
+              <span id="player-sync-badge" class="mono text-xs">0.0s</span>
+            </button>
+            <button class="btn btn-sm btn-stream-vlc" onclick="switchPlayerToVlc()" title="Launch external VLC Player in foreground">
+              <i class="fa-solid fa-rocket"></i> Launch in VLC
+            </button>
+            <button id="btn-player-m3u" class="btn btn-sm btn-ghost" onclick="downloadActiveM3u()" title="Download M3U Playlist file for instant VLC / MPV opening">
+              <i class="fa-solid fa-file-arrow-down text-blue"></i> .M3U
+            </button>
+            <button id="btn-player-fullscreen" class="btn btn-icon btn-ghost" onclick="togglePlayerFullscreen()" title="Fullscreen (F)">
+              <i class="fa-solid fa-expand"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" onclick="closePlayerModal()" title="Close Player (Esc)">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+        </div>
+
         <!-- Ambient Glow Backing Layer -->
         <div id="player-ambilight-glow" class="player-ambilight-glow"></div>
         <canvas id="player-ambilight-canvas" class="hidden" width="32" height="18"></canvas>
@@ -1654,16 +1655,15 @@
             </div>
           </div>
         </div>
-      </div>
-
-      <!-- Player Footer HUD -->
-      <div class="player-hud-footer">
-        <div class="flex items-center gap-2">
-          <span id="player-swarm-stat"><i class="fa-solid fa-circle-nodes text-green"></i> P2P Swarm Buffering...</span>
-        </div>
-        <div class="flex items-center gap-3 text-dim">
-          <span><i class="fa-solid fa-bolt text-accent"></i> HTTP 206 Byte-Range</span>
-          <span>Space: Play/Pause · ←/→: ±10s · F: Fullscreen · G/H: Sync Subs · V: VLC</span>
+        <!-- Player Footer HUD (inside viewport so telemetry remains visible in fullscreen/theater) -->
+        <div class="player-hud-footer">
+          <div class="flex items-center gap-2">
+            <span id="player-swarm-stat"><i class="fa-solid fa-circle-nodes text-green"></i> P2P Swarm Buffering...</span>
+          </div>
+          <div class="flex items-center gap-3 text-dim">
+            <span><i class="fa-solid fa-bolt text-accent"></i> HTTP 206 Byte-Range</span>
+            <span>Space: Play/Pause · ←/→: ±10s · F: Fullscreen · G/H: Sync Subs · V: VLC</span>
+          </div>
         </div>
       </div>
     </div>

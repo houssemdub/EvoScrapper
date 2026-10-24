@@ -66,7 +66,8 @@ class X1337Provider(BaseProvider):
                 return None, None
 
     async def _do_search(self, query: str, limit: int = 50, **kwargs) -> List[TorrentItem]:
-        endpoint = f"{self.base_url}/sort-search/{query}/seeders/desc/1/"
+        clean_q = urllib.parse.quote(query)
+        endpoint = f"{self.base_url}/sort-search/{clean_q}/seeders/desc/1/"
         html_text = await http_client.get_text(endpoint, use_stealth=True)
 
         # Handle JS redirect challenge if present
@@ -132,11 +133,14 @@ class X1337Provider(BaseProvider):
             if isinstance(res, tuple) and res[0]:
                 info_hash, magnet_uri = res
 
-            effective_id = info_hash or c["id"]
-            effective_magnet = magnet_uri or f"magnet:?xt=urn:btih:{c['id']}&dn={urllib.parse.quote(c['title'])}"
+            # Require valid 40-character infoHash; drop items where details resolution failed
+            if not info_hash or len(info_hash) != 40:
+                continue
+
+            effective_magnet = magnet_uri or f"magnet:?xt=urn:btih:{info_hash}&dn={urllib.parse.quote(c['title'])}"
 
             item = TorrentItem(
-                id=effective_id,
+                id=info_hash,
                 title=c["title"],
                 info_hash=info_hash,
                 magnet_uri=effective_magnet,

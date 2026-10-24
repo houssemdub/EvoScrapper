@@ -73,3 +73,39 @@ async def test_discover_suggestions():
         assert isinstance(anime_suggestions, list)
         assert len(anime_suggestions) > 0
         assert any("naruto" in (s.get("title") or "").lower() for s in anime_suggestions)
+
+
+def test_player_auto_pause_on_external_launch_and_time_increment():
+    """Validates that app.js pauses the web player when launching external desktop players and keeps time incrementing."""
+    js_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static", "app.js")
+    with open(js_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 1. Verify external player launch pauses the video player
+    assert "switchPlayerToExternal" in content
+    assert "video.pause()" in content
+    assert "stopPlayerTicker()" in content
+
+    # Check switchPlayerToExternal pauses
+    ext_idx = content.find("async function switchPlayerToExternal")
+    assert ext_idx != -1
+    ext_chunk = content[ext_idx:ext_idx + 600]
+    assert "video.pause()" in ext_chunk, "switchPlayerToExternal must pause video"
+    assert "updatePlayPauseIcon(false)" in ext_chunk
+
+    # Check launchStreamInVlc pauses
+    vlc_idx = content.find("async function launchStreamInVlc")
+    assert vlc_idx != -1
+    vlc_chunk = content[vlc_idx:vlc_idx + 600]
+    assert "video.pause()" in vlc_chunk, "launchStreamInVlc must pause video"
+
+    # 2. Verify renderCuesToVideo maintains updatePlayerTimeline and does not freeze timer
+    cues_idx = content.find("function renderCuesToVideo")
+    assert cues_idx != -1
+    cues_chunk = content[cues_idx:cues_idx + 1200]
+    assert "updatePlayerTimeline()" in cues_chunk, "renderCuesToVideo must call updatePlayerTimeline() on timeupdate"
+
+    # 3. Verify ticker interval is initialized
+    assert "startPlayerTicker" in content
+    assert "updatePlayerTimeline()" in content
+    assert "formatPlayerDuration" in content

@@ -5,7 +5,7 @@ import logging
 import time
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
-
+import aiohttp
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -28,16 +28,22 @@ class CometNetNode:
     Decentralized P2P Metadata Gossip Node inspired by CometNet.
     Enables peer-to-peer torrent discovery and decentralized multi-provider
     Debrid cache availability sharing without central indexing servers.
+    Supports real-time WebSocket transport across peer mesh and configured relays.
     """
 
-    def __init__(self, node_name: str = "evo-node", private_key: Optional[ed25519.Ed25519PrivateKey] = None):
+    def __init__(
+        self,
+        node_name: str = "evo-node",
+        private_key: Optional[ed25519.Ed25519PrivateKey] = None,
+        relays: Optional[List[str]] = None,
+    ):
         self.node_name = node_name
         self._private_key = private_key or ed25519.Ed25519PrivateKey.generate()
         self._public_key = self._private_key.public_key()
-        
+
         raw_pub = self._public_key.public_bytes(
             encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw
+            format=serialization.PublicFormat.Raw,
         )
         self.public_key_hex = raw_pub.hex()
         self.node_id = hashlib.sha256(raw_pub).hexdigest()
@@ -49,7 +55,14 @@ class CometNetNode:
 
         self.torrent_catalog: Dict[str, Dict[str, Any]] = {}
         self.debrid_cache: Dict[str, Set[str]] = {}
-        self.connected_peers: Dict[str, Any] = {}
+
+        # Networking & WebSocket Mesh State
+        self.relays: List[str] = relays if relays is not None else list(getattr(settings, "COMETNET_RELAYS", []))
+        self._running: bool = False
+        self._background_tasks: List[asyncio.Task] = []
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._outbound_websockets: Set[Any] = set()
+        self._inbound_websockets: Set[Any] = set()
 
     def _canonicalize_payload(self, data: Dict[str, Any]) -> bytes:
         """
@@ -101,7 +114,7 @@ class CometNetNode:
                 return False
 
             peer_pub = ed25519.Ed25519PublicKey.from_public_bytes(bytes.fromhex(sender_pub_hex))
-            
+
             # Reconstruct signable structure exactly
             signable = {
                 "type": msg["type"],
@@ -171,7 +184,7 @@ class CometNetNode:
         trackers: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Creates a signed torrent announcement for broadcast across the gossip network.
+        Creates a signed torrent announcement and fans it out across the gossip network.
         """
         msg = self.create_signed_message(
             msg_type=CometMessageType.TORRENT_ANNOUNCE,
@@ -183,11 +196,12 @@ class CometNetNode:
             },
         )
         self.ingest_message(msg)
+        self._trigger_async_broadcast(msg)
         return msg
 
     def announce_cache(self, info_hash: str, provider: str, cached: bool = True) -> Dict[str, Any]:
         """
-        Creates a signed debrid cache status announcement.
+        Creates a signed debrid cache status announcement and broadcasts to the mesh.
         """
         msg = self.create_signed_message(
             msg_type=CometMessageType.CACHE_ANNOUNCE,
@@ -198,13 +212,209 @@ class CometNetNode:
             },
         )
         self.ingest_message(msg)
+        self._trigger_async_broadcast(msg)
         return msg
+
+    def _trigger_async_broadcast(self, msg: Dict[str, Any]):
+        """Helper to fire broadcast in running event loop without blocking synchronous callers."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.broadcast_signed_message(msg))
+        except RuntimeError:
+            pass
+
+    async def broadcast_signed_message(self, msg: Dict[str, Any], exclude_ws: Optional[Any] = None):
+        """
+        Fans out a signed gossip message to all active inbound and outbound WebSocket peers.
+        """
+        raw_text = json.dumps(msg)
+
+        # Broadcast to outbound relay connections
+        dead_outbound = set()
+        for ws in list(self._outbound_websockets):
+            if ws is exclude_ws:
+                continue
+            try:
+                if not ws.closed:
+                    await ws.send_str(raw_text)
+                else:
+                    dead_outbound.add(ws)
+            except Exception:
+                dead_outbound.add(ws)
+        self._outbound_websockets.difference_update(dead_outbound)
+
+        # Broadcast to inbound client connections
+        dead_inbound = set()
+        for ws in list(self._inbound_websockets):
+            if ws is exclude_ws:
+                continue
+            try:
+                # Starlette / FastAPI WebSocket
+                await ws.send_text(raw_text)
+            except Exception:
+                dead_inbound.add(ws)
+        self._inbound_websockets.difference_update(dead_inbound)
+
+    async def _relay_worker(self, relay_url: str):
+        """
+        Resilient background worker connecting to a remote CometNet relay.
+        Features automatic reconnect, exponential backoff, and gossip exchange.
+        """
+        backoff = 5.0
+        while self._running:
+            try:
+                if not self._session or self._session.closed:
+                    self._session = aiohttp.ClientSession()
+
+                timeout = aiohttp.ClientTimeout(total=None, connect=6.0)
+                async with self._session.ws_connect(relay_url, timeout=timeout) as ws:
+                    self._outbound_websockets.add(ws)
+                    backoff = 5.0  # reset backoff upon successful connection
+                    logger.info(f"[CometNet] Connected to relay: {relay_url}")
+
+                    # Handshake ping
+                    handshake = self.create_signed_message(
+                        CometMessageType.PING,
+                        {"node_name": self.node_name, "version": "3.0"},
+                    )
+                    await ws.send_str(json.dumps(handshake))
+
+                    async for msg in ws:
+                        if not self._running:
+                            break
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                payload = json.loads(msg.data)
+                                if isinstance(payload, dict):
+                                    if self.ingest_message(payload):
+                                        # Forward newly verified message to other connected peers
+                                        await self.broadcast_signed_message(payload, exclude_ws=ws)
+                            except Exception:
+                                pass
+                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"[CometNet] Relay {relay_url} connection error: {e}")
+            finally:
+                pass
+
+            if not self._running:
+                break
+
+            # Sleep with backoff before reconnect
+            try:
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 1.5, 60.0)
+            except asyncio.CancelledError:
+                break
+
+    async def handle_inbound_ws(self, websocket: Any):
+        """
+        Handles an incoming WebSocket peer connection from FastAPI.
+        """
+        await websocket.accept()
+        self._inbound_websockets.add(websocket)
+        try:
+            # Send intro ping
+            intro = self.create_signed_message(
+                CometMessageType.PING,
+                {"node_name": self.node_name, "version": "3.0"},
+            )
+            await websocket.send_text(json.dumps(intro))
+
+            while True:
+                data_text = await websocket.receive_text()
+                try:
+                    payload = json.loads(data_text)
+                    if isinstance(payload, dict):
+                        if self.ingest_message(payload):
+                            await self.broadcast_signed_message(payload, exclude_ws=websocket)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            self._inbound_websockets.discard(websocket)
+
+    async def start(self):
+        """
+        Starts the CometNet mesh networking subsystem and background relay connectors.
+        """
+        if self._running:
+            return
+        self._running = True
+
+        if not self._session or self._session.closed:
+            self._session = aiohttp.ClientSession()
+
+        # Spawn relay workers
+        for relay in self.relays:
+            if relay.startswith("ws://") or relay.startswith("wss://"):
+                task = asyncio.create_task(self._relay_worker(relay))
+                self._background_tasks.append(task)
+
+        logger.info(f"[CometNet] Node started ({self.node_id[:16]}...) with {len(self._background_tasks)} relay workers")
+
+    async def stop(self):
+        """
+        Gracefully stops mesh networking and closes all active sockets.
+        """
+        if not self._running:
+            return
+        self._running = False
+
+        # Cancel background relay workers
+        for task in self._background_tasks:
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
+
+        # Close outbound websockets
+        for ws in list(self._outbound_websockets):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self._outbound_websockets.clear()
+
+        # Close inbound websockets
+        for ws in list(self._inbound_websockets):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self._inbound_websockets.clear()
+
+        # Close aiohttp session
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
+        logger.info("[CometNet] Node stopped cleanly")
 
     def lookup_torrent(self, info_hash: str) -> Optional[Dict[str, Any]]:
         return self.torrent_catalog.get(info_hash.strip().lower())
 
     def lookup_cache(self, info_hash: str) -> Set[str]:
         return self.debrid_cache.get(info_hash.strip().lower(), set())
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Returns node telemetry and mesh diagnostics."""
+        return {
+            "node_id": self.node_id,
+            "node_name": self.node_name,
+            "public_key": self.public_key_hex,
+            "running": self._running,
+            "relays_configured": len(self.relays),
+            "outbound_connections": len(self._outbound_websockets),
+            "inbound_connections": len(self._inbound_websockets),
+            "torrents_indexed": len(self.torrent_catalog),
+            "debrid_cached_entries": len(self.debrid_cache),
+            "seen_messages_count": len(self._seen_messages),
+        }
 
 
 _cometnet_instance: Optional[CometNetNode] = None

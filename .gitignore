@@ -73,3 +73,5 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+.hallmark/

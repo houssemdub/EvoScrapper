@@ -7,6 +7,7 @@ from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 import httpx
 
 from config import settings
+from core.security import validate_outbound_proxy_url
 
 
 class DebridStreamProxy:
@@ -84,7 +85,10 @@ class DebridStreamProxy:
         """
         Initiates a streaming connection to the upstream Debrid CDN.
         Passes through HTTP Range headers and returns an async generator for bytes.
+        Validates target URL against SSRF before connecting.
         """
+        validate_outbound_proxy_url(upstream_url)
+
         headers_to_send: Dict[str, str] = {
             "User-Agent": (incoming_headers or {}).get("user-agent", "EvoScrapper/2.0 (Video Stream Proxy)")
         }

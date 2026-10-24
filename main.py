@@ -16,6 +16,7 @@ from routers import (
     stremio_router,
     subtitles_router,
     torrents_router,
+    cometnet_router,
 )
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -29,6 +30,10 @@ async def lifespan(app: FastAPI):
     print("  [+] EvoScrapper v2.0 is live!", flush=True)
     print(f"  -> Web UI:   {url}", flush=True)
     print(f"  -> API Docs: {url}/docs", flush=True)
+    if not settings.API_KEY:
+        print("  [!] Security Advisory: API_KEY is empty; server running in open mode.", flush=True)
+    if settings.DEBRID_PROXY_SECRET == "evoscrapper-debrid-proxy-secret-key":
+        print("  [!] Security Advisory: DEBRID_PROXY_SECRET is using default placeholder.", flush=True)
     print("=" * 58 + "\n", flush=True)
 
     # Start Node.js WebTorrent streaming micro-daemon
@@ -42,8 +47,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[!] Streaming daemon startup notice: {e}", flush=True)
 
+    # Start CometNet P2P mesh networking node
+    if getattr(settings, "COMETNET_ENABLED", False):
+        try:
+            from core.cometnet import get_cometnet_node
+            await get_cometnet_node().start()
+            print("[+] CometNet P2P metadata mesh listener started", flush=True)
+        except Exception as e:
+            print(f"[!] CometNet startup notice: {e}", flush=True)
+
     yield
     print("[*] EvoScrapper shutting down, closing connection pools...")
+    if getattr(settings, "COMETNET_ENABLED", False):
+        try:
+            from core.cometnet import get_cometnet_node
+            await get_cometnet_node().stop()
+        except Exception:
+            pass
+
     await http_client.close()
     try:
         from core.torrent_streamer import stop_daemon_process
@@ -62,10 +83,15 @@ app = FastAPI(
 )
 
 # CORS configuration
+origins = settings.ALLOWED_ORIGINS
+allow_creds = True
+if "*" in origins and len(origins) == 1:
+    allow_creds = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=origins,
+    allow_credentials=allow_creds,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -82,6 +108,7 @@ app.include_router(discover_router)
 app.include_router(stream_router)
 app.include_router(stremio_router)
 app.include_router(library_router)
+app.include_router(cometnet_router)
 
 
 @app.get("/", tags=["Web UI"])

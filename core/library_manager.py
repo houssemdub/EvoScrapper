@@ -159,6 +159,8 @@ class LibraryManager:
         season: Optional[int] = None,
         episode: Optional[int] = None,
         progress_percent: Optional[int] = None,
+        playback_seconds: Optional[float] = None,
+        duration_seconds: Optional[float] = None,
         status: Optional[str] = None,
     ) -> Optional[LibraryItem]:
         async with self._lock:
@@ -173,9 +175,29 @@ class LibraryManager:
                 item.current_episode = episode
             if progress_percent is not None:
                 item.progress_percent = progress_percent
+            if playback_seconds is not None:
+                item.playback_seconds = playback_seconds
+            if duration_seconds is not None:
+                item.duration_seconds = duration_seconds
+
+            # Track granular per-episode progress for series/anime
+            if season is not None or episode is not None:
+                ep_key = f"s{season or 1}e{episode or 1}"
+                if item.episode_progress is None:
+                    item.episode_progress = {}
+                item.episode_progress[ep_key] = {
+                    "season": season,
+                    "episode": episode,
+                    "progress_percent": progress_percent,
+                    "playback_seconds": playback_seconds,
+                    "duration_seconds": duration_seconds,
+                    "updated_at": time.time(),
+                }
 
             if status and status.lower().strip() in self.VALID_STATUSES:
                 item.status = status.lower().strip()
+            elif progress_percent is not None and progress_percent >= 90 and item.type == "movie":
+                item.status = "completed"
             elif item.status == "plan_to_watch":
                 # Auto-transition to watching if still in plan_to_watch
                 item.status = "watching"

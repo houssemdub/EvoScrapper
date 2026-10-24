@@ -121,11 +121,14 @@ class TorlockProvider(BaseProvider):
             if isinstance(res, tuple) and res[0]:
                 info_hash, magnet_uri = res
 
-            effective_id = info_hash or c["id"]
-            effective_magnet = magnet_uri or f"magnet:?xt=urn:btih:{c['id']}&dn={urllib.parse.quote(c['title'])}"
+            # Require valid 40-character infoHash; drop items where details resolution failed
+            if not info_hash or len(info_hash) != 40:
+                continue
+
+            effective_magnet = magnet_uri or f"magnet:?xt=urn:btih:{info_hash}&dn={urllib.parse.quote(c['title'])}"
 
             item = TorrentItem(
-                id=effective_id,
+                id=info_hash,
                 title=c["title"],
                 info_hash=info_hash,
                 magnet_uri=effective_magnet,

@@ -8,6 +8,9 @@ from core.debrid.base import DebridClient, DebridStreamResult
 from core.debrid.realdebrid import RealDebridClient
 from core.debrid.alldebrid import AllDebridClient
 from core.debrid.torbox import TorboxClient
+from core.debrid.debridlink import DebridLinkClient
+from core.debrid.premiumize import PremiumizeClient
+from core.debrid.pikpak import PikPakClient
 from core.debrid.manager import get_debrid_manager
 
 __all__ = [
@@ -16,5 +19,8 @@ __all__ = [
     "RealDebridClient",
     "AllDebridClient",
     "TorboxClient",
+    "DebridLinkClient",
+    "PremiumizeClient",
+    "PikPakClient",
     "get_debrid_manager",
 ]

@@ -59,7 +59,7 @@ const state = {
     streamFilter: {
       quality: 'all',
       text: '',
-      sort: 'score_desc',
+      sort: 'seeds_desc',
       minSeeds: 0,
     },
   },
@@ -136,48 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
       closeSubModal();
       closeMediaModal();
       closeDiscoverModal();
-      closePlayerModal();
-    } else if (!document.getElementById('player-modal').classList.contains('hidden') && document.activeElement.tagName !== 'INPUT') {
-      if (e.code === 'Space' || e.key === 'k' || e.key === 'K') {
-        e.preventDefault();
-        togglePlayerPlayPause();
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        skipPlayback(-10);
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        skipPlayback(10);
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        adjustPlayerVolume(0.1);
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        adjustPlayerVolume(-0.1);
-      } else if (e.key === 'm' || e.key === 'M') {
-        e.preventDefault();
-        togglePlayerMute();
-      } else if (e.key === 'v' || e.key === 'V') {
-        e.preventDefault();
-        switchPlayerToVlc();
-      } else if (e.key === 'g' || e.key === 'G') {
-        adjustSubtitleSync(-0.1);
-      } else if (e.key === 'h' || e.key === 'H') {
-        adjustSubtitleSync(0.1);
-      } else if (e.key === 'c' || e.key === 'C') {
-        toggleSubtitleDrawer();
-      } else if (e.key === 'f' || e.key === 'F') {
-        e.preventDefault();
-        togglePlayerFullscreen();
-      } else if (e.key === 'j' || e.key === 'J') {
-        e.preventDefault();
-        jumpToFirstCue();
-      } else if (e.key === ']') {
-        e.preventDefault();
-        jumpToNextCue();
-      } else if (e.key === '[') {
-        e.preventDefault();
-        jumpToPrevCue();
-      }
+      // Note: player-modal dismissal via Escape is handled by the dedicated player keyboard controller
     }
   });
 });
@@ -1697,6 +1656,7 @@ function copyMagnet(magnet) {
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
   if (!container) return;
+  syncFullscreenPortal(container, true);
 
   const toast = document.createElement('div');
   const icon = type === 'error'
@@ -1840,8 +1800,18 @@ async function loadDiscoverCatalog(reset = true) {
   if (reset) {
     state.discover.page = 1;
     state.discover.items = [];
-    if (grid) grid.innerHTML = '';
-    if (loading) loading.classList.remove('hidden');
+    if (grid) {
+      grid.innerHTML = Array(12).fill(0).map(() => `
+        <div class="discover-card skeleton-card">
+          <div class="discover-poster-wrap skeleton-box"></div>
+          <div class="discover-info">
+            <div class="skeleton-line" style="width:75%; height:14px; margin-bottom:6px;"></div>
+            <div class="skeleton-line" style="width:45%; height:11px;"></div>
+          </div>
+        </div>
+      `).join('');
+    }
+    if (loading) loading.classList.add('hidden'); // Shimmering skeleton replaces spinner
     if (moreWrap) moreWrap.classList.add('hidden');
     if (moreSpiral) moreSpiral.classList.add('hidden');
     if (moreBtn) moreBtn.classList.remove('hidden');
@@ -2443,7 +2413,7 @@ async function resolveStreamsForCurrentSelection() {
       countLabel.innerText = `${streams.length} streams resolved in ${data.resolved_time_ms}ms`;
     }
 
-    state.discover.streamFilter = { quality: 'all', text: '', sort: 'score_desc', minSeeds: 0 };
+    state.discover.streamFilter = { quality: 'all', text: '', sort: 'seeds_desc', minSeeds: 0 };
     renderStreamFilterAndCards(streams);
   } catch (err) {
     container.innerHTML = `
@@ -2556,8 +2526,8 @@ function renderStreamFilterAndCards(streams) {
           <input type="text" id="streams-text-filter" placeholder="Filter release (e.g. x265, YTS, Sparks)..." oninput="filterStreamCards()">
         </div>
         <select id="streams-sort-select" class="filter-select streams-sort-select" onchange="filterStreamCards()">
+          <option value="seeds_desc" selected>Sort: Seeds (High to Low)</option>
           <option value="score_desc">Sort: Best Rank (Score)</option>
-          <option value="seeds_desc">Sort: Seeds (High to Low)</option>
           <option value="res_desc">Sort: Resolution (4K -> 720p)</option>
           <option value="size_desc">Sort: Size (Largest First)</option>
           <option value="size_asc">Sort: Size (Smallest First)</option>
@@ -3054,15 +3024,19 @@ function renderCuesToVideo(rawCues, offsetSeconds) {
     console.warn('[EvoPlayer] Subtitle track cleanup warning:', err);
   }
 
-  // Bind direct event handlers for instantaneous overlay updates
+  // Bind direct event handlers for instantaneous overlay updates & timeline tracking
   video.ontimeupdate = () => {
-    const active = state.discover.activeStream;
-    const effective = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
-    updateTimelineScrubber(effective);
+    updatePlayerTimeline();
     updateSubtitleOverlay();
   };
-  video.onseeking = updateSubtitleOverlay;
-  video.onseeked = updateSubtitleOverlay;
+  video.onseeking = () => {
+    updatePlayerTimeline();
+    updateSubtitleOverlay();
+  };
+  video.onseeked = () => {
+    updatePlayerTimeline();
+    updateSubtitleOverlay();
+  };
 
   // Force immediate update
   updateSubtitleOverlay();
@@ -3126,6 +3100,55 @@ function togglePlayerFullscreen() {
       document.webkitExitFullscreen();
     }
   }
+}
+
+/**
+ * Safely teleports overlay modals & toast containers into the active fullscreen
+ * element so they render cleanly over the video viewport in HTML5 Fullscreen mode,
+ * and restores them to their original parent when closed or exiting fullscreen.
+ */
+function syncFullscreenPortal(el, isOpen) {
+  if (!el) return;
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!el._origParent) {
+    el._origParent = el.parentElement || document.body;
+  }
+  if (isOpen && fsEl) {
+    if (el.parentElement !== fsEl) {
+      fsEl.appendChild(el);
+    }
+  } else if (!isOpen || !fsEl) {
+    if (el._origParent && el.parentElement !== el._origParent) {
+      el._origParent.appendChild(el);
+    }
+  }
+}
+
+function handleFullscreenChangePortals() {
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  const portalTargets = [
+    document.getElementById('swarm-inspector-modal'),
+    document.getElementById('player-shortcuts-modal'),
+    document.getElementById('torrent-files-modal'),
+    document.getElementById('settings-modal'),
+    document.getElementById('toast-container')
+  ].filter(Boolean);
+
+  portalTargets.forEach((el) => {
+    if (!el._origParent) {
+      el._origParent = el.parentElement || document.body;
+    }
+    const isVisible = el.id === 'toast-container' || !el.classList.contains('hidden');
+    if (fsEl && isVisible) {
+      if (el.parentElement !== fsEl) {
+        fsEl.appendChild(el);
+      }
+    } else {
+      if (el.parentElement !== el._origParent) {
+        el._origParent.appendChild(el);
+      }
+    }
+  });
 }
 
 function setSubtitleSync(seconds) {
@@ -3770,8 +3793,12 @@ function toggleSwarmInspectorModal(open = null) {
   const isHidden = modal.classList.contains('hidden');
   const shouldOpen = open !== null ? open : isHidden;
   modal.classList.toggle('hidden', !shouldOpen);
-  if (shouldOpen && window._lastSwarmSession) {
-    updateSwarmInspectorModal(window._lastSwarmSession);
+  syncFullscreenPortal(modal, shouldOpen);
+  if (shouldOpen) {
+    handlePlayerActivity();
+    if (window._lastSwarmSession) {
+      updateSwarmInspectorModal(window._lastSwarmSession);
+    }
   }
 }
 
@@ -3830,6 +3857,14 @@ async function switchPlayerToExternal(playerName = 'vlc') {
   if (!active) {
     showToast('No active stream to launch in external player', 'error');
     return;
+  }
+
+  // Automatically pause the web player so audio/video does not conflict with desktop player
+  const video = document.getElementById('evo-video-player');
+  if (video && !video.paused) {
+    video.pause();
+    updatePlayPauseIcon(false);
+    stopPlayerTicker();
   }
 
   const pLabel = document.getElementById('player-hud-extplayer-label');
@@ -3963,6 +3998,7 @@ async function toggleSettingsModal(open = null) {
   const isHidden = modal.classList.contains('hidden');
   const shouldOpen = open !== null ? open : isHidden;
   modal.classList.toggle('hidden', !shouldOpen);
+  syncFullscreenPortal(modal, shouldOpen);
   if (shouldOpen) {
     loadAllSettings();
     switchSettingsTab(activeSettingsTab);
@@ -4639,94 +4675,15 @@ function formatHhMmSs(seconds) {
 }
 
 function updateTimelineScrubber(effectiveTime) {
-  // Native controls handle timeline scrubbing directly
-}
-
-function seekPlayer(targetSeconds) {
-  const active = state.discover.activeStream;
-  const video = document.getElementById('evo-video-player');
-  if (!video) return;
-
-  const clamped = Math.max(0, targetSeconds);
-
-  if (active && active.useTransmux) {
-    active.playbackOffset = clamped;
-    const magnetParam = active.magnet ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
-    const trackParam = active.audioTrack ? `&audio_track=${active.audioTrack}` : '&audio_track=0';
-    const startParam = clamped > 0 ? `&start_time=${clamped.toFixed(1)}` : '';
-    const transcodeParam = active.transcodeVideo ? '&transcode_video=true' : '';
-    const epParam = (active.season !== undefined && active.season !== null && active.episode !== undefined && active.episode !== null)
-      ? `&season=${active.season}&episode=${active.episode}`
-      : '';
-    const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.fileIdx}${magnetParam}${trackParam}${startParam}${transcodeParam}${epParam}&audio_boost=1.25`;
-    video.src = newUrl;
-    video.play().catch(() => {});
-    showToast(`Seeking to ${formatHhMmSs(clamped)}...`, 'info');
-  } else {
-    video.currentTime = clamped;
-    if (video.paused) video.play().catch(() => {});
-  }
+  updatePlayerTimeline();
 }
 
 function skipPlayback(deltaSeconds) {
-  const active = state.discover.activeStream;
-  const video = document.getElementById('evo-video-player');
-  if (!video) return;
-  const curEffective = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
-  seekPlayer(curEffective + deltaSeconds);
+  skipPlayerSeconds(deltaSeconds);
 }
 
 function togglePlayerPlayPause() {
-  const video = document.getElementById('evo-video-player');
-  const icon = document.getElementById('hud-play-icon');
-  if (!video) return;
-  if (video.paused) {
-    video.play().then(() => {
-      if (icon) icon.className = 'fa-solid fa-pause';
-    }).catch(() => {});
-  } else {
-    video.pause();
-    if (icon) icon.className = 'fa-solid fa-play';
-  }
-}
-
-function setPlayerVolume(val) {
-  const video = document.getElementById('evo-video-player');
-  const icon = document.getElementById('hud-volume-icon');
-  const slider = document.getElementById('player-volume-slider');
-  const v = Math.max(0, Math.min(1, parseFloat(val)));
-  if (video) {
-    video.volume = v;
-    video.muted = v === 0;
-  }
-  if (slider) slider.value = v;
-  if (icon) {
-    if (v === 0) icon.className = 'fa-solid fa-volume-xmark text-red';
-    else if (v < 0.5) icon.className = 'fa-solid fa-volume-low text-dim';
-    else icon.className = 'fa-solid fa-volume-high text-accent';
-  }
-}
-
-function adjustPlayerVolume(delta) {
-  const video = document.getElementById('evo-video-player');
-  if (!video) return;
-  const newVol = Math.max(0, Math.min(1, video.volume + delta));
-  setPlayerVolume(newVol);
-  showToast(`Volume: ${Math.round(newVol * 100)}%`, 'info');
-}
-
-function togglePlayerMute() {
-  const video = document.getElementById('evo-video-player');
-  if (!video) return;
-  if (video.muted || video.volume === 0) {
-    video.muted = false;
-    setPlayerVolume(video.volume || 1.0);
-    showToast('Unmuted', 'info');
-  } else {
-    video.muted = true;
-    setPlayerVolume(0);
-    showToast('Muted', 'info');
-  }
+  togglePlayerPlay();
 }
 
 function formatPlayerDuration(sec) {
@@ -4753,6 +4710,27 @@ function parseRuntimeToSeconds(str) {
   return 0;
 }
 
+let playerTickerInterval = null;
+
+function startPlayerTicker() {
+  if (playerTickerInterval) clearInterval(playerTickerInterval);
+  playerTickerInterval = setInterval(() => {
+    const video = document.getElementById('evo-video-player');
+    const modal = document.getElementById('player-modal');
+    if (video && modal && !modal.classList.contains('hidden') && !video.paused) {
+      updatePlayerTimeline();
+      updateSubtitleOverlay();
+    }
+  }, 250);
+}
+
+function stopPlayerTicker() {
+  if (playerTickerInterval) {
+    clearInterval(playerTickerInterval);
+    playerTickerInterval = null;
+  }
+}
+
 let playerTimelineInitialized = false;
 function initPlayerTimelineControls() {
   if (playerTimelineInitialized) return;
@@ -4760,6 +4738,39 @@ function initPlayerTimelineControls() {
 
   const container = document.getElementById('player-timeline-container');
   const hoverTime = document.getElementById('player-hover-time');
+  const video = document.getElementById('evo-video-player');
+
+  if (video) {
+    video.addEventListener('timeupdate', () => {
+      updatePlayerTimeline();
+      updateSubtitleOverlay();
+    });
+    video.addEventListener('seeking', () => {
+      updatePlayerTimeline();
+      updateSubtitleOverlay();
+    });
+    video.addEventListener('seeked', () => {
+      updatePlayerTimeline();
+      updateSubtitleOverlay();
+    });
+    video.addEventListener('play', () => {
+      updatePlayPauseIcon(true);
+      startPlayerTicker();
+    });
+    video.addEventListener('playing', () => {
+      updatePlayPauseIcon(true);
+      startPlayerTicker();
+    });
+    video.addEventListener('pause', () => {
+      updatePlayPauseIcon(false);
+      stopPlayerTicker();
+    });
+    video.addEventListener('ended', () => {
+      updatePlayPauseIcon(false);
+      stopPlayerTicker();
+    });
+  }
+
   if (!container) return;
 
   let isDragging = false;
@@ -4870,6 +4881,9 @@ function initPlayerTimelineControls() {
     } else if (e.key === 'e' || e.key === 'E') {
       e.preventDefault();
       togglePlayerEpisodesDrawer();
+    } else if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault();
+      cycleAudioTrack();
     } else if (e.key === 's' || e.key === 'S') {
       e.preventDefault();
       toggleSwarmInspectorModal();
@@ -4935,18 +4949,27 @@ function initPlayerTimelineControls() {
         toggleShortcutsModal(false);
         return;
       }
+      const filesModal = document.getElementById('torrent-files-modal');
+      if (filesModal && !filesModal.classList.contains('hidden')) {
+        closeTorrentFilesModal();
+        return;
+      }
       if (!document.fullscreenElement && !document.webkitFullscreenElement) {
         closePlayerModal();
       }
     }
   });
 
-  // Keep Fullscreen button icon in sync with true fullscreen state
+  // Keep Fullscreen button icon in sync with true fullscreen state & portal modals
   const syncFullscreenIcon = () => {
     const isFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
-    const btn = document.getElementById('btn-hud-fullscreen');
+    handleFullscreenChangePortals();
+    const btns = [
+      document.getElementById('btn-hud-fullscreen'),
+      document.getElementById('btn-player-fullscreen')
+    ].filter(Boolean);
     const wrap = document.getElementById('player-video-wrap');
-    if (btn) {
+    btns.forEach(btn => {
       if (isFs) {
         btn.innerHTML = '<i class="fa-solid fa-compress"></i>';
         btn.title = 'Exit Fullscreen (F)';
@@ -4954,7 +4977,7 @@ function initPlayerTimelineControls() {
         btn.innerHTML = '<i class="fa-solid fa-expand"></i>';
         btn.title = 'Fullscreen (F)';
       }
-    }
+    });
     if (!isFs) {
       clearTimeout(playerIdleTimer);
       if (wrap) wrap.classList.remove('user-idle');
@@ -4965,8 +4988,26 @@ function initPlayerTimelineControls() {
   document.addEventListener('fullscreenchange', syncFullscreenIcon);
   document.addEventListener('webkitfullscreenchange', syncFullscreenIcon);
 
+  // Global activity listener across the entire document (mouse, touch, pointer) for instant wake in fullscreen
+  const handleGlobalPlayerActivity = () => {
+    const modal = document.getElementById('player-modal');
+    if (modal && !modal.classList.contains('hidden')) {
+      handlePlayerActivity();
+    }
+  };
+
+  document.addEventListener('mousemove', handleGlobalPlayerActivity, { passive: true });
+  document.addEventListener('pointermove', handleGlobalPlayerActivity, { passive: true });
+  document.addEventListener('mousedown', handleGlobalPlayerActivity, { passive: true });
+  document.addEventListener('touchstart', handleGlobalPlayerActivity, { passive: true });
+
+  const bottomControls = document.getElementById('player-bottom-controls');
+  if (bottomControls) {
+    bottomControls.addEventListener('mouseenter', handleGlobalPlayerActivity, { passive: true });
+    bottomControls.addEventListener('mousemove', handleGlobalPlayerActivity, { passive: true });
+  }
+
   // Sync Picture-in-Picture button state & Auto-PiP on tab change
-  const video = document.getElementById('evo-video-player');
   if (video) {
     video.addEventListener('enterpictureinpicture', () => {
       const btn = document.getElementById('btn-hud-pip');
@@ -4994,8 +5035,8 @@ function updatePlayerTimeline() {
   if (!video || !active) return;
   if (active.isDraggingTimeline) return;
 
-  // Adopt real video.duration whenever finite and positive
-  if (video.duration && isFinite(video.duration) && video.duration > 0) {
+  // Adopt real video.duration ONLY for native direct streams when video.duration is a true media duration (never overwrite whole video with fragmented chunks)
+  if (!active.useTransmux && video.duration && isFinite(video.duration) && video.duration > 30) {
     active.totalDuration = video.duration;
   }
 
@@ -5006,7 +5047,7 @@ function updatePlayerTimeline() {
     ? active.totalDuration
     : 0;
 
-  if (video.duration && isFinite(video.duration) && video.duration > 0) {
+  if (!active.useTransmux && totalDuration <= 0 && video.duration && isFinite(video.duration) && video.duration > 0) {
     totalDuration = video.duration;
     active.totalDuration = video.duration;
   }
@@ -5103,12 +5144,37 @@ function updatePlayPauseIcon(isPlaying) {
   btn.innerHTML = isPlaying ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>';
 }
 
+let osdTimer = null;
+function showPlayerOsd(iconHtml, text) {
+  let osd = document.getElementById('player-osd-feedback');
+  if (!osd) {
+    const wrap = document.getElementById('player-video-wrap');
+    if (!wrap) return;
+    osd = document.createElement('div');
+    osd.id = 'player-osd-feedback';
+    osd.className = 'player-osd-feedback';
+    wrap.appendChild(osd);
+  }
+  osd.innerHTML = `${iconHtml}<span>${text}</span>`;
+  osd.classList.remove('hidden');
+  osd.classList.add('visible');
+  clearTimeout(osdTimer);
+  osdTimer = setTimeout(() => {
+    osd.classList.remove('visible');
+  }, 900);
+}
+
 function skipPlayerSeconds(delta) {
   const video = document.getElementById('evo-video-player');
   const active = state.discover.activeStream;
   if (!video || !active) return;
   const currentTotal = (active.playbackOffset || 0) + (video.currentTime || 0);
   seekPlayer(currentTotal + delta);
+  if (delta > 0) {
+    showPlayerOsd('<i class="fa-solid fa-forward"></i>', `+${delta}s`);
+  } else {
+    showPlayerOsd('<i class="fa-solid fa-backward"></i>', `${delta}s`);
+  }
 }
 
 function setPlayerVolume(val) {
@@ -5126,6 +5192,9 @@ function adjustPlayerVolume(delta) {
   setPlayerVolume(newVol);
   const slider = document.getElementById('player-volume-slider');
   if (slider) slider.value = newVol;
+  const pct = Math.round(newVol * 100);
+  const icon = newVol === 0 ? '<i class="fa-solid fa-volume-xmark text-red"></i>' : (newVol < 0.5 ? '<i class="fa-solid fa-volume-low text-blue"></i>' : '<i class="fa-solid fa-volume-high text-green"></i>');
+  showPlayerOsd(icon, `${pct}%`);
 }
 
 function togglePlayerMute() {
@@ -5135,6 +5204,12 @@ function togglePlayerMute() {
   const slider = document.getElementById('player-volume-slider');
   if (slider) slider.value = video.muted ? 0 : video.volume;
   updateVolumeIcon();
+  if (video.muted) {
+    showPlayerOsd('<i class="fa-solid fa-volume-xmark text-red"></i>', 'Muted');
+  } else {
+    const pct = Math.round(video.volume * 100);
+    showPlayerOsd('<i class="fa-solid fa-volume-high text-green"></i>', `${pct}%`);
+  }
 }
 
 function updateVolumeIcon() {
@@ -5158,21 +5233,40 @@ function handlePlayerActivity() {
   wrap.classList.remove('user-idle');
   clearTimeout(playerIdleTimer);
 
-  // ONLY hide the bar of the player when in fullscreen mode!
+  // Hide bars when in fullscreen mode or full player modal active
   const isFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
-  if (!isFs) return;
+  const playerModal = document.getElementById('player-modal');
+  const isPlayerOpen = playerModal && !playerModal.classList.contains('hidden');
+  if (!isFs && !isPlayerOpen) return;
 
   const video = document.getElementById('evo-video-player');
   const subDrawer = document.getElementById('player-sub-drawer');
   const epDrawer = document.getElementById('player-episodes-drawer');
   const isDrawerOpen = (subDrawer && !subDrawer.classList.contains('hidden')) ||
                        (epDrawer && !epDrawer.classList.contains('hidden'));
+  const isModalOpen = isDrawerOpen ||
+                      (document.getElementById('swarm-inspector-modal') && !document.getElementById('swarm-inspector-modal').classList.contains('hidden')) ||
+                      (document.getElementById('player-shortcuts-modal') && !document.getElementById('player-shortcuts-modal').classList.contains('hidden')) ||
+                      (document.getElementById('torrent-files-modal') && !document.getElementById('torrent-files-modal').classList.contains('hidden')) ||
+                      (document.getElementById('player-settings-popover') && !document.getElementById('player-settings-popover').classList.contains('hidden'));
 
-  // If video is playing and no drawer is open, show for 3 seconds then auto-hide
-  if (video && !video.paused && !isDrawerOpen) {
+  const bottomControls = document.getElementById('player-bottom-controls');
+  const hudHeader = document.querySelector('.player-hud-header');
+  const isControlsHovered = Boolean(
+    (bottomControls && bottomControls.matches(':hover')) ||
+    (hudHeader && hudHeader.matches(':hover'))
+  );
+
+  // If video is playing and no modal, drawer, or control bar is hovered, show for 3 seconds then auto-hide
+  if (video && !video.paused && !isModalOpen && !isControlsHovered) {
     playerIdleTimer = setTimeout(() => {
       const isStillFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
-      if (isStillFs && video && !video.paused) {
+      const isStillOpen = playerModal && !playerModal.classList.contains('hidden');
+      const isStillHovered = Boolean(
+        (bottomControls && bottomControls.matches(':hover')) ||
+        (hudHeader && hudHeader.matches(':hover'))
+      );
+      if ((isStillFs || isStillOpen) && video && !video.paused && !isStillHovered) {
         wrap.classList.add('user-idle');
         const audioMenu = document.getElementById('player-audio-menu');
         if (audioMenu) audioMenu.classList.add('hidden');
@@ -5229,7 +5323,75 @@ function selectAudioTrack(trackIdx) {
   const menu = document.getElementById('player-audio-menu');
   if (menu) menu.classList.add('hidden');
 
+  const video = document.getElementById('evo-video-player');
   const track = (active.audioTracks || []).find(t => t.track_idx === trackIdx);
+
+  // 1. If native HTMLMediaElement audioTracks API is supported by the browser on the current stream:
+  if (video && video.audioTracks && video.audioTracks.length > 1) {
+    try {
+      let switched = false;
+      for (let i = 0; i < video.audioTracks.length; i++) {
+        const shouldEnable = (i === trackIdx);
+        if (video.audioTracks[i].enabled !== shouldEnable) {
+          video.audioTracks[i].enabled = shouldEnable;
+          switched = true;
+        }
+      }
+      if (switched) {
+        console.log(`[EvoPlayer] Switched audio track natively to index ${trackIdx}`);
+        const langBadge = document.getElementById('player-hud-audio-lang');
+        if (langBadge) langBadge.innerText = track ? (track.language || track.title).toUpperCase() : `Track ${trackIdx + 1}`;
+        const badge = document.getElementById('player-audio-track-badge');
+        if (badge) badge.innerText = track ? track.title : `Track ${trackIdx + 1}`;
+        renderAudioMenu(active.audioTracks);
+        showToast(`Switched to: ${track ? track.title : `Track ${trackIdx + 1}`}`, 'info');
+        return;
+      }
+    } catch (_) {}
+  }
+
+  // 2. If selecting primary Track 0 on a direct-compatible stream, return cleanly to Direct Stream of the whole video
+  const trackCodec = ((track ? track.codec : '') || '').toLowerCase();
+  const trackIsDirectAudio = !trackCodec || ['aac', 'mp3', 'opus', 'vorbis'].includes(trackCodec);
+  const isDirectCompatible = !active.isMkv && !active.transcodeVideo && trackIsDirectAudio && /\b(mp4|m4v|webm|yts|yify|x264|h264|avc)\b/i.test(active.playingFileName || active.title || '');
+  if (trackIdx === 0 && isDirectCompatible && active.useTransmux) {
+    console.log('[EvoPlayer] Reverting to Direct Stream for primary audio track');
+    active.useTransmux = false;
+    const modeBadge = document.getElementById('player-hud-mode-label');
+    if (modeBadge) modeBadge.innerText = 'Direct';
+    updateAudioHudButtons();
+    const curTime = (active.playbackOffset || 0) + (video ? video.currentTime : 0);
+    active.playbackOffset = 0;
+    const epParams = (active.season !== null && active.episode !== null && active.season !== undefined && active.episode !== undefined)
+      ? `&season=${active.season}&episode=${active.episode}`
+      : '';
+    const magnetParam = active.magnet ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
+    const durationParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
+    const fileIdxToUse = (active.playingFileIdx !== undefined && active.playingFileIdx !== null) ? active.playingFileIdx : (active.fileIdx || 0);
+    const directUrl = `/api/v1/stream/play?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${epParams}${magnetParam}${durationParam}`;
+    video.pause();
+    video.src = directUrl;
+    video.load();
+    video.currentTime = curTime;
+    video.play().catch(() => {});
+    const langBadge = document.getElementById('player-hud-audio-lang');
+    if (langBadge) langBadge.innerText = track ? (track.language || track.title).toUpperCase() : `Track ${trackIdx + 1}`;
+    const badge = document.getElementById('player-audio-track-badge');
+    if (badge) badge.innerText = track ? track.title : `Track ${trackIdx + 1}`;
+    renderAudioMenu(active.audioTracks);
+    updatePlayerTimeline();
+    showToast(`Switched to: ${track ? track.title : 'Track 1'}`, 'info');
+    return;
+  }
+
+  // 3. Otherwise, use FFmpeg transmuxer with targeted audio stream mapping while locking whole-video timeline
+  if (!active.useTransmux) {
+    active.useTransmux = true;
+    const modeBadge = document.getElementById('player-hud-mode-label');
+    if (modeBadge) modeBadge.innerText = 'Transmux';
+    updateAudioHudButtons();
+  }
+
   const langBadge = document.getElementById('player-hud-audio-lang');
   if (langBadge) {
     langBadge.innerText = track ? (track.language || track.title).toUpperCase() : `Track ${trackIdx + 1}`;
@@ -5239,7 +5401,6 @@ function selectAudioTrack(trackIdx) {
 
   renderAudioMenu(active.audioTracks);
 
-  const video = document.getElementById('evo-video-player');
   const curTime = (active.playbackOffset || 0) + (video ? video.currentTime : 0);
   seekPlayer(curTime);
   showToast(`Switched to: ${track ? track.title : `Track ${trackIdx + 1}`}`, 'info');
@@ -5258,16 +5419,19 @@ function updateAudioHudButtons() {
     audioBadge.className = active.useTransmux ? 'tag tag-green mono text-xs' : 'tag tag-blue mono text-xs';
   }
   if (trackBadge) {
-    const trk = (active.audioTrack || 0) + 1;
-    trackBadge.innerText = `Track ${trk}`;
+    const curTrk = (active.audioTracks || []).find(t => t.track_idx === (active.audioTrack || 0));
+    trackBadge.innerText = curTrk ? curTrk.title : `Track ${(active.audioTrack || 0) + 1}`;
   }
 }
 
 function cycleAudioTrack() {
   const active = state.discover.activeStream;
   if (!active) return;
-  const count = (active.audioTracks && active.audioTracks.length > 0) ? active.audioTracks.length : 4;
-  const nextTrack = ((active.audioTrack || 0) + 1) % count;
+  if (!active.audioTracks || active.audioTracks.length <= 1) {
+    showToast('Single audio track stream', 'info');
+    return;
+  }
+  const nextTrack = ((active.audioTrack || 0) + 1) % active.audioTracks.length;
   selectAudioTrack(nextTrack);
 }
 
@@ -5338,7 +5502,9 @@ function setPlaybackSpeed(speed, showNotice = false) {
     chip.classList.toggle('active', Math.abs(s - speed) < 0.01);
   });
 
-  if (showNotice) showToast(`Speed: ${speed}x`, 'info');
+  if (showNotice) {
+    showPlayerOsd('<i class="fa-solid fa-gauge-high"></i>', `${speed}x`);
+  }
 }
 
 function adjustPlaybackSpeed(delta) {
@@ -5585,10 +5751,11 @@ function startAmbilightLoop() {
 function toggleShortcutsModal(forceState) {
   const modal = document.getElementById('player-shortcuts-modal');
   if (!modal) return;
-  if (typeof forceState === 'boolean') {
-    modal.classList.toggle('hidden', !forceState);
-  } else {
-    modal.classList.toggle('hidden');
+  const shouldOpen = typeof forceState === 'boolean' ? forceState : modal.classList.contains('hidden');
+  modal.classList.toggle('hidden', !shouldOpen);
+  syncFullscreenPortal(modal, shouldOpen);
+  if (shouldOpen) {
+    handlePlayerActivity();
   }
 }
 
@@ -6990,18 +7157,29 @@ function showPlayerBufferingHUD() {
   const targetBytes = 6.0;
 
   playerBufferingInterval = setInterval(() => {
-    const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
-    let speed = 1.8 + Math.sin(elapsedSec) * 0.6;
-    currentBytes = Math.min(targetBytes, currentBytes + speed * 0.25);
-    const pct = Math.min(96, Math.round((currentBytes / targetBytes) * 100));
-    const remainingSec = Math.max(1, Math.round((targetBytes - currentBytes) / speed));
+    const session = window._lastSwarmSession;
+    const fill = document.getElementById('buffering-progress-fill');
+    const pctBadge = document.getElementById('buffering-pct-badge');
+    const speedLabel = document.getElementById('buffering-speed-label');
 
-    if (fill) fill.style.width = `${pct}%`;
-    if (pctBadge) pctBadge.innerText = `${pct}%`;
-    if (bytesLabel) bytesLabel.innerHTML = `<i class="fa-solid fa-layer-group"></i> ${currentBytes.toFixed(1)} / ${targetBytes.toFixed(1)} MB`;
-    if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${speed.toFixed(1)} MB/s`;
-    if (countdownLabel) countdownLabel.innerHTML = `<i class="fa-solid fa-hourglass-start"></i> Playing in ~${remainingSec}s...`;
-  }, 250);
+    if (session && session.download_speed !== undefined) {
+      const spdNum = session.download_speed || 0;
+      const spdStr = formatSpeed(spdNum);
+      const peers = session.peers || 0;
+      const pct = parseFloat(session.buffer_pct || '0');
+      const displayPct = Math.min(99, Math.max(5, Math.round(pct)));
+
+      if (fill) fill.style.width = `${displayPct}%`;
+      if (pctBadge) pctBadge.innerText = `${displayPct}%`;
+      if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${spdStr} (${peers} peers)`;
+    } else {
+      const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
+      const displayPct = Math.min(92, Math.max(5, Math.round(elapsedSec * 14)));
+      if (fill) fill.style.width = `${displayPct}%`;
+      if (pctBadge) pctBadge.innerText = `${displayPct}%`;
+      if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> Allocating P2P swarm...`;
+    }
+  }, 300);
 }
 
 function hidePlayerBufferingHUD() {
@@ -7045,7 +7223,12 @@ function seekPlayer(targetSeconds) {
   const magnetParam = active.magnet ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
   const audioParam = `&audio_track=${active.audioTrack || 0}&audio_boost=1.25`;
 
-  const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.fileIdx}${audioParam}&start_time=${clamped.toFixed(2)}${transcodeParam}${epParams}${magnetParam}`;
+  const fileIdxToUse = (active.playingFileIdx !== undefined && active.playingFileIdx !== null)
+    ? active.playingFileIdx
+    : (active.fileIdx || 0);
+  const durationParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
+
+  const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${audioParam}&start_time=${clamped.toFixed(2)}${transcodeParam}${epParams}${magnetParam}${durationParam}`;
 
   const spinner = document.getElementById('player-buffering-spinner');
   if (spinner) spinner.classList.remove('hidden');
@@ -7097,11 +7280,25 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   const isMkv = Boolean(isMkvHint) || (title || '').toLowerCase().endsWith('.mkv') || /\b(mkv|matroska)\b/i.test(title);
   const isDirectStream = (!isMkv && /\b(mp4|aac|mp3|yts|yify|x264|h264|avc)\b/i.test(title)) ||
                          (!isMkv && /\b(webm|vp8|vp9|opus)\b/i.test(title));
+  const hasIncompatibleAudio = /\b(ac3|eac3|ddp|dd\+|dts|truehd|atmos|dts-hd|flac|5\.1|7\.1|dual[\s._-]?audio|multi[\s._-]?audio)\b/i.test(title);
+  const isHevcOrUnsupportedVideo = /\b(hevc|x265|h\.?265|10bit|hdr|av1)\b/i.test(title);
 
-  // Default to Direct Stream (RFC 7233 HTTP 206 Partial Content byte ranges).
-  // Streams the whole movie natively, calculates exact file duration, and enables fluid timeline seeking without FFmpeg chunk stalling.
-  const useTransmux = false;
-  const transcodeVideo = false;
+  // Default to Direct Stream (RFC 7233 HTTP 206 Partial Content byte ranges) for direct-compatible media.
+  // For MKV or multi-audio releases requiring downmix/re-muxing, intelligently enable transmux.
+  let useTransmux = false;
+  if (isMkv || hasIncompatibleAudio || isHevcOrUnsupportedVideo || !isDirectStream) {
+    useTransmux = true;
+  }
+  let transcodeVideo = false;
+  if (isHevcOrUnsupportedVideo) {
+    try {
+      const testVid = document.createElement('video');
+      const canPlayHevc = Boolean(testVid.canPlayType && (testVid.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') || testVid.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"')));
+      if (!canPlayHevc) {
+        transcodeVideo = true;
+      }
+    } catch (_) {}
+  }
 
   const numFileIdx = (fileIdx !== null && fileIdx !== undefined && !isNaN(fileIdx)) ? Number(fileIdx) : 0;
   const effectiveFileIdx = numFileIdx > 0 ? numFileIdx : (forceDirectIdx ? numFileIdx : 0);
@@ -7151,6 +7348,24 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             const epTag = (!forceDirectIdx && season !== null && episode !== null) ? ` (S${season}E${episode})` : '';
             titleEl.innerText = `${wData.file}${epTag}`;
           }
+
+          // If swarm discovery reveals an MKV container or incompatible multi-audio format while on direct, transition immediately
+          const fileIsMkv = (wData.file || '').toLowerCase().endsWith('.mkv') || /\b(mkv|matroska)\b/i.test(wData.file || '');
+          const fileIncompatible = fileIsMkv || /\b(ac3|eac3|dts|truehd|atmos|dts-hd|flac|dual[\s._-]?audio)\b/i.test(wData.file || '');
+          if (fileIncompatible && !active.useTransmux) {
+            console.log('[EvoPlayer] Swarm warmup discovered MKV/multi-audio container; switching to transmuxer...');
+            active.useTransmux = true;
+            const modeBadge = document.getElementById('player-hud-mode-label');
+            if (modeBadge) modeBadge.innerText = 'Transmux';
+            updateAudioHudButtons();
+            const transcodeParam = active.transcodeVideo ? '&transcode_video=true' : '';
+            const durParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
+            const targetIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null) ? active.playingFileIdx : effectiveFileIdx;
+            const tUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${targetIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${transcodeParam}${epParams}${magnetParam}${durParam}`;
+            video.src = tUrl;
+            video.load();
+            video.play().catch(() => {});
+          }
         }
       }
     })
@@ -7176,60 +7391,139 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
 
   startSwarmStatsMonitor(infoHash);
 
-  // Probe stream metadata in background for exact duration and audio tracks
-  const probeUrl = `/api/v1/stream/probe?info_hash=${infoHash}&file_idx=${effectiveFileIdx}${epParams}${magnetParam}`;
+  // Probe stream metadata in background for exact duration, multi-audio tracks, and embedded subtitles
+  let probeAttempts = 0;
+  const maxProbeAttempts = 4;
+  if (window._evoProbeTimer) clearTimeout(window._evoProbeTimer);
 
-  setTimeout(() => {
-    fetch(probeUrl)
+  const triggerStreamProbe = () => {
+    const active = state.discover.activeStream;
+    if (!active || active.infoHash !== infoHash) return;
+    if (active.audioTracks && active.audioTracks.length > 0 && active.totalDuration > 0) return;
+
+    probeAttempts++;
+    const probeFileIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null)
+      ? active.playingFileIdx
+      : effectiveFileIdx;
+    const currentProbeUrl = `/api/v1/stream/probe?info_hash=${infoHash}&file_idx=${probeFileIdx}${epParams}${magnetParam}`;
+
+    fetch(currentProbeUrl)
       .then((r) => r.json())
       .then((probe) => {
+        const curActive = state.discover.activeStream;
+        if (!curActive || curActive.infoHash !== infoHash) return;
+
         if (probe && probe.success) {
-          const active = state.discover.activeStream;
-          if (active && active.infoHash === infoHash) {
-            if (probe.duration > 0) {
-              active.totalDuration = probe.duration;
-              const tEl = document.getElementById('player-total-time');
-              if (tEl) tEl.innerText = formatPlayerDuration(probe.duration);
-              updatePlayerTimeline();
+          if (probe.duration > 0) {
+            curActive.totalDuration = probe.duration;
+            const tEl = document.getElementById('player-total-time');
+            if (tEl) tEl.innerText = formatPlayerDuration(probe.duration);
+            updatePlayerTimeline();
+          }
+          if (probe.audio_tracks && probe.audio_tracks.length > 0) {
+            curActive.audioTracks = probe.audio_tracks;
+            renderAudioMenu(probe.audio_tracks);
+            const curTrk = probe.audio_tracks[curActive.audioTrack || 0] || probe.audio_tracks[0];
+            const langBadge = document.getElementById('player-hud-audio-lang');
+            if (langBadge) langBadge.innerText = (curTrk.language || curTrk.title || 'AUDIO').toUpperCase();
+            const trackBadge = document.getElementById('player-audio-track-badge');
+            if (trackBadge) trackBadge.innerText = curTrk.title || `Track ${(curActive.audioTrack || 0) + 1}`;
+          }
+          const qualityBadge = document.getElementById('player-hud-stream-badge');
+          if (qualityBadge) {
+            const vCodec = (probe.video_codec || '1080p').toUpperCase();
+            const aCodec = (probe.audio_codec || 'AAC').toUpperCase();
+            qualityBadge.innerText = `${vCodec} | ${aCodec}`;
+          }
+
+          const vCodecLower = (probe.video_codec || '').toLowerCase();
+          const aCodecLower = (probe.audio_codec || '').toLowerCase();
+
+          // Check if audio needs AAC stereo transmuxing (EAC3, AC3, DTS, TrueHD, Atmos, FLAC)
+          const audioNeedsTransmux = ['ac3', 'eac3', 'dts', 'truehd', 'atmos', 'flac', 'dca', 'mlp'].some(c => aCodecLower.includes(c));
+
+          // Check if browser can decode this video codec directly
+          let browserSupportsVideo = (vCodecLower === 'h264' || vCodecLower === 'avc' || vCodecLower === 'vp8' || vCodecLower === 'vp9');
+          if (vCodecLower === 'hevc' || vCodecLower === 'h265') {
+            try {
+              browserSupportsVideo = Boolean(video.canPlayType && (video.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') || video.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"')));
+            } catch (_) {
+              browserSupportsVideo = false;
             }
-            if (probe.audio_tracks && probe.audio_tracks.length > 0) {
-              active.audioTracks = probe.audio_tracks;
-              renderAudioMenu(probe.audio_tracks);
-              const firstTrack = probe.audio_tracks[0];
-              const langBadge = document.getElementById('player-hud-audio-lang');
-              if (langBadge) langBadge.innerText = (firstTrack.language || 'AUDIO').toUpperCase();
-            }
-            const qualityBadge = document.getElementById('player-hud-stream-badge');
-            if (qualityBadge) {
-              const vCodec = (probe.video_codec || '1080p').toUpperCase();
-              const aCodec = (probe.audio_codec || 'AAC').toUpperCase();
-              qualityBadge.innerText = `${vCodec} | ${aCodec}`;
-            }
-            if (probe.subtitle_tracks && probe.subtitle_tracks.length > 0) {
-              const embeddedSubs = probe.subtitle_tracks.map((st) => {
-                const isBitmap = Boolean(st.is_bitmap) || (st.codec || '').toLowerCase().includes('pgs') || (st.codec || '').toLowerCase().includes('dvd');
-                const badgeTag = isBitmap ? ' (PGS Image)' : '';
-                return {
-                  language: `${st.title || (st.language || 'Sub').toUpperCase()}${badgeTag}`,
-                  lang_code: st.language || 'en',
-                  release_name: `[EMBEDDED] ${st.title || st.language || 'Track'}${badgeTag}`,
-                  provider: isBitmap ? 'Embedded (PGS Image)' : 'Embedded Text',
-                  is_embedded: true,
-                  is_image_based: isBitmap,
-                  download_url: `/api/v1/stream/subtitles?info_hash=${infoHash}&file_idx=${effectiveFileIdx}&sub_index=${st.sub_idx}${epParams}${magnetParam}`,
-                };
-              });
-              const existingOnline = (state.subtitles.availableSubs || []).filter(s => !s.is_embedded);
-              const textEmbedded = embeddedSubs.filter(s => !s.is_image_based);
-              const pgsEmbedded = embeddedSubs.filter(s => s.is_image_based);
-              state.subtitles.availableSubs = [...textEmbedded, ...existingOnline, ...pgsEmbedded];
-              renderSubtitleTracksList(state.subtitles.availableSubs);
-            }
+          }
+          const videoNeedsTranscode = !browserSupportsVideo || vCodecLower === 'hevc' || vCodecLower === 'h265' || vCodecLower === 'mjpeg';
+
+          // If currently playing via direct stream but stream has incompatible audio (e.g. EAC3) or video, upgrade immediately to transmuxer
+          if (!curActive.useTransmux && (audioNeedsTransmux || videoNeedsTranscode)) {
+            console.log(`[EvoPlayer] Probe detected codec (${vCodecLower} / ${aCodecLower}) requiring transmuxer; upgrading pipeline...`);
+            curActive.useTransmux = true;
+            if (videoNeedsTranscode) curActive.transcodeVideo = true;
+            const curPlayTime = (video.currentTime && !isNaN(video.currentTime)) ? video.currentTime : 0;
+            curActive.playbackOffset = curPlayTime;
+            const modeBadge = document.getElementById('player-hud-mode-label');
+            if (modeBadge) modeBadge.innerText = curActive.transcodeVideo ? 'Transcode' : 'Transmux';
+            updateAudioHudButtons();
+
+            const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(1)}` : '';
+            const tcParam = curActive.transcodeVideo ? '&transcode_video=true' : '';
+            const durParam = curActive.totalDuration > 0 ? `&duration=${curActive.totalDuration}` : '';
+            const targetIdx = (curActive.playingFileIdx !== undefined && curActive.playingFileIdx !== null) ? curActive.playingFileIdx : effectiveFileIdx;
+            const upgradedUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${targetIdx}&audio_track=${curActive.audioTrack || 0}&audio_boost=1.25${tcParam}${startParam}${epParams}${magnetParam}${durParam}`;
+            video.src = upgradedUrl;
+            video.load();
+            video.play().catch(() => {});
+          } else if (curActive.useTransmux && !curActive.transcodeVideo && videoNeedsTranscode) {
+            console.log(`[EvoPlayer] Probe detected unsupported video codec (${vCodecLower}); enabling H.264 transcode...`);
+            curActive.transcodeVideo = true;
+            const curPlayTime = (curActive.playbackOffset || 0) + ((video.currentTime && !isNaN(video.currentTime)) ? video.currentTime : 0);
+            curActive.playbackOffset = curPlayTime;
+            const modeBadge = document.getElementById('player-hud-mode-label');
+            if (modeBadge) modeBadge.innerText = 'Transcode';
+            const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(1)}` : '';
+            const durParam = curActive.totalDuration > 0 ? `&duration=${curActive.totalDuration}` : '';
+            const targetIdx = (curActive.playingFileIdx !== undefined && curActive.playingFileIdx !== null) ? curActive.playingFileIdx : effectiveFileIdx;
+            const upgradedUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${targetIdx}&audio_track=${curActive.audioTrack || 0}&audio_boost=1.25&transcode_video=true${startParam}${epParams}${magnetParam}${durParam}`;
+            video.src = upgradedUrl;
+            video.load();
+            video.play().catch(() => {});
+          }
+          if (probe.subtitle_tracks && probe.subtitle_tracks.length > 0) {
+            const embeddedSubs = probe.subtitle_tracks.map((st) => {
+              const isBitmap = Boolean(st.is_bitmap) || (st.codec || '').toLowerCase().includes('pgs') || (st.codec || '').toLowerCase().includes('dvd');
+              const badgeTag = isBitmap ? ' (PGS Image)' : '';
+              return {
+                language: `${st.title || (st.language || 'Sub').toUpperCase()}${badgeTag}`,
+                lang_code: st.language || 'en',
+                release_name: `[EMBEDDED] ${st.title || st.language || 'Track'}${badgeTag}`,
+                provider: isBitmap ? 'Embedded (PGS Image)' : 'Embedded Text',
+                is_embedded: true,
+                is_image_based: isBitmap,
+                download_url: `/api/v1/stream/subtitles?info_hash=${infoHash}&file_idx=${probeFileIdx}&sub_index=${st.sub_idx}${epParams}${magnetParam}`,
+              };
+            });
+            const existingOnline = (state.subtitles.availableSubs || []).filter(s => !s.is_embedded);
+            const textEmbedded = embeddedSubs.filter(s => !s.is_image_based);
+            const pgsEmbedded = embeddedSubs.filter(s => s.is_image_based);
+            state.subtitles.availableSubs = [...textEmbedded, ...existingOnline, ...pgsEmbedded];
+            renderSubtitleTracksList(state.subtitles.availableSubs);
+          }
+        } else {
+          // Swarm cold or downloading initial header: retry with backoff
+          if (probeAttempts < maxProbeAttempts) {
+            window._evoProbeTimer = setTimeout(triggerStreamProbe, probeAttempts * 2000);
           }
         }
       })
-      .catch((err) => console.warn('[EvoPlayer] Probe notice:', err.message));
-  }, 300);
+      .catch((err) => {
+        console.warn('[EvoPlayer] Probe retry notice:', err.message);
+        if (probeAttempts < maxProbeAttempts) {
+          window._evoProbeTimer = setTimeout(triggerStreamProbe, probeAttempts * 2000);
+        }
+      });
+  };
+
+  // Initial probe scheduled after stream setup
+  window._evoProbeTimer = setTimeout(triggerStreamProbe, 1000);
 
   // Set Video Source with duration hint for immediate header injection
   const transcodeParam = transcodeVideo ? '&transcode_video=true' : '';
@@ -7248,20 +7542,27 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
 
   // Video event handlers with instant duration and time sync
   video.onloadedmetadata = () => {
-    if (video.duration && isFinite(video.duration) && video.duration > 0) {
-      if (state.discover.activeStream) state.discover.activeStream.totalDuration = video.duration;
-      const tEl = document.getElementById('player-total-time');
-      if (tEl) tEl.innerText = formatPlayerDuration(video.duration);
+    const active = state.discover.activeStream;
+    if (active && !active.useTransmux && video.duration && isFinite(video.duration) && video.duration > 30) {
+      active.totalDuration = video.duration;
     }
+    const tEl = document.getElementById('player-total-time');
+    const displayDur = (active && active.totalDuration > 0) ? active.totalDuration : (video.duration > 0 && isFinite(video.duration) ? video.duration : 0);
+    if (tEl && displayDur > 0) tEl.innerText = formatPlayerDuration(displayDur);
     updatePlayerTimeline();
+    if (!state.discover.activeStream?.audioTracks?.length) {
+      triggerStreamProbe();
+    }
   };
 
   video.ondurationchange = () => {
-    if (video.duration && isFinite(video.duration) && video.duration > 0) {
-      if (state.discover.activeStream) state.discover.activeStream.totalDuration = video.duration;
-      const tEl = document.getElementById('player-total-time');
-      if (tEl) tEl.innerText = formatPlayerDuration(video.duration);
+    const active = state.discover.activeStream;
+    if (active && !active.useTransmux && video.duration && isFinite(video.duration) && video.duration > 30) {
+      active.totalDuration = video.duration;
     }
+    const tEl = document.getElementById('player-total-time');
+    const displayDur = (active && active.totalDuration > 0) ? active.totalDuration : (video.duration > 0 && isFinite(video.duration) ? video.duration : 0);
+    if (tEl && displayDur > 0) tEl.innerText = formatPlayerDuration(displayDur);
     updatePlayerTimeline();
   };
 
@@ -7294,6 +7595,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   video.oncanplay = () => {
     clearTimeout(waitingDebounceTimer);
     hidePlayerBufferingHUD();
+    if (!state.discover.activeStream?.audioTracks?.length) {
+      triggerStreamProbe();
+    }
   };
   video.onplaying = () => {
     clearTimeout(waitingDebounceTimer);
@@ -7332,6 +7636,18 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
       video.src = fallbackUrl;
       video.load();
       video.play().catch(() => {});
+    } else if (active && active.useTransmux && !active.transcodeVideo) {
+      console.log('[EvoPlayer] Transmux video stream error; falling back to H.264 transcode...');
+      showToast('Transcoding video stream to H.264 for browser compatibility...', 'info');
+      active.transcodeVideo = true;
+      const mBadge = document.getElementById('player-hud-mode-label');
+      if (mBadge) mBadge.innerText = 'Transcode';
+      const curPlayTime = (active.playbackOffset || 0) + (video.currentTime || 0);
+      const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(1)}` : '';
+      const fallbackUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25&transcode_video=true${startParam}${epParams}${magnetParam}${durationParam}`;
+      video.src = fallbackUrl;
+      video.load();
+      video.play().catch(() => {});
     } else {
       showToast('Stream error. Swarm may be starved or file unreachable.', 'error');
       hidePlayerBufferingHUD();
@@ -7345,6 +7661,37 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     checkMuteState();
     updatePlayPauseIcon(true);
     hidePlayerBufferingHUD();
+
+    // Check resume history
+    const historyItem = getWatchHistory().find(h => {
+      if (season !== null && episode !== null) {
+        return h.key === `${(mediaTitle || '').toLowerCase().trim()}_s${season}e${episode}`;
+      }
+      return h.key === (mediaTitle || '').toLowerCase().trim();
+    });
+    if (historyItem && historyItem.currentTime > 15 && historyItem.pct < 90) {
+      const resSec = historyItem.currentTime;
+      const resTimeStr = formatPlayerDuration(resSec);
+      let resumePill = document.getElementById('player-resume-pill');
+      if (!resumePill) {
+        const wrap = document.getElementById('player-video-wrap');
+        if (wrap) {
+          resumePill = document.createElement('div');
+          resumePill.id = 'player-resume-pill';
+          resumePill.className = 'player-resume-pill';
+          wrap.appendChild(resumePill);
+        }
+      }
+      if (resumePill) {
+        resumePill.innerHTML = `
+          <span>Resume from <strong>${resTimeStr}</strong>?</span>
+          <button class="btn btn-xs btn-primary" onclick="seekPlayer(${resSec}); this.parentElement.remove();"><i class="fa-solid fa-play"></i> Resume</button>
+          <button class="btn btn-xs btn-ghost" onclick="this.parentElement.remove();"><i class="fa-solid fa-xmark"></i></button>
+        `;
+        resumePill.classList.remove('hidden');
+        setTimeout(() => { if (resumePill && resumePill.parentElement) resumePill.remove(); }, 8000);
+      }
+    }
   }).catch((err) => {
     console.log('[EvoPlayer] Autoplay notice:', err.message);
     if (unmuteOverlay) unmuteOverlay.classList.remove('hidden');
@@ -7357,9 +7704,18 @@ function toggleStreamPipelineMode() {
   const video = document.getElementById('evo-video-player');
   if (!active || !video) return;
 
-  active.useTransmux = !active.useTransmux;
-  const curTime = (active.useTransmux ? 0 : (active.playbackOffset || 0)) + (video.currentTime || 0);
-  active.playbackOffset = curTime;
+  const curTime = (active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+
+  // Cycle pipeline modes: Direct -> Transmux (Lossless AAC) -> Transcode (H.264 ultra-compatible) -> Direct
+  if (!active.useTransmux) {
+    active.useTransmux = true;
+    active.transcodeVideo = false;
+  } else if (!active.transcodeVideo) {
+    active.transcodeVideo = true;
+  } else {
+    active.useTransmux = false;
+    active.transcodeVideo = false;
+  }
 
   const modeBadge = document.getElementById('player-hud-mode-label');
   const epParams = (active.season !== null && active.episode !== null && active.season !== undefined && active.episode !== undefined)
@@ -7367,35 +7723,66 @@ function toggleStreamPipelineMode() {
     : '';
   const magnetParam = active.magnet ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
   const durationParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
+  const fileIdxToUse = (active.playingFileIdx !== undefined && active.playingFileIdx !== null) ? active.playingFileIdx : (active.fileIdx || 0);
 
   showPlayerBufferingHUD();
 
   if (active.useTransmux) {
-    if (modeBadge) modeBadge.innerText = 'Transmux';
-    showToast('Switched to Compatibility Transmuxer (Stereo AAC)', 'info');
+    active.playbackOffset = curTime;
+    const tcParam = active.transcodeVideo ? '&transcode_video=true' : '';
+    if (modeBadge) modeBadge.innerText = active.transcodeVideo ? 'Transcode' : 'Transmux';
+    showToast(
+      active.transcodeVideo
+        ? 'Switched to H.264 Transcoder (Maximum Compatibility)'
+        : 'Switched to Compatibility Transmuxer (Stereo AAC)',
+      'info'
+    );
     const startParam = curTime > 0 ? `&start_time=${curTime.toFixed(1)}` : '';
-    const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}${startParam}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${epParams}${magnetParam}${durationParam}`;
+    const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${startParam}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${tcParam}${epParams}${magnetParam}${durationParam}`;
     video.src = newUrl;
+    video.load();
+    video.play().catch(() => {});
   } else {
+    active.playbackOffset = 0;
     if (modeBadge) modeBadge.innerText = 'Direct';
     showToast('Switched to Direct Stream (Full Seek & Buffer)', 'info');
-    const newUrl = `/api/v1/stream/play?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}${epParams}${magnetParam}${durationParam}`;
+    const newUrl = `/api/v1/stream/play?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${epParams}${magnetParam}${durationParam}`;
     video.src = newUrl;
+    video.load();
+    video.currentTime = curTime;
+    video.play().catch(() => {});
   }
 
-  video.load();
-  video.currentTime = curTime;
-  video.play().catch(() => {});
+  updateAudioHudButtons();
   updatePlayerTimeline();
 }
 
 function closePlayerModal() {
+  // If the browser is in fullscreen mode, exit fullscreen immediately
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    try {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      }
+    } catch (_) {}
+  }
+
+  stopPlayerTicker();
+  if (window._evoProbeTimer) {
+    clearTimeout(window._evoProbeTimer);
+    window._evoProbeTimer = null;
+  }
   if (window.evoP2PPlayer) {
     window.evoP2PPlayer.destroy();
   }
   stopSwarmStatsMonitor();
   toggleSubtitleDrawer(false);
   togglePlayerSettingsMenu(false);
+  toggleSwarmInspectorModal(false);
+  toggleShortcutsModal(false);
+  closeTorrentFilesModal();
   const modal = document.getElementById('player-modal');
   const video = document.getElementById('evo-video-player');
   const unmuteOverlay = document.getElementById('player-unmute-overlay');
@@ -7412,6 +7799,7 @@ function closePlayerModal() {
 
   if (video) {
     video.pause();
+    updatePlayPauseIcon(false);
     video.onerror = null;
     video.onvolumechange = null;
     video.ontimeupdate = null;
@@ -7446,6 +7834,15 @@ function downloadActiveM3u() {
     showToast('No active stream to export', 'error');
     return;
   }
+
+  // Automatically pause the web player so audio/video does not conflict with desktop player
+  const video = document.getElementById('evo-video-player');
+  if (video && !video.paused) {
+    video.pause();
+    updatePlayPauseIcon(false);
+    stopPlayerTicker();
+  }
+
   const magnetParam = active.magnet ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
   const epParam = (active.season !== undefined && active.season !== null && active.episode !== undefined && active.episode !== null)
     ? `&season=${active.season}&episode=${active.episode}`
@@ -7456,6 +7853,14 @@ function downloadActiveM3u() {
 }
 
 async function launchStreamInVlc(infoHash, fileIdx, title, magnet = '', seasonOverride = null, episodeOverride = null) {
+  // Automatically pause the web player so audio/video does not conflict with desktop player
+  const video = document.getElementById('evo-video-player');
+  if (video && !video.paused) {
+    video.pause();
+    updatePlayPauseIcon(false);
+    stopPlayerTicker();
+  }
+
   const detail = state.discover.activeDetail;
   const isEpisodic = detail && (detail.type === 'series' || detail.type === 'anime' || (detail.seasons && detail.seasons.length > 0));
   const meta = extractCleanMediaInfo(title);
@@ -7507,6 +7912,12 @@ function switchPlayerToVlc() {
     showToast('No active stream to transfer to VLC', 'error');
     return;
   }
+  const video = document.getElementById('evo-video-player');
+  if (video && !video.paused) {
+    video.pause();
+    updatePlayPauseIcon(false);
+    stopPlayerTicker();
+  }
   launchStreamInVlc(current.infoHash, current.fileIdx, current.title, current.magnet || '', current.season, current.episode);
 }
 
@@ -7556,12 +7967,14 @@ async function playDebridStream(infoHash, fileIdx, title, magnet = '', provider 
 
     initPlayerTimelineControls();
     video.onloadedmetadata = () => {
-      if (video.duration && isFinite(video.duration) && video.duration > 0) {
-        if (state.discover.activeStream) state.discover.activeStream.totalDuration = video.duration;
-        const totalEl = document.getElementById('player-total-time');
-        if (totalEl) totalEl.innerText = formatPlayerDuration(video.duration);
-        updatePlayerTimeline();
+      const active = state.discover.activeStream;
+      if (active && !active.useTransmux && video.duration && isFinite(video.duration) && video.duration > 30) {
+        active.totalDuration = video.duration;
       }
+      const totalEl = document.getElementById('player-total-time');
+      const displayDur = (active && active.totalDuration > 0) ? active.totalDuration : (video.duration > 0 && isFinite(video.duration) ? video.duration : 0);
+      if (totalEl && displayDur > 0) totalEl.innerText = formatPlayerDuration(displayDur);
+      updatePlayerTimeline();
     };
     video.ontimeupdate = () => {
       updatePlayerTimeline();
@@ -7632,6 +8045,8 @@ async function openTorrentFilesModal(infoHash, magnet = '', title = '') {
 
   if (filterInput) filterInput.value = '';
   modal.classList.remove('hidden');
+  syncFullscreenPortal(modal, true);
+  handlePlayerActivity();
   if (titleEl) titleEl.innerText = `${title || 'Torrent'} - Files`;
 
   listEl.innerHTML = `
@@ -7737,7 +8152,10 @@ function openActiveStreamFilesModal() {
 
 function closeTorrentFilesModal() {
   const modal = document.getElementById('torrent-files-modal');
-  if (modal) modal.classList.add('hidden');
+  if (modal) {
+    modal.classList.add('hidden');
+    syncFullscreenPortal(modal, false);
+  }
 }
 
 

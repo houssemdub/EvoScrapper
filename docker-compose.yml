@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  evoscrapper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: evoscrapper
+    restart: unless-stopped
+    ports:
+      - "8009:8009"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8009
+      - DEBUG=false
+      - API_KEY=${API_KEY:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - REALDEBRID_API_KEY=${REALDEBRID_API_KEY:-}
+      - ALLDEBRID_API_KEY=${ALLDEBRID_API_KEY:-}
+      - DEBRIDLINK_API_KEY=${DEBRIDLINK_API_KEY:-}
+      - PREMIUMIZE_API_KEY=${PREMIUMIZE_API_KEY:-}
+      - TORBOX_API_KEY=${TORBOX_API_KEY:-}
+      - PIKPAK_USER=${PIKPAK_USER:-}
+      - PIKPAK_PASSWORD=${PIKPAK_PASSWORD:-}
+      - COMETNET_ENABLED=true
+      - STREAM_CACHE_DIR=.stream_cache
+      - MAX_DISK_CACHE_GB=15
+    volumes:
+      - ./data:/app/data
+      - evoscrapper_stream_cache:/app/.stream_cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  evoscrapper_stream_cache:

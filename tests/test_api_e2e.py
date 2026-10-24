@@ -32,6 +32,15 @@ def test_health():
     assert data["app"] == "EvoScrapper"
     assert data["total_providers"] >= 15
     assert len(data["providers"]) >= 15
+    assert "subsystems" in data
+
+
+def test_ready():
+    response = client.get("/ready")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ready"] is True
+    assert data["healthy_providers"] > 0
 
 
 def test_providers_status():
@@ -81,6 +90,7 @@ if __name__ == "__main__":
     test_root_ui()
     test_api_manifest()
     test_health()
+    test_ready()
     test_providers_status()
     test_torrent_search_single_provider()
     test_subtitles_search()

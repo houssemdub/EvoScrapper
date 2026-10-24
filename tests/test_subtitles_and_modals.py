@@ -46,3 +46,36 @@ def test_app_js_subtitle_and_title_helpers():
     assert "LANG_ALIAS_TO_FAMILY" in content
     assert "isVectorDrawingCue" in content
     assert "Blu-ray PGS" in content
+
+
+def test_fullscreen_exit_and_modal_portal_handling():
+    """Verify that closing the player exits browser fullscreen, and child modals portal into fullscreen."""
+    js_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
+    with open(js_path, "r", encoding="utf-8") as f:
+        js_content = f.read()
+
+    css_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "style.css"))
+    with open(css_path, "r", encoding="utf-8") as f:
+        css_content = f.read()
+
+    # 1. closePlayerModal exits fullscreen if active
+    close_idx = js_content.find("function closePlayerModal()")
+    assert close_idx != -1
+    close_chunk = js_content[close_idx:close_idx + 600]
+    assert "document.fullscreenElement" in close_chunk
+    assert "exitFullscreen" in close_chunk
+
+    # 2. syncFullscreenPortal and handleFullscreenChangePortals exist
+    assert "function syncFullscreenPortal" in js_content
+    assert "function handleFullscreenChangePortals" in js_content
+    assert "syncFullscreenPortal(modal, shouldOpen)" in js_content or "syncFullscreenPortal(modal, true)" in js_content
+
+    # 3. CSS rules support .modal-overlay and #toast-container inside fullscreen element
+    assert "#player-video-wrap:fullscreen .modal-overlay" in css_content
+    assert "z-index: 10000000 !important;" in css_content
+    assert "#player-video-wrap:fullscreen #toast-container" in css_content
+
+    # 4. Verify global mousemove listeners and fullscreen active controls rules
+    assert "document.addEventListener('mousemove', handleGlobalPlayerActivity" in js_content
+    assert "#player-video-wrap:fullscreen:not(.user-idle) .player-bottom-controls" in css_content
+    assert "#player-video-wrap:fullscreen.user-idle .player-bottom-controls" in css_content

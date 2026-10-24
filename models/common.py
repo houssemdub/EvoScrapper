@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from .torrent import TorrentItem
 from .subtitle import SubtitleItem
@@ -40,3 +40,4 @@ class HealthResponse(BaseModel):
     total_providers: int
     healthy_providers: int
     providers: List[ProviderHealth]
+    subsystems: Optional[Dict[str, Any]] = None

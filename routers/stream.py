@@ -39,6 +39,7 @@ async def resolve_media_streams(
     season: Optional[int] = Query(None, description="Season number (for series/anime)"),
     episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
     media_type: str = Query("movie", description="Media type: movie, series, or anime"),
+    include_cdn: bool = Query(False, description="Whether to include third-party web CDN embed streams"),
 ):
     """
     Torrentio-style multi-tracker stream resolver.
@@ -51,6 +52,27 @@ async def resolve_media_streams(
         season=season,
         episode=episode,
         media_type=media_type.lower(),
+        include_cdn=include_cdn,
+    )
+
+
+@router.get("/cdn")
+async def get_web_cdn_streams(
+    imdb_id: str = Query(..., description="IMDb ID e.g. tt1375666"),
+    media_type: str = Query("movie", description="Media type: movie or series"),
+    season: Optional[int] = Query(None, description="Season number"),
+    episode: Optional[int] = Query(None, description="Episode number"),
+):
+    """
+    Direct Web CDN / Embed video stream resolver for fallback browser playback.
+    """
+    from scrappers.web_cdn import get_web_cdn_scraper
+    scraper = get_web_cdn_scraper()
+    return await scraper.get_streams(
+        imdb_id=imdb_id,
+        media_type=media_type,
+        season=season,
+        episode=episode,
     )
 
 
@@ -164,6 +186,7 @@ async def stream_transmuxed_torrent(
     file_idx: int = Query(0, description="File index inside torrent"),
     magnet: Optional[str] = Query(None, description="Original magnet link with trackers"),
     start_time: float = Query(0.0, description="Start playback offset in seconds"),
+    duration_slice: Optional[float] = Query(None, description="Optional maximum chunk duration in seconds"),
     transcode_video: bool = Query(False, description="Whether to re-encode video or lossless copy"),
     audio_track: int = Query(0, description="Audio track index (0 = primary audio)"),
     audio_boost: float = Query(1.25, description="Audio volume boost multiplier"),
@@ -182,6 +205,7 @@ async def stream_transmuxed_torrent(
     generator = stream_transmuxed_video(
         source_url_or_path=source_url,
         start_seconds=start_time,
+        duration_seconds=duration_slice,
         transcode_video=transcode_video,
         audio_track=audio_track,
         audio_boost=audio_boost,
@@ -189,6 +213,7 @@ async def stream_transmuxed_torrent(
 
     resp_hdrs = {
         "Content-Type": "video/mp4",
+        "Accept-Ranges": "none",
         "X-EvoStream-Audio": f"track_{audio_track}_boost_{audio_boost}",
     }
     if duration and duration > 0:

@@ -71,6 +71,18 @@ async def test_library_manager():
     assert completed_res.items[0].id == "tt1528406"
     print(f"[+] Filter by status='completed' passed: 1 item found")
 
+    # 6b. Test Movie 90% auto-progression to completed & granular playback offset
+    movie_item = await mgr.update_progress(
+        item_id="tt1375666",
+        progress_percent=92,
+        playback_seconds=8100.0,
+        duration_seconds=8880.0,
+    )
+    assert movie_item is not None
+    assert movie_item.status == "completed"
+    assert movie_item.playback_seconds == 8100.0
+    assert movie_item.duration_seconds == 8880.0
+
     # 7. Remove Inception
     removed = await mgr.remove_item("tt1375666")
     assert removed is True

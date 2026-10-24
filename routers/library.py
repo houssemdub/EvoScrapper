@@ -15,6 +15,8 @@ class ProgressUpdateRequest(BaseModel):
     season: Optional[int] = None
     episode: Optional[int] = None
     progress_percent: Optional[int] = None
+    playback_seconds: Optional[float] = None
+    duration_seconds: Optional[float] = None
     status: Optional[str] = None
 
 
@@ -74,13 +76,15 @@ async def update_library_status(item_id: str, req: StatusUpdateRequest):
 @router.patch("/{item_id}/progress", response_model=LibraryItem)
 async def update_library_progress(item_id: str, req: ProgressUpdateRequest):
     """
-    Updates watching progress (season, episode, completion percentage).
+    Updates watching progress (season, episode, completion percentage, playback timestamps).
     """
     item = await library_manager.update_progress(
         item_id=item_id,
         season=req.season,
         episode=req.episode,
         progress_percent=req.progress_percent,
+        playback_seconds=req.playback_seconds,
+        duration_seconds=req.duration_seconds,
         status=req.status,
     )
     if not item:
