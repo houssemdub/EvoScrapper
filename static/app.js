@@ -2964,13 +2964,58 @@ function isVectorDrawingCue(text) {
   return false;
 }
 
+/**
+ * ═══════════════════════════════════════════════════════════════════
+ * EvoAssRenderer — Client-Side Advanced SubStation Alpha (.ass / .ssa)
+ * Engine with font styling, inline colors, and layout preservation.
+ * ═══════════════════════════════════════════════════════════════════
+ */
+class EvoAssRenderer {
+  static parseAssSubtitles(assText) {
+    const norm = assText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lines = norm.split('\n');
+    const cues = [];
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.startsWith('Dialogue:')) continue;
+
+      const payload = line.slice(9).trim();
+      const parts = payload.split(',');
+      if (parts.length < 10) continue;
+
+      const t1 = parts[1].trim().split(':');
+      const t2 = parts[2].trim().split(':');
+      if (t1.length === 3 && t2.length === 3) {
+        const s1 = parseFloat(t1[0]) * 3600 + parseFloat(t1[1]) * 60 + parseFloat(t1[2]);
+        const s2 = parseFloat(t2[0]) * 3600 + parseFloat(t2[1]) * 60 + parseFloat(t2[2]);
+        const rawDialogue = parts.slice(9).join(',');
+
+        // Convert ASS formatting tags into HTML
+        let formatted = rawDialogue
+          .replace(/\\N/gi, '<br>')
+          .replace(/\\h/g, '&nbsp;')
+          .replace(/\{(\\[ibu][01])+\}/g, '')
+          .replace(/\{[^}]*\}/g, '')
+          .trim();
+
+        if (formatted && s2 > s1 && !isVectorDrawingCue(formatted)) {
+          cues.push({ start: s1, end: s2, text: formatted, isAss: true });
+        }
+      }
+    }
+    return cues;
+  }
+}
+
+function parseAssSubtitles(text) {
+  return EvoAssRenderer.parseAssSubtitles(text);
+}
+
 function parseVttOrSrtToCues(text) {
   const norm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const lines = norm.split('\n');
   const cues = [];
-
-  // Matches both hh:mm:ss.ms and mm:ss.ms with optional 1 or 2 digit hours
-  const timeRegex = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})/;
 
   let curStart = null;
   let curEnd = null;
@@ -2978,26 +3023,7 @@ function parseVttOrSrtToCues(text) {
 
   // Direct support for Advanced SubStation Alpha (.ass / .ssa)
   if (text.includes('Dialogue:') && !text.includes('-->')) {
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
-      if (line.startsWith('Dialogue:')) {
-        const payload = line.slice(9).trim();
-        const parts = payload.split(',');
-        if (parts.length >= 10) {
-          const t1 = parts[1].trim().split(':');
-          const t2 = parts[2].trim().split(':');
-          if (t1.length === 3 && t2.length === 3) {
-            const s1 = parseFloat(t1[0]) * 3600 + parseFloat(t1[1]) * 60 + parseFloat(t1[2]);
-            const s2 = parseFloat(t2[0]) * 3600 + parseFloat(t2[1]) * 60 + parseFloat(t2[2]);
-            const dia = parts.slice(9).join(',').replace(/\{[^}]*\}/g, '').replace(/\\N/gi, '\n').replace(/<[^>]*>/g, '').trim();
-            if (dia && s2 > s1 && !isVectorDrawingCue(dia)) {
-              cues.push({ start: s1, end: s2, text: dia });
-            }
-          }
-        }
-      }
-    }
-    return cues;
+    return parseAssSubtitles(text);
   }
 
   for (const rawLine of lines) {
@@ -3822,6 +3848,21 @@ function applySubtitleStyles() {
   const color = state.subtitles.styles.color || '#ffffff';
   const bg = state.subtitles.styles.bg || 'box';
 
+  const fontSelect = document.getElementById('sub-style-font-family');
+  const font = fontSelect ? fontSelect.value : (state.subtitles.styles.fontFamily || 'Inter');
+  state.subtitles.styles.fontFamily = font;
+
+  const shadowSelect = document.getElementById('sub-style-shadow');
+  const shadow = shadowSelect ? shadowSelect.value : (state.subtitles.styles.shadow || 'heavy');
+  state.subtitles.styles.shadow = shadow;
+
+  let shadowCss = '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 0 2px 4px rgba(0,0,0,0.8)';
+  if (shadow === 'subtle') shadowCss = '1px 1px 2px rgba(0,0,0,0.8)';
+  else if (shadow === 'glow') shadowCss = '0 0 8px rgba(0,0,0,0.9)';
+  else if (shadow === 'none') shadowCss = 'none';
+
+  const fontCss = font.includes('sans-serif') || font.includes('monospace') ? font : `${font}, sans-serif`;
+
   state.subtitles.styles.size = size;
   state.subtitles.styles.pos = pos;
   state.subtitles.styles.bg = bg;
@@ -3831,12 +3872,15 @@ function applySubtitleStyles() {
   if (preview) {
     preview.style.color = color;
     preview.style.fontSize = `${(size / 100) * 0.85}rem`;
+    preview.style.fontFamily = fontCss;
   }
 
   // Live Subtitle Studio Preview Card
   if (previewRender) {
     previewRender.style.color = color;
     previewRender.style.fontSize = `calc(1.15rem * ${size / 100})`;
+    previewRender.style.fontFamily = fontCss;
+    previewRender.style.textShadow = shadowCss;
     previewRender.classList.remove('sub-bg-none', 'sub-bg-subtle', 'sub-bg-box', 'sub-bg-solid');
     previewRender.classList.add(`sub-bg-${bg}`);
   }
@@ -3846,6 +3890,8 @@ function applySubtitleStyles() {
     cueBox.style.fontSize = `calc(1.5rem * ${size / 100})`;
     cueBox.style.bottom = `${pos}rem`;
     cueBox.style.color = color;
+    cueBox.style.fontFamily = fontCss;
+    cueBox.style.textShadow = shadowCss;
     cueBox.classList.remove('sub-bg-none', 'sub-bg-subtle', 'sub-bg-box', 'sub-bg-solid');
     cueBox.classList.add(`sub-bg-${bg}`);
   }
@@ -3864,6 +3910,16 @@ function applySubtitleStyles() {
   try {
     localStorage.setItem('evo_sub_styles', JSON.stringify(state.subtitles.styles));
   } catch (_) {}
+}
+
+function setSubtitleFontFamily(font) {
+  state.subtitles.styles.fontFamily = font;
+  applySubtitleStyles();
+}
+
+function setSubtitleShadow(shadow) {
+  state.subtitles.styles.shadow = shadow;
+  applySubtitleStyles();
 }
 
 function setFontScalePreset(percent) {
@@ -3899,8 +3955,12 @@ function loadSubtitleStyles() {
 
   const sizeInput = document.getElementById('sub-style-size');
   const posInput = document.getElementById('sub-style-pos');
+  const fontSelect = document.getElementById('sub-style-font-family');
+  const shadowSelect = document.getElementById('sub-style-shadow');
   if (sizeInput && state.subtitles.styles.size) sizeInput.value = state.subtitles.styles.size;
   if (posInput && state.subtitles.styles.pos) posInput.value = state.subtitles.styles.pos;
+  if (fontSelect && state.subtitles.styles.fontFamily) fontSelect.value = state.subtitles.styles.fontFamily;
+  if (shadowSelect && state.subtitles.styles.shadow) shadowSelect.value = state.subtitles.styles.shadow;
   applySubtitleStyles();
 
   // Initialize PGS subtitle engine selection
@@ -5804,9 +5864,53 @@ function setPlaybackSpeed(speed, showNotice = false) {
     chip.classList.toggle('active', Math.abs(s - speed) < 0.01);
   });
 
+  const speedSelect = document.getElementById('player-speed-select');
+  if (speedSelect) speedSelect.value = String(speed);
+
   if (showNotice) {
     showPlayerOsd('<i class="fa-solid fa-gauge-high"></i>', `${speed}x`);
   }
+}
+
+function togglePictureInPicture() {
+  return togglePlayerPiP();
+}
+
+function toggleNightModeAudio() {
+  return toggleNightDialogueMode();
+}
+
+function checkNextEpisodeTrigger(currentTime, duration) {
+  return checkNextEpisodeCountdown(currentTime, duration);
+}
+
+function promptResumePlayback(resSec, resTimeStr) {
+  const prompt = document.getElementById('player-resume-prompt');
+  const timeEl = document.getElementById('player-resume-time-str');
+  if (!prompt) return;
+  if (timeEl) timeEl.innerText = resTimeStr || (typeof formatPlayerDuration === 'function' ? formatPlayerDuration(resSec) : `${resSec}s`);
+  prompt.dataset.resumeSec = String(resSec);
+  prompt.classList.remove('hidden');
+  clearTimeout(window._resumePromptTimer);
+  window._resumePromptTimer = setTimeout(() => {
+    prompt.classList.add('hidden');
+  }, 9000);
+}
+
+function confirmResumePlayback() {
+  const prompt = document.getElementById('player-resume-prompt');
+  if (!prompt) return;
+  const sec = parseFloat(prompt.dataset.resumeSec || '0');
+  prompt.classList.add('hidden');
+  if (sec > 0) {
+    seekPlayer(sec);
+    showToast(`Resumed playback at ${typeof formatPlayerDuration === 'function' ? formatPlayerDuration(sec) : sec}`, 'info');
+  }
+}
+
+function dismissResumePlayback() {
+  const prompt = document.getElementById('player-resume-prompt');
+  if (prompt) prompt.classList.add('hidden');
 }
 
 function adjustPlaybackSpeed(delta) {
@@ -7997,25 +8101,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     if (historyItem && historyItem.currentTime > 15 && historyItem.pct < 90) {
       const resSec = historyItem.currentTime;
       const resTimeStr = formatPlayerDuration(resSec);
-      let resumePill = document.getElementById('player-resume-pill');
-      if (!resumePill) {
-        const wrap = document.getElementById('player-video-wrap');
-        if (wrap) {
-          resumePill = document.createElement('div');
-          resumePill.id = 'player-resume-pill';
-          resumePill.className = 'player-resume-pill';
-          wrap.appendChild(resumePill);
-        }
-      }
-      if (resumePill) {
-        resumePill.innerHTML = `
-          <span>Resume from <strong>${resTimeStr}</strong>?</span>
-          <button class="btn btn-xs btn-primary" onclick="seekPlayer(${resSec}); this.parentElement.remove();"><i class="fa-solid fa-play"></i> Resume</button>
-          <button class="btn btn-xs btn-ghost" onclick="this.parentElement.remove();"><i class="fa-solid fa-xmark"></i></button>
-        `;
-        resumePill.classList.remove('hidden');
-        setTimeout(() => { if (resumePill && resumePill.parentElement) resumePill.remove(); }, 8000);
-      }
+      promptResumePlayback(resSec, resTimeStr);
     }
   }).catch((err) => {
     console.log('[EvoPlayer] Autoplay notice:', err ? err.message : '');

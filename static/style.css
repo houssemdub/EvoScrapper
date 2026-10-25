@@ -4594,3 +4594,40 @@ p, span, div {
   transform: translateY(-3px);
   border-color: var(--color-accent) !important;
 }
+
+/* Player Resume Prompt & HUD Controls */
+.player-resume-prompt {
+  position: absolute;
+  top: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  background: rgba(13, 17, 23, 0.92);
+  border: 1px solid var(--color-rule);
+  backdrop-filter: blur(8px);
+  border-radius: var(--radius-md);
+  padding: 0.5rem 1rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+.resume-prompt-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--color-ink);
+}
+.player-speed-select {
+  background: transparent;
+  color: var(--color-ink);
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  padding: 0 0.2rem;
+}
+.player-speed-select option {
+  background: #161b22;
+  color: #fff;
+}

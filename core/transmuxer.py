@@ -59,6 +59,80 @@ def find_ffprobe() -> Optional[str]:
     return None
 
 
+_HW_ENCODERS_CACHE = None
+
+
+def detect_hw_encoders() -> dict:
+    """
+    Detects available hardware-accelerated video encoders (NVENC, QSV, AMF, VAAPI, VideoToolbox).
+    Caches the capability map in memory to eliminate repeated subprocess overhead.
+    """
+    global _HW_ENCODERS_CACHE
+    if _HW_ENCODERS_CACHE is not None:
+        return _HW_ENCODERS_CACHE
+
+    result = {
+        "nvenc": False,
+        "qsv": False,
+        "amf": False,
+        "vaapi": False,
+        "videotoolbox": False,
+        "software": True,
+    }
+
+    ffmpeg_bin = find_ffmpeg() or "ffmpeg"
+    try:
+        proc = subprocess.run(
+            [ffmpeg_bin, "-encoders"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3,
+        )
+        output = (proc.stdout or "").lower()
+        if "h264_nvenc" in output:
+            result["nvenc"] = True
+        if "h264_qsv" in output:
+            result["qsv"] = True
+        if "h264_amf" in output:
+            result["amf"] = True
+        if "h264_vaapi" in output:
+            result["vaapi"] = True
+        if "h264_videotoolbox" in output:
+            result["videotoolbox"] = True
+    except Exception:
+        pass
+
+    _HW_ENCODERS_CACHE = result
+    return result
+
+
+def get_video_encoder(hw_accel: bool = True) -> tuple:
+    """
+    Selects the optimal H.264 video encoder:
+    Uses hardware acceleration (NVENC, QSV, AMF, VideoToolbox) when available,
+    falling back cleanly to CPU libx264.
+    Returns (codec_name, extra_args_list).
+    """
+    if hw_accel:
+        caps = detect_hw_encoders()
+        if caps.get("nvenc"):
+            return "h264_nvenc", ["-preset", "p1", "-tune", "ll", "-pix_fmt", "yuv420p"]
+        elif caps.get("qsv"):
+            return "h264_qsv", ["-preset", "veryfast", "-pix_fmt", "nv12"]
+        elif caps.get("amf"):
+            return "h264_amf", ["-quality", "speed", "-pix_fmt", "yuv420p"]
+        elif caps.get("videotoolbox"):
+            return "h264_videotoolbox", ["-realtime", "1", "-pix_fmt", "yuv420p"]
+
+    return "libx264", [
+        "-preset", "ultrafast",
+        "-tune", "zerolatency",
+        "-pix_fmt", "yuv420p",
+        "-crf", "22",
+    ]
+
+
 async def probe_media_stream(source_url_or_path: str) -> dict:
     """
     Rapidly probes the media stream using ffprobe (2MB probe, 2s analyze).
@@ -263,17 +337,12 @@ async def stream_transmuxed_video(
     else:
         cmd.extend(["-map", "0:a:0?"])
 
-    cmd.extend([
-        "-c:v", "libx264" if transcode_video else "copy",
-    ])
-
     if transcode_video:
-        cmd.extend([
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",
-            "-pix_fmt", "yuv420p",
-            "-crf", "22",
-        ])
+        codec, extra_args = get_video_encoder(hw_accel=True)
+        cmd.extend(["-c:v", codec])
+        cmd.extend(extra_args)
+    else:
+        cmd.extend(["-c:v", "copy"])
 
     # Build audio filter chain:
     # 1. aresample=async=1000 locks audio timestamps to video frames to prevent drift/silence

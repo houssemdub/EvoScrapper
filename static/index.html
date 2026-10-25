@@ -1222,8 +1222,19 @@
         </div>
 
 
+        <!-- Continue Watching Resume Timestamp Prompt Overlay -->
+        <div id="player-resume-prompt" class="player-resume-prompt hidden">
+          <div class="resume-prompt-content">
+            <i class="fa-solid fa-clock-rotate-left text-accent"></i>
+            <span>Resume playback from <strong id="player-resume-time-str">00:00</strong>?</span>
+            <button class="btn btn-xs btn-primary" id="btn-player-confirm-resume" onclick="confirmResumePlayback()"><i class="fa-solid fa-play"></i> Resume</button>
+            <button class="btn btn-xs btn-ghost" onclick="dismissResumePlayback()"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+        </div>
+
         <!-- Netflix-Grade Binge Countdown Next-Episode Card -->
         <div id="player-next-ep-card" class="player-next-ep-card hidden">
+          <div id="player-next-episode-card" class="hidden"></div>
           <div class="next-ep-info">
             <span class="next-ep-badge">UP NEXT</span>
             <div id="next-ep-title" class="next-ep-title">S01E02 · Episode Title</div>
@@ -1329,6 +1340,29 @@
               <button id="btn-hud-episodes" class="player-btn hidden" onclick="togglePlayerEpisodesDrawer()" title="Episodes Drawer (E)">
                 <i class="fa-solid fa-list-ol text-green"></i>
                 <span class="mono text-xs">Episodes</span>
+              </button>
+
+              <!-- Speed Selector Select Dropdown -->
+              <div class="player-hud-pill-wrap" title="Playback Speed">
+                <i class="fa-solid fa-gauge text-accent" style="font-size:0.75rem;"></i>
+                <select id="player-speed-select" class="player-speed-select" onchange="setPlaybackSpeed(parseFloat(this.value))" title="Playback Speed (0.5x - 2.0x)">
+                  <option value="0.5">0.5x</option>
+                  <option value="0.75">0.75x</option>
+                  <option value="1" selected>1.0x</option>
+                  <option value="1.25">1.25x</option>
+                  <option value="1.5">1.5x</option>
+                  <option value="2">2.0x</option>
+                </select>
+              </div>
+
+              <!-- Night Mode Audio Dynamics Compression Button -->
+              <button id="btn-player-night-mode" class="player-btn" onclick="toggleNightModeAudio()" title="Night Dialogue Compression Mode (N)">
+                <i class="fa-solid fa-moon"></i>
+              </button>
+
+              <!-- Picture-in-Picture Button -->
+              <button id="btn-player-pip" class="player-btn" onclick="togglePictureInPicture()" title="Picture-in-Picture Miniplayer (P)">
+                <i class="fa-solid fa-clone"></i>
               </button>
 
               <!-- Quick Settings & Playback Studio Popover -->
@@ -1667,6 +1701,30 @@
                     <button class="btn btn-xs sub-color-swatch" style="background:#00e5ff; color:#000; padding:0.25rem 0.65rem;" onclick="setSubtitleColor('#00e5ff')">Cyan</button>
                     <button class="btn btn-xs sub-color-swatch" style="background:#00e676; color:#000; padding:0.25rem 0.65rem;" onclick="setSubtitleColor('#00e676')">Green</button>
                   </div>
+                </div>
+
+                <!-- Font Family Selector -->
+                <div class="sub-studio-section mb-3">
+                  <label class="text-xs mono font-bold text-bright block mb-1.5"><i class="fa-solid fa-font text-cyan"></i> Font Family:</label>
+                  <select id="sub-style-font-family" class="sub-font-select w-full" onchange="setSubtitleFontFamily(this.value)">
+                    <option value="Inter" selected>Inter (Modern Sans)</option>
+                    <option value="Roboto">Roboto</option>
+                    <option value="Arial">Arial</option>
+                    <option value="Trebuchet MS">Trebuchet MS</option>
+                    <option value="Verdana">Verdana</option>
+                    <option value="Courier New">Courier (Monospace)</option>
+                  </select>
+                </div>
+
+                <!-- Text Shadow / Outline Selector -->
+                <div class="sub-studio-section mb-3">
+                  <label class="text-xs mono font-bold text-bright block mb-1.5"><i class="fa-solid fa-sun text-yellow"></i> Text Outline & Shadow:</label>
+                  <select id="sub-style-shadow" class="sub-font-select w-full" onchange="setSubtitleShadow(this.value)">
+                    <option value="heavy" selected>Heavy Outline (Maximum Contrast)</option>
+                    <option value="subtle">Subtle Drop Shadow</option>
+                    <option value="glow">Soft Glow</option>
+                    <option value="none">None</option>
+                  </select>
                 </div>
 
                 <!-- Bottom Offset Slider -->
