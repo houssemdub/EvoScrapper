@@ -53,7 +53,13 @@ async def test_discover_recommendations_endpoint():
         data = resp.json()
         assert isinstance(data, list)
         assert len(data) > 0
-        assert any(item.get("title") for item in data)
+        titles = [item.get("title", "").lower() for item in data]
+        assert not any("toy story 5" in t for t in titles)
+        assert not any("coyote vs" in t for t in titles)
+        # Verify recommended titles have valid ratings
+        for item in data:
+            if item.get("rating"):
+                assert float(item["rating"]) >= 6.5
 
 
 @pytest.mark.asyncio
@@ -91,3 +97,18 @@ def test_frontend_discover_filter_and_recommendation_elements():
 
     assert "renderDiscoverRecommendations" in js
     assert "searchDiscoverByPerson" in js
+    assert "state.discover.type = 'all'" in js
+
+
+@pytest.mark.asyncio
+async def test_cast_filmography_multi_type_search():
+    """Verify searching for a cast member returns both movies and series."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/discover/search?query=Matthew%20McConaughey&type=all")
+        assert resp.status_code == 200
+        results = resp.json()
+        assert len(results) >= 15
+        types = {r.get("type") for r in results}
+        assert "movie" in types
+        assert "series" in types

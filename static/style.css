@@ -3898,8 +3898,8 @@ p, span, div {
   top: 0;
   right: 0;
   bottom: 0;
-  width: clamp(560px, 38vw, 680px);
-  max-width: min(96vw, 700px);
+  width: clamp(620px, 45vw, 780px);
+  max-width: min(96vw, 820px);
   background: oklch(14% 0.012 165 / 0.96);
   border-left: 1px solid var(--color-rule);
   backdrop-filter: blur(20px);

@@ -2099,7 +2099,8 @@ async function searchDiscoverCatalog() {
   if (moreWrap) moreWrap.classList.add('hidden');
 
   try {
-    const res = await fetch(`/api/v1/discover/search?query=${encodeURIComponent(q)}&type=${state.discover.type}`);
+    const searchType = state.discover.type || 'all';
+    const res = await fetch(`/api/v1/discover/search?query=${encodeURIComponent(q)}&type=${searchType}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const results = await res.json();
     state.discover.items = results;
@@ -2325,6 +2326,10 @@ function searchDiscoverByPerson(name) {
   if (!name) return;
   closeDiscoverModal();
   switchTab('discover');
+  state.discover.type = 'all';
+  document.querySelectorAll('.discover-type-pill').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.type === 'all');
+  });
   const input = document.getElementById('discover-search-input');
   if (input) {
     input.value = name;
@@ -3016,6 +3021,7 @@ function parseVttOrSrtToCues(text) {
   const norm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const lines = norm.split('\n');
   const cues = [];
+  const timeRegex = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})/;
 
   let curStart = null;
   let curEnd = null;
@@ -3639,8 +3645,15 @@ async function applySubtitle(subItem, isAuto = false) {
       vttText = await res.text();
     }
 
-    // Check for empty or bitmap PGS tracks that cannot be parsed as text WebVTT
-    if (vttText.includes('NOTE Empty or unsupported') || vttText.includes('Extraction error') || vttText.includes('NOTE Codec: hdmv_pgs') || vttText.includes('Bitmap PGS Subtitle')) {
+    // Check for bitmap PGS tracks returned by transmuxer that require the PGS engine
+    if (vttText.includes('NOTE Codec: hdmv_pgs') || vttText.includes('Bitmap PGS Subtitle')) {
+      subItem.is_image_based = true;
+      await applySubtitle(subItem, false);
+      return;
+    }
+
+    // Check for empty or corrupted tracks that cannot be parsed
+    if (vttText.includes('NOTE Empty or unsupported') || vttText.includes('Extraction error')) {
       if (isAuto) {
         const matchLang = subItem.lang_code || 'en';
         let textSub = (state.subtitles.availableSubs || []).find(
@@ -3653,14 +3666,10 @@ async function applySubtitle(subItem, isAuto = false) {
       }
 
       state.subtitles.rawCues = [];
-      state.subtitles.activeTrack = subItem;
-      state.subtitles.activeSubName = subItem.release_name || `${subItem.language} (PGS Image)`;
-      state.subtitles.activeLang = subItem.lang_code || 'en';
+      state.subtitles.activeTrack = null;
       renderCuesToVideo([], 0.0);
-      renderSubtitleTracksList(state.subtitles.availableSubs || []);
-
-      if (badge) badge.innerText = 'PGS (VLC Only)';
-      showToast('This embedded subtitle is Blu-ray PGS (image-based). HTML5 browsers cannot render bitmap images. Please select a text subtitle (SRT) from the list below, or launch in VLC.', 'warning');
+      if (badge) badge.innerText = 'Subs: Off';
+      showToast('Embedded subtitle track is empty or unsupported. Please select an online subtitle track.', 'warning');
       return;
     }
 
@@ -5107,8 +5116,15 @@ function initPlayerTimelineControls() {
       startPlayerTicker();
     });
     video.addEventListener('playing', () => {
+      hidePlayerBufferingHUD();
       updatePlayPauseIcon(true);
       startPlayerTicker();
+    });
+    video.addEventListener('canplay', () => {
+      hidePlayerBufferingHUD();
+    });
+    video.addEventListener('loadeddata', () => {
+      hidePlayerBufferingHUD();
     });
     video.addEventListener('pause', () => {
       updatePlayPauseIcon(false);
@@ -7566,15 +7582,25 @@ function showPlayerBufferingHUD() {
       }
     }
 
-    // Auto-dismiss HUD if video has at least 3 seconds of buffer and is ready to render
-    if (video && video.readyState >= 3 && bufferAheadSec >= 2.5) {
+    // Auto-dismiss HUD as soon as video is ready or actively playing
+    if (video && (!video.paused && video.currentTime > 0 || video.readyState >= 3 || (video.readyState >= 2 && bufferAheadSec >= 0.5))) {
       hidePlayerBufferingHUD();
       return;
     }
 
-    // Target 6 seconds of buffer ahead for uninterrupted playback
-    const targetBufferSec = 6.0;
-    const bufferPct = Math.min(99, Math.max(5, Math.round((bufferAheadSec / targetBufferSec) * 100)));
+    // Dynamic buffer percentage: combines buffer ahead, session download progress, and elapsed time
+    let bufferPct = 5;
+    if (bufferAheadSec > 0) {
+      bufferPct = Math.min(99, Math.max(10, Math.round((bufferAheadSec / 2.0) * 100)));
+    } else if (session && session.buffer_pct) {
+      const p = parseFloat(session.buffer_pct);
+      if (!isNaN(p) && p > 0) {
+        bufferPct = Math.min(99, Math.max(12, Math.round(p)));
+      }
+    } else {
+      const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
+      bufferPct = Math.min(92, Math.max(8, Math.round(elapsedSec * 30)));
+    }
 
     if (session && session.download_speed !== undefined) {
       const spdNum = session.download_speed || 0;
@@ -7585,11 +7611,9 @@ function showPlayerBufferingHUD() {
       if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
       if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${spdStr} (${peers} peers)`;
     } else {
-      const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
-      const fallbackPct = Math.min(92, Math.max(5, Math.round(elapsedSec * 20)));
-      if (fill) fill.style.width = `${fallbackPct}%`;
-      if (pctBadge) pctBadge.innerText = `${fallbackPct}%`;
-      if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> Allocating P2P swarm...`;
+      if (fill) fill.style.width = `${bufferPct}%`;
+      if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
+      if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> Connecting P2P swarm...`;
     }
   }, 300);
 }
@@ -7651,6 +7675,7 @@ function seekPlayer(targetSeconds) {
   video.src = newUrl;
   video.load();
   video.play().then(() => {
+    hidePlayerBufferingHUD();
     if (spinner) spinner.classList.add('hidden');
     updatePlayPauseIcon(true);
   }).catch(() => {

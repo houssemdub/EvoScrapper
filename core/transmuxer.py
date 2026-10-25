@@ -227,7 +227,7 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
                 if len(audio_tracks) == 1:
                     audio_codec = cname
             elif stype == "subtitle":
-                is_bitmap = cname.lower() in ("hdmv_pgs_subtitle", "dvd_subtitle", "pgssub", "vobsub")
+                is_bitmap = any(k in cname.lower() for k in ("pgs", "dvd", "vobsub", "xsub", "dvb_subtitle"))
                 subtitle_tracks.append({
                     "sub_idx": len(subtitle_tracks),
                     "stream_idx": s.get("index"),

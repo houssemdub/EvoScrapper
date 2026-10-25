@@ -215,7 +215,8 @@ async def fetch_recommendations(
 ) -> List[DiscoverItem]:
     """
     Fetches curated content recommendations ("More Like This") for a movie, series, or anime.
-    Uses genre-affinity matching against the catalog and filters out the query item itself.
+    Uses director filmography, genre-affinity matching, and quality filters (year <= current_year,
+    rating >= 6.8) to eliminate unreleased/placeholder entries and return acclaimed matching titles.
     """
     if not imdb_id:
         return []
@@ -227,28 +228,78 @@ async def fetch_recommendations(
 
     detail = await fetch_discover_detail(media_type=media_type, imdb_id=imdb_id)
     recs: List[DiscoverItem] = []
-    first_genre = None
+    seen_ids = {imdb_id}
+
+    from datetime import datetime
+    current_year = datetime.now().year
+
+    def _is_valid_rec(item: DiscoverItem) -> bool:
+        if not item or not item.id or item.id in seen_ids:
+            return False
+        try:
+            y = int(str(item.year or "0")[:4])
+        except (ValueError, TypeError):
+            y = 0
+        try:
+            r = float(item.rating or 0)
+        except (ValueError, TypeError):
+            r = 0.0
+        # Discard future unreleased titles (e.g. 2026+ placeholders) or low-rated noise
+        if y > current_year:
+            return False
+        if r > 0 and r < 6.8:
+            return False
+        return True
+
+    # 1. First priority: Director filmography if known
+    if detail and detail.director:
+        try:
+            dir_items = await search_catalog(detail.director, media_type=media_type)
+            for it in dir_items:
+                if _is_valid_rec(it):
+                    seen_ids.add(it.id)
+                    recs.append(it)
+                    if len(recs) >= limit:
+                        break
+        except Exception:
+            pass
+
+    # 2. Second priority: Matching genre catalogs (preferring Sci-Fi, Mystery, Thriller, Drama, etc.)
+    genres_to_try = []
     if detail and detail.genres:
-        first_genre = detail.genres[0]
+        distinctive = [g for g in detail.genres if g.lower() in ("sci-fi", "thriller", "mystery", "crime", "action", "fantasy", "animation")]
+        others = [g for g in detail.genres if g not in distinctive]
+        genres_to_try = distinctive + others
 
-    # First attempt: same media type and primary genre
-    if first_genre:
-        cat_resp = await fetch_catalog(media_type=media_type, catalog="top", genre=first_genre, page=1)
-        for it in cat_resp.items:
-            if it.id != imdb_id and not any(r.id == it.id for r in recs):
-                recs.append(it)
-                if len(recs) >= limit:
-                    break
+    for g in genres_to_try:
+        if len(recs) >= limit:
+            break
+        try:
+            cat_resp = await fetch_catalog(media_type=media_type, catalog="top", genre=g, page=1)
+            for it in cat_resp.items:
+                if _is_valid_rec(it):
+                    seen_ids.add(it.id)
+                    recs.append(it)
+                    if len(recs) >= limit:
+                        break
+        except Exception:
+            pass
 
-    # Second attempt: top catalog for this media type if still need more
+    # 3. Third priority: Top catalog for this media type if still need more
     if len(recs) < limit:
-        top_resp = await fetch_catalog(media_type=media_type, catalog="top", genre=None, page=1)
-        for it in top_resp.items:
-            if it.id != imdb_id and not any(r.id == it.id for r in recs):
-                recs.append(it)
-                if len(recs) >= limit:
-                    break
+        try:
+            top_resp = await fetch_catalog(media_type=media_type, catalog="top", genre=None, page=1)
+            for it in top_resp.items:
+                if _is_valid_rec(it):
+                    seen_ids.add(it.id)
+                    recs.append(it)
+                    if len(recs) >= limit:
+                        break
+        except Exception:
+            pass
 
+    # Sort final recommendations by rating descending for highest quality presentation
+    recs.sort(key=lambda x: float(x.rating or 0), reverse=True)
     recs = recs[:limit]
     if recs:
         await cache.set(cache_key, recs, ttl=21600)  # 6 hour TTL
@@ -418,68 +469,69 @@ async def search_catalog(
     elif media_type in ("movie", "series"):
         types_to_search = [media_type]
     else:
-        types_to_search = ["series", "movie"]
+        types_to_search = ["movie", "series"]
 
     seen_ids = set()
     for t in types_to_search:
-        try:
-            endpoint = f"https://v3-cinemeta.strem.io/catalog/{t}/top/search={clean_q}.json"
-            res = await http_client.get_json(endpoint, timeout=4.5)
-            metas = (res.get("metas") or []) if isinstance(res, dict) else []
-            for m in metas:
-                imdb_id = m.get("imdb_id") or m.get("id")
-                if not imdb_id or not str(imdb_id).startswith("tt"):
-                    continue
-                if str(imdb_id) in seen_ids:
-                    continue
-                seen_ids.add(str(imdb_id))
+        # Query both top and imdbRating search feeds for comprehensive filmography coverage
+        for cat in ("top", "imdbRating"):
+            try:
+                endpoint = f"https://v3-cinemeta.strem.io/catalog/{t}/{cat}/search={clean_q}.json"
+                res = await http_client.get_json(endpoint, timeout=4.5)
+                metas = (res.get("metas") or []) if isinstance(res, dict) else []
+                for m in metas:
+                    imdb_id = m.get("imdb_id") or m.get("id")
+                    if not imdb_id or not str(imdb_id).startswith("tt"):
+                        continue
+                    if str(imdb_id) in seen_ids:
+                        continue
+                    seen_ids.add(str(imdb_id))
 
-                item_type = m.get("type") or t
-                if media_type == "anime":
-                    item_type = "anime"
+                    item_type = m.get("type") or t
+                    if media_type == "anime":
+                        item_type = "anime"
 
-                items.append(
-                    DiscoverItem(
-                        id=str(imdb_id),
-                        title=m.get("name") or clean_q,
-                        type=item_type,
-                        year=str(m.get("year")) if m.get("year") else None,
-                        poster=_normalize_poster(m.get("poster")),
-                        backdrop=m.get("background"),
-                        rating=str(m.get("imdbRating")) if m.get("imdbRating") else None,
-                        genres=m.get("genres") or [],
-                        description=m.get("description"),
-                    )
-                )
-        except Exception:
-            pass
-
-    # Fallback to IMDb suggestions if Cinemeta search had no results
-    if not items:
-        try:
-            slug = re.sub(r"[^a-zA-Z0-9\s]", "", clean_q).strip().lower().replace(" ", "_")
-            if slug:
-                endpoint = f"https://v3.sg.media-imdb.com/suggestion/x/{slug}.json"
-                data = await http_client.get_json(endpoint, timeout=3.5)
-                entries = (data.get("d") or []) if isinstance(data, dict) else []
-                for it in entries:
-                    entry_id = it.get("id") or ""
-                    if entry_id.startswith("tt") and entry_id not in seen_ids:
-                        seen_ids.add(entry_id)
-                        img = it.get("i", {}).get("imageUrl") if isinstance(it.get("i"), dict) else None
-                        inferred = "anime" if media_type == "anime" else ("movie" if it.get("q") == "feature" else "series")
-                        items.append(
-                            DiscoverItem(
-                                id=entry_id,
-                                title=it.get("l") or clean_q,
-                                type=inferred,
-                                year=str(it.get("y")) if it.get("y") else None,
-                                poster=img,
-                                description=f"Starring: {it.get('s', '')}",
-                            )
+                    items.append(
+                        DiscoverItem(
+                            id=str(imdb_id),
+                            title=m.get("name") or clean_q,
+                            type=item_type,
+                            year=str(m.get("year")) if m.get("year") else None,
+                            poster=_normalize_poster(m.get("poster")),
+                            backdrop=m.get("background"),
+                            rating=str(m.get("imdbRating")) if m.get("imdbRating") else None,
+                            genres=m.get("genres") or [],
+                            description=m.get("description"),
                         )
-        except Exception:
-            pass
+                    )
+            except Exception:
+                pass
+
+    # Augment with IMDb suggestions for comprehensive filmography and cast results
+    try:
+        slug = re.sub(r"[^a-zA-Z0-9\s]", "", clean_q).strip().lower().replace(" ", "_")
+        if slug:
+            endpoint = f"https://v3.sg.media-imdb.com/suggestion/x/{slug}.json"
+            data = await http_client.get_json(endpoint, timeout=3.5)
+            entries = (data.get("d") or []) if isinstance(data, dict) else []
+            for it in entries:
+                entry_id = it.get("id") or ""
+                if entry_id.startswith("tt") and entry_id not in seen_ids:
+                    seen_ids.add(entry_id)
+                    img = it.get("i", {}).get("imageUrl") if isinstance(it.get("i"), dict) else None
+                    inferred = "anime" if media_type == "anime" else ("movie" if it.get("q") == "feature" else "series")
+                    items.append(
+                        DiscoverItem(
+                            id=entry_id,
+                            title=it.get("l") or clean_q,
+                            type=inferred,
+                            year=str(it.get("y")) if it.get("y") else None,
+                            poster=img,
+                            description=f"Starring: {it.get('s', '')}",
+                        )
+                    )
+    except Exception:
+        pass
 
     if items:
         await cache.set(cache_key, items, ttl=3600)  # 1 hour
