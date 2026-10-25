@@ -71,6 +71,10 @@ class LibraryManager:
             counts["all"] = len(self._items)
 
             for item in self._items.values():
+                # Self-heal missing poster for IMDb titles using Metahub CDN
+                if not item.poster and item.id and item.id.startswith("tt"):
+                    item.poster = f"https://images.metahub.space/poster/medium/{item.id}/img"
+
                 if item.status in counts:
                     counts[item.status] += 1
 
@@ -91,7 +95,10 @@ class LibraryManager:
     async def get_item(self, item_id: str) -> Optional[LibraryItem]:
         async with self._lock:
             await self._load_if_needed()
-            return self._items.get(item_id)
+            item = self._items.get(item_id)
+            if item and not item.poster and item.id and item.id.startswith("tt"):
+                item.poster = f"https://images.metahub.space/poster/medium/{item.id}/img"
+            return item
 
     async def upsert_item(self, item: LibraryItem) -> LibraryItem:
         async with self._lock:
@@ -102,9 +109,20 @@ class LibraryManager:
             if existing:
                 item.created_at = existing.created_at
                 item.updated_at = now
+                if not item.poster and existing.poster:
+                    item.poster = existing.poster
+                if not item.backdrop and existing.backdrop:
+                    item.backdrop = existing.backdrop
+                if not item.year and existing.year:
+                    item.year = existing.year
+                if not item.rating and existing.rating:
+                    item.rating = existing.rating
             else:
                 item.created_at = now
                 item.updated_at = now
+
+            if not item.poster and item.id and item.id.startswith("tt"):
+                item.poster = f"https://images.metahub.space/poster/medium/{item.id}/img"
 
             if item.status not in self.VALID_STATUSES:
                 item.status = "plan_to_watch"
@@ -125,9 +143,20 @@ class LibraryManager:
                 if existing:
                     item.created_at = existing.created_at
                     item.updated_at = now
+                    if not item.poster and existing.poster:
+                        item.poster = existing.poster
+                    if not item.backdrop and existing.backdrop:
+                        item.backdrop = existing.backdrop
+                    if not item.year and existing.year:
+                        item.year = existing.year
+                    if not item.rating and existing.rating:
+                        item.rating = existing.rating
                 else:
                     item.created_at = now
                     item.updated_at = now
+
+                if not item.poster and item.id and item.id.startswith("tt"):
+                    item.poster = f"https://images.metahub.space/poster/medium/{item.id}/img"
 
                 if item.status not in self.VALID_STATUSES:
                     item.status = "plan_to_watch"

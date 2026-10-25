@@ -4430,6 +4430,12 @@ function loadAllSettings() {
   const skipintroChk = document.getElementById('settings-toggle-skipintro');
   if (skipintroChk) skipintroChk.checked = s.skip_intro !== false;
 
+  const shelfContinueChk = document.getElementById('settings-toggle-shelf-continue');
+  if (shelfContinueChk) shelfContinueChk.checked = s.shelf_continue !== false && localStorage.getItem('evoscrapper_setting_show_continue') !== '0';
+
+  const shelfBookmarksChk = document.getElementById('settings-toggle-shelf-bookmarks');
+  if (shelfBookmarksChk) shelfBookmarksChk.checked = s.shelf_bookmarks !== false && localStorage.getItem('evoscrapper_setting_show_bookmarks') !== '0';
+
   // 2. APIs & Scrapers
   const cinemetaInput = document.getElementById('settings-cinemeta-url');
   if (cinemetaInput) cinemetaInput.value = s.cinemeta_url || 'https://v3-cinemeta.strem.io';
@@ -4518,11 +4524,17 @@ function saveAndApplyAllSettings() {
     ambilight_blur: ambilightBlur,
     autoplay_next: autoplay,
     skip_intro: skipintro,
-    auto_purge_cache: autopurge
+    auto_purge_cache: autopurge,
+    shelf_continue: document.getElementById('settings-toggle-shelf-continue')?.checked ?? true,
+    shelf_bookmarks: document.getElementById('settings-toggle-shelf-bookmarks')?.checked ?? true
   };
 
   try {
     localStorage.setItem('evo_advanced_settings', JSON.stringify(config));
+    localStorage.setItem('evoscrapper_setting_show_continue', config.shelf_continue ? '1' : '0');
+    localStorage.setItem('evoscrapper_setting_show_bookmarks', config.shelf_bookmarks ? '1' : '0');
+    renderContinueWatchingShelf();
+    renderBookmarksShelf();
   } catch (_) {}
 
   // Apply to live video player if active
@@ -4597,6 +4609,13 @@ function handleSettingChange(key, value) {
   s[key] = value;
   try {
     localStorage.setItem('evo_advanced_settings', JSON.stringify(s));
+    if (key === 'shelf_continue') {
+      localStorage.setItem('evoscrapper_setting_show_continue', value ? '1' : '0');
+      renderContinueWatchingShelf();
+    } else if (key === 'shelf_bookmarks') {
+      localStorage.setItem('evoscrapper_setting_show_bookmarks', value ? '1' : '0');
+      renderBookmarksShelf();
+    }
   } catch (_) {}
 }
 
@@ -6557,6 +6576,11 @@ function recordWatchProgress(currentTime, totalDuration) {
 
   // Scrobble playback progress to backend library
   try {
+    const posterVal = (detail && (detail.poster || detail.backdrop)) || (active && active.poster) || '';
+    const backdropVal = (detail && (detail.backdrop || detail.poster)) || (active && active.backdrop) || '';
+    const yearVal = (detail && detail.year) || (active && active.year) || '';
+    const ratingVal = (detail && detail.rating) || (active && active.rating) || '';
+
     fetch('/api/v1/library/scrobble', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -6569,6 +6593,10 @@ function recordWatchProgress(currentTime, totalDuration) {
         progress_percent: Math.min(100, pct),
         season: season !== null ? Number(season) : null,
         episode: episode !== null ? Number(episode) : null,
+        poster: posterVal,
+        backdrop: backdropVal,
+        year: yearVal,
+        rating: ratingVal
       })
     }).catch(() => {});
   } catch (_) {}
@@ -6578,6 +6606,13 @@ function renderContinueWatchingShelf() {
   const shelf = document.getElementById('continue-watching-section');
   const grid = document.getElementById('continue-watching-grid');
   if (!shelf || !grid) return;
+
+  // Check Settings visibility toggle
+  const isEnabled = localStorage.getItem('evoscrapper_setting_show_continue') !== '0';
+  if (!isEnabled) {
+    shelf.classList.add('hidden');
+    return;
+  }
 
   // Restore collapsed state
   const isCollapsed = localStorage.getItem('evoscrapper_shelf_continue_collapsed') === '1';
@@ -6600,12 +6635,15 @@ function renderContinueWatchingShelf() {
     const isEp = item.season !== null && item.episode !== null;
     const epBadge = isEp ? `S${String(item.season).padStart(2, '0')}:E${String(item.episode).padStart(2, '0')}` : '';
     const remainingMins = Math.max(1, Math.round((item.totalDuration - item.currentTime) / 60));
-    const thumbSrc = item.backdrop || item.poster;
+    const thumbCandidate = item.backdrop || item.poster || (item.key && item.key.startsWith('tt') ? `https://images.metahub.space/background/medium/${item.key}/img` : '');
+    const thumbHtml = thumbCandidate
+      ? `<img src="${escapeHtml(thumbCandidate)}" class="continue-card-img" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'media-jacket-placeholder\\' style=\\'height:100%;\\'><i class=\\'fa-solid fa-play fa-2x\\'></i><span class=\\'media-jacket-title\\'>${escapeJs(item.title)}</span></div>';">`
+      : `<div class="media-jacket-placeholder" style="height:100%;"><i class="fa-solid fa-play fa-2x"></i><span class="media-jacket-title">${escapeHtml(item.title)}</span></div>`;
 
     return `
       <div class="continue-card" onclick="resumeContinueWatching('${escapeJs(item.key)}')">
         <div class="continue-card-img-wrap">
-          <img src="${escapeHtml(thumbSrc)}" class="continue-card-img" onerror="this.onerror=null;this.src='';">
+          ${thumbHtml}
           <div class="continue-card-overlay">
             <div class="continue-card-play-icon"><i class="fa-solid fa-play"></i></div>
           </div>
@@ -6997,10 +7035,15 @@ function renderLibraryGrid() {
           ? `S${item.current_season} E${item.current_episode}`
           : (item.progress_percent ? `${item.progress_percent}%` : '');
 
+        const posterSrc = item.poster || (item.id && item.id.startsWith('tt') ? `https://images.metahub.space/poster/medium/${item.id}/img` : '');
+        const thumbHtml = posterSrc
+          ? `<img src="${escapeHtml(posterSrc)}" alt="${escapeHtml(item.title)}" class="library-thumb" loading="lazy" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'media-jacket-placeholder\\'><i class=\\'fa-solid fa-film fa-2x\\'></i><span class=\\'media-jacket-title\\'>${escapeJs(item.title)}</span></div>';">`
+          : `<div class="media-jacket-placeholder"><i class="fa-solid fa-film fa-2x"></i><span class="media-jacket-title">${escapeHtml(item.title)}</span></div>`;
+
         return `
           <div class="library-card">
             <div class="library-thumb-wrap" onclick="closeLibraryModal(); openDiscoverModal('${escapeJs(item.id)}', '${escapeJs(item.type)}')">
-              ${item.poster ? `<img src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.title)}" class="library-thumb" loading="lazy">` : `<div class="media-jacket-placeholder"><i class="fa-solid fa-film fa-2x"></i></div>`}
+              ${thumbHtml}
               <div class="continue-play-overlay"><i class="fa-solid fa-play"></i></div>
               ${item.progress_percent ? `<div class="library-progress-bar"><div class="library-progress-fill" style="width: ${item.progress_percent}%;"></div></div>` : ''}
             </div>
@@ -7362,6 +7405,13 @@ function renderBookmarksShelf() {
   const countBadge = document.getElementById('bookmarks-shelf-count');
   if (!shelf || !grid) return;
 
+  // Check Settings visibility toggle
+  const isEnabled = localStorage.getItem('evoscrapper_setting_show_bookmarks') !== '0';
+  if (!isEnabled) {
+    shelf.classList.add('hidden');
+    return;
+  }
+
   // Restore collapsed state
   const isCollapsed = localStorage.getItem('evoscrapper_shelf_mylist_collapsed') === '1';
   const body = document.getElementById('bookmarks-shelf-body');
@@ -7384,10 +7434,15 @@ function renderBookmarksShelf() {
       ? `S${item.current_season}:E${item.current_episode}`
       : (item.progress_percent ? `${item.progress_percent}%` : '');
 
+    const posterSrc = item.poster || (item.id && item.id.startsWith('tt') ? `https://images.metahub.space/poster/medium/${item.id}/img` : '');
+    const posterHtml = posterSrc
+      ? `<img src="${escapeHtml(posterSrc)}" class="poster-img" loading="lazy" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'media-jacket-placeholder\\'><i class=\\'fa-solid fa-film fa-2x\\'></i><span class=\\'media-jacket-title\\'>${escapeJs(item.title)}</span></div>';">`
+      : `<div class="media-jacket-placeholder"><i class="fa-solid fa-film fa-2x"></i><span class="media-jacket-title">${escapeHtml(item.title)}</span></div>`;
+
     return `
       <div class="shelf-media-card" onclick="openDiscoverModal('${escapeJs(item.id)}', '${escapeJs(item.type)}')">
         <div class="poster-wrap">
-          ${item.poster ? `<img src="${escapeHtml(item.poster)}" class="poster-img" loading="lazy" onerror="this.onerror=null;this.src='';">` : `<div class="media-jacket-placeholder"><i class="fa-solid fa-film fa-2x"></i></div>`}
+          ${posterHtml}
           <div class="poster-overlay">
             <div class="play-btn-circle"><i class="fa-solid fa-play"></i></div>
           </div>
@@ -7568,16 +7623,16 @@ function showPlayerBufferingHUD() {
   const speedLabel = document.getElementById('buffering-speed-label');
   const countdownLabel = document.getElementById('buffering-countdown-label');
 
-  if (fill) fill.style.width = '5%';
-  if (pctBadge) pctBadge.innerText = '5%';
-  if (bytesLabel) bytesLabel.innerHTML = '<i class="fa-solid fa-layer-group"></i> 0.3 / 6.0 MB';
-  if (speedLabel) speedLabel.innerHTML = '<i class="fa-solid fa-gauge-high"></i> Connecting...';
-  if (countdownLabel) countdownLabel.innerHTML = '<i class="fa-solid fa-hourglass-start"></i> Starting soon...';
+  if (fill) fill.style.width = '15%';
+  if (pctBadge) pctBadge.innerText = '15%';
+  if (bytesLabel) bytesLabel.innerHTML = '<i class="fa-solid fa-layer-group"></i> Allocating buffer...';
+  if (speedLabel) speedLabel.innerHTML = '<i class="fa-solid fa-gauge-high"></i> Connecting P2P swarm...';
+  if (countdownLabel) countdownLabel.innerHTML = '<i class="fa-solid fa-hourglass-start"></i> Starting playback...';
 
   clearInterval(playerBufferingInterval);
 
-  let currentBytes = 0.3;
-  const targetBytes = 6.0;
+  let currentBytes = 0.5;
+  const targetBytes = 4.0;
 
   playerBufferingInterval = setInterval(() => {
     const video = document.getElementById('evo-video-player');
@@ -7599,23 +7654,23 @@ function showPlayerBufferingHUD() {
     }
 
     // Auto-dismiss HUD as soon as video is ready or actively playing
-    if (video && (!video.paused && video.currentTime > 0 || video.readyState >= 3 || (video.readyState >= 2 && bufferAheadSec >= 0.5))) {
+    if (video && (!video.paused && video.currentTime > 0 || video.readyState >= 3 || (video.readyState >= 2 && bufferAheadSec >= 0.2) || (video.readyState >= 1 && bufferAheadSec >= 0.5))) {
       hidePlayerBufferingHUD();
       return;
     }
 
     // Dynamic buffer percentage: combines buffer ahead, session download progress, and elapsed time
-    let bufferPct = 5;
+    let bufferPct = 15;
     if (bufferAheadSec > 0) {
-      bufferPct = Math.min(99, Math.max(10, Math.round((bufferAheadSec / 2.0) * 100)));
+      bufferPct = Math.min(99, Math.max(25, Math.round((bufferAheadSec / 1.5) * 100)));
     } else if (session && session.buffer_pct) {
       const p = parseFloat(session.buffer_pct);
       if (!isNaN(p) && p > 0) {
-        bufferPct = Math.min(99, Math.max(12, Math.round(p)));
+        bufferPct = Math.min(99, Math.max(18, Math.round(p)));
       }
     } else {
       const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
-      bufferPct = Math.min(92, Math.max(8, Math.round(elapsedSec * 30)));
+      bufferPct = Math.min(95, Math.max(15, Math.round(elapsedSec * 35)));
     }
 
     if (session && session.download_speed !== undefined) {

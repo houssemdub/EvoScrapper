@@ -750,7 +750,7 @@
       <!-- Continue Watching Dynamic Shelf (Collapsible with +/-) -->
       <div id="continue-watching-section" class="discover-shelf hidden">
         <div class="shelf-header">
-          <div class="shelf-title-wrap">
+          <div class="shelf-title-wrap cursor-pointer" onclick="toggleContinueWatchingShelf()" title="Click to collapse / expand shelf">
             <div class="shelf-icon-pulse"><i class="fa-solid fa-play"></i></div>
             <h2 class="shelf-title">Continue Watching</h2>
             <span id="continue-watching-count" class="shelf-count-badge">0 in progress</span>
@@ -770,7 +770,7 @@
       <!-- My List / Bookmarks Dynamic Shelf (Collapsible with +/-) -->
       <div id="bookmarks-section" class="discover-shelf hidden">
         <div class="shelf-header">
-          <div class="shelf-title-wrap">
+          <div class="shelf-title-wrap cursor-pointer" onclick="toggleBookmarksShelf()" title="Click to collapse / expand shelf">
             <div class="shelf-icon-pulse list-icon"><i class="fa-solid fa-bookmark"></i></div>
             <h2 class="shelf-title">My List & Favorites</h2>
             <span id="bookmarks-shelf-count" class="shelf-count-badge">0 saved</span>
@@ -2091,6 +2091,26 @@
                   <div class="settings-field-desc">Shows 1-click floating button to instantly skip 85s intros and 150s closing theme credits.</div>
                 </div>
                 <input type="checkbox" id="settings-toggle-skipintro" checked onchange="handleSettingChange('skip_intro', this.checked)">
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-title"><i class="fa-solid fa-table-cells-large text-accent"></i> Home Shelves & Library Visibility</span>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">Show "Continue Watching" Shelf</div>
+                  <div class="settings-field-desc">Displays the resume carousel on the home screen tracking current playback progress.</div>
+                </div>
+                <input type="checkbox" id="settings-toggle-shelf-continue" checked onchange="handleSettingChange('shelf_continue', this.checked)">
+              </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">Show "My List & Favorites" Shelf</div>
+                  <div class="settings-field-desc">Displays your saved titles, bookmarks, and watchlist directly on the home screen.</div>
+                </div>
+                <input type="checkbox" id="settings-toggle-shelf-bookmarks" checked onchange="handleSettingChange('shelf_bookmarks', this.checked)">
               </div>
             </div>
           </div>

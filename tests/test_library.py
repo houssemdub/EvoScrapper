@@ -37,14 +37,18 @@ async def test_library_manager():
     )
     await mgr.upsert_item(item2)
 
-    # 3. Verify counts
+    # 3. Verify counts & poster self-healing for tt... items
     res = await mgr.get_items()
     assert res.total == 2, f"Expected 2 items, got {res.total}"
     assert res.counts["all"] == 2
     assert res.counts["plan_to_watch"] == 1
     assert res.counts["watching"] == 1
     assert res.counts["completed"] == 0
-    print(f"[+] Initial library counts verified: {res.counts}")
+    # Both items have tt... IDs, so poster should be self-healed
+    for it in res.items:
+        assert it.poster is not None
+        assert "images.metahub.space/poster/medium/" in it.poster
+    print(f"[+] Initial library counts & poster self-healing verified: {res.counts}")
 
     # 4. Update Fairy Tail progress: watched S01E08
     updated = await mgr.update_progress(
@@ -89,6 +93,19 @@ async def test_library_manager():
     res_after = await mgr.get_items()
     assert res_after.total == 1
     print(f"[+] Remove item passed. Remaining items: {res_after.total}")
+
+    # 8. Test upsert with custom poster & year
+    custom_item = LibraryItem(
+        id="custom_001",
+        title="Custom Title",
+        type="movie",
+        poster="https://example.com/poster.jpg",
+        year="2025",
+        status="watching",
+    )
+    saved_custom = await mgr.upsert_item(custom_item)
+    assert saved_custom.poster == "https://example.com/poster.jpg"
+    assert saved_custom.year == "2025"
 
     # Clean up test file
     if os.path.exists(test_db):

@@ -244,10 +244,12 @@ async def fetch_recommendations(
             r = float(item.rating or 0)
         except (ValueError, TypeError):
             r = 0.0
-        # Discard future unreleased titles (e.g. 2026+ placeholders) or low-rated noise
-        if y > current_year:
+        # Discard unreleased future titles, stubs without posters, and low/unrated noise
+        if not item.poster:
             return False
-        if r > 0 and r < 6.8:
+        if r < 6.8:
+            return False
+        if y > current_year:
             return False
         return True
 
@@ -532,6 +534,20 @@ async def search_catalog(
                     )
     except Exception:
         pass
+
+    # Intelligently rank search results:
+    # 1. Acclaimed titles with valid posters and ratings appear at the top
+    # 2. Prefer titles matching query or having high IMDb ratings
+    def _search_rank(item: DiscoverItem) -> tuple:
+        has_poster = 1 if item.poster else 0
+        try:
+            r = float(item.rating or 0)
+        except (ValueError, TypeError):
+            r = 0.0
+        is_exact = 1 if clean_q.lower() in (item.title or "").lower() else 0
+        return (has_poster, is_exact, r)
+
+    items.sort(key=_search_rank, reverse=True)
 
     if items:
         await cache.set(cache_key, items, ttl=3600)  # 1 hour

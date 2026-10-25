@@ -275,7 +275,7 @@ class TorrentEngine {
                 console.error(`[TorrentEngine] Torrent error (${hash}):`, err.message);
                 if (!settled && !this.sessions.has(hash)) {
                     settled = true;
-                    clearTimeout(timeoutTimer);
+                    if (timerId) clearTimeout(timerId);
                     if (torrent) {
                         try {
                             this.client.remove(torrent, { destroyStore: true }, () => {});

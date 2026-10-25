@@ -29,6 +29,10 @@ class ScrobbleRequest(BaseModel):
     progress_percent: int = 0
     season: Optional[int] = None
     episode: Optional[int] = None
+    poster: Optional[str] = None
+    backdrop: Optional[str] = None
+    year: Optional[str] = None
+    rating: Optional[str] = None
 
 
 class BulkLibraryRequest(BaseModel):
@@ -116,6 +120,10 @@ async def scrobble_playback(req: ScrobbleRequest):
             id=req.item_id,
             title=req.title,
             type=req.type,
+            poster=req.poster,
+            backdrop=req.backdrop,
+            year=req.year,
+            rating=req.rating,
             status=computed_status,
             current_season=req.season,
             current_episode=req.episode,
@@ -125,6 +133,15 @@ async def scrobble_playback(req: ScrobbleRequest):
         )
         await library_manager.upsert_item(new_item)
     else:
+        # Enrich existing item if missing metadata
+        if req.poster and not item.poster:
+            item.poster = req.poster
+        if req.backdrop and not item.backdrop:
+            item.backdrop = req.backdrop
+        if req.year and not item.year:
+            item.year = req.year
+        if req.rating and not item.rating:
+            item.rating = req.rating
         await library_manager.update_progress(
             item_id=req.item_id,
             season=req.season,

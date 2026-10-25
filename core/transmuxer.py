@@ -308,16 +308,12 @@ async def stream_transmuxed_video(
         ])
 
     cmd.extend([
-        "-probesize", "1048576",        # 1MB probe for reliable multi-track TV streams
-        "-analyzeduration", "2000000",  # 2s header analysis for interleaved audio/video
+        "-probesize", "524288",         # 512KB probe for ultra-low latency playback initiation
+        "-analyzeduration", "1000000",  # 1s header analysis for multi-track streams
     ])
 
-    # For HTTP/P2P streams: input-seek (-ss before -i) is fast but causes A/V desync
-    # Use output-seek (-ss after -i) only for start offsets > 0 on HTTP sources
-    input_seek = start_seconds > 0 and not source_url_or_path.startswith("http")
-    output_seek = start_seconds > 0 and source_url_or_path.startswith("http")
-
-    if input_seek:
+    # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes
+    if start_seconds and start_seconds > 0:
         cmd.extend(["-ss", f"{start_seconds:.2f}"])
 
     if duration_seconds and duration_seconds > 0:
@@ -325,9 +321,6 @@ async def stream_transmuxed_video(
 
     cmd.append("-i")
     cmd.append(source_url_or_path)
-
-    if output_seek:
-        cmd.extend(["-ss", f"{start_seconds:.2f}"])
 
     if burn_sub_idx is not None:
         transcode_video = True
@@ -357,9 +350,9 @@ async def stream_transmuxed_video(
         ])
 
     # Build audio filter chain with full timestamp correction:
-    # 1. aresample=async=1:first_pts=0 - eliminates audio gaps and resets timestamps cleanly
+    # 1. aresample=async=1000 dynamically synchronizes audio clock to video stream without PTS desync
     # 2. volume boost restores center channel dialogue lost during 5.1/7.1 downmix
-    af_filters = ["aresample=async=1:first_pts=0"]
+    af_filters = ["aresample=async=1000"]
     if audio_boost and audio_boost > 0:
         af_filters.append(f"volume={audio_boost:.2f}")
 
