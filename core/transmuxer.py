@@ -308,17 +308,26 @@ async def stream_transmuxed_video(
         ])
 
     cmd.extend([
-        "-probesize", "262144",        # 256KB probe for ultra-fast stream startup
-        "-analyzeduration", "500000",  # 0.5s header analysis
+        "-probesize", "1048576",        # 1MB probe for reliable multi-track TV streams
+        "-analyzeduration", "2000000",  # 2s header analysis for interleaved audio/video
     ])
 
-    if start_seconds > 0:
+    # For HTTP/P2P streams: input-seek (-ss before -i) is fast but causes A/V desync
+    # Use output-seek (-ss after -i) only for start offsets > 0 on HTTP sources
+    input_seek = start_seconds > 0 and not source_url_or_path.startswith("http")
+    output_seek = start_seconds > 0 and source_url_or_path.startswith("http")
+
+    if input_seek:
         cmd.extend(["-ss", f"{start_seconds:.2f}"])
+
     if duration_seconds and duration_seconds > 0:
         cmd.extend(["-t", f"{duration_seconds:.2f}"])
 
     cmd.append("-i")
     cmd.append(source_url_or_path)
+
+    if output_seek:
+        cmd.extend(["-ss", f"{start_seconds:.2f}"])
 
     if burn_sub_idx is not None:
         transcode_video = True
@@ -342,12 +351,15 @@ async def stream_transmuxed_video(
         cmd.extend(["-c:v", codec])
         cmd.extend(extra_args)
     else:
-        cmd.extend(["-c:v", "copy"])
+        cmd.extend([
+            "-c:v", "copy",
+            "-vsync", "passthrough",       # Preserve original video PTS (avoids A/V drift from copy)
+        ])
 
-    # Build audio filter chain:
-    # 1. aresample=async=1000 locks audio timestamps to video frames to prevent drift/silence
+    # Build audio filter chain with full timestamp correction:
+    # 1. aresample=async=1:first_pts=0 - eliminates audio gaps and resets timestamps cleanly
     # 2. volume boost restores center channel dialogue lost during 5.1/7.1 downmix
-    af_filters = ["aresample=async=1000"]
+    af_filters = ["aresample=async=1:first_pts=0"]
     if audio_boost and audio_boost > 0:
         af_filters.append(f"volume={audio_boost:.2f}")
 
@@ -358,6 +370,8 @@ async def stream_transmuxed_video(
         "-af", ",".join(af_filters),
         "-sn",                          # Strip embedded subtitles to prevent MP4 container muxing errors
         "-dn",                          # Strip data streams
+        "-avoid_negative_ts", "make_zero",  # Fix negative PTS timestamps from seek operations
+        "-max_muxing_queue_size", "2048",   # Prevent queue starvation on multi-track streams
         "-movflags", "frag_keyframe+default_base_moof",
         "-flush_packets", "1",
         "-f", "mp4",

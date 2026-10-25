@@ -88,3 +88,32 @@ def test_app_js_updates():
 
     # Suggestions elevation classes
     assert 'suggestions-open' in js
+
+
+def test_sitewide_evo_loader_and_cast_enhancements():
+    """Verify EVO loader is used sitewide and cast/recommendations are enhanced."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "index.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    assert 'id="discover-loading"' in html
+    assert 'loader evo-loader size-lg' in html
+    assert 'Loading catalog...' in html
+    assert 'id="trending-results-container"' in html
+    assert 'Loading trending...' in html
+
+    css_path = os.path.join(os.path.dirname(__file__), "..", "static", "style.css")
+    with open(css_path, "r", encoding="utf-8") as f:
+        css = f.read()
+
+    assert '.crew-row' in css
+    assert '.director-pill' in css
+    assert '.cast-pill-more' in css
+
+    js_path = os.path.join(os.path.dirname(__file__), "..", "static", "app.js")
+    with open(js_path, "r", encoding="utf-8") as f:
+        js = f.read()
+
+    assert 'director-pill' in js
+    assert 'cast-pill-more' in js
+    assert 'Finding similar titles...' in js

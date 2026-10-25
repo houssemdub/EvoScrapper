@@ -96,11 +96,28 @@ async def is_daemon_healthy() -> bool:
         return False
 
 
+def kill_stale_daemon():
+    """Kills any stale or deadlocked process listening on the streamer port."""
+    if os.name == "nt":
+        try:
+            out = subprocess.check_output(f"netstat -ano | findstr :{STREAM_PORT}", shell=True, text=True)
+            for line in out.strip().splitlines():
+                if "LISTENING" in line:
+                    parts = line.strip().split()
+                    pid = int(parts[-1])
+                    if pid > 0 and pid != os.getpid():
+                        subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
+        except Exception:
+            pass
+
+
 def start_daemon_process() -> bool:
     """Spawns the background Node.js P2P torrent streaming micro-daemon."""
     global _daemon_process
     if not os.path.isfile(SERVER_SCRIPT):
         return False
+
+    kill_stale_daemon()
 
     try:
         creationflags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW

@@ -1827,17 +1827,13 @@ async function loadDiscoverCatalog(reset = true) {
     state.discover.page = 1;
     state.discover.items = [];
     if (grid) {
-      grid.innerHTML = Array(12).fill(0).map(() => `
-        <div class="discover-card skeleton-card">
-          <div class="discover-poster-wrap skeleton-box"></div>
-          <div class="discover-info">
-            <div class="skeleton-line" style="width:75%; height:14px; margin-bottom:6px;"></div>
-            <div class="skeleton-line" style="width:45%; height:11px;"></div>
-          </div>
+      grid.innerHTML = `
+        <div style="grid-column: 1 / -1; padding: 4rem 1rem; display: flex; justify-content: center;">
+          ${getEvoLoaderHtml('lg', 'Loading catalog...', 'Discovering top trending releases from the swarm...')}
         </div>
-      `).join('');
+      `;
     }
-    if (loading) loading.classList.add('hidden'); // Shimmering skeleton replaces spinner
+    if (loading) loading.classList.add('hidden');
     if (moreWrap) moreWrap.classList.add('hidden');
     if (moreSpiral) moreSpiral.classList.add('hidden');
     if (moreBtn) moreBtn.classList.remove('hidden');
@@ -2197,11 +2193,18 @@ async function openDiscoverModal(id, type) {
     const genreBadges = (detail.genres || []).map((g) => `<span class="tag tag-source">${escapeHtml(g)}</span>`).join('');
 
     const directorRow = detail.director
-      ? `<div>DIRECTOR: <span>${escapeHtml(detail.director)}</span></div>`
+      ? `<div class="crew-row"><span class="crew-label">DIRECTOR</span><span class="cast-pills-wrap"><button type="button" class="cast-pill director-pill" onclick="searchDiscoverByPerson(${JSON.stringify(detail.director)})" title="View ${escapeHtml(detail.director)}'s filmography"><i class="fa-solid fa-film" style="font-size:0.65rem;opacity:0.7;"></i> ${escapeHtml(detail.director)}</button></span></div>`
       : '';
 
-    const castRow = (detail.cast && detail.cast.length > 0)
-      ? `<div>CAST: <span class="cast-pills-wrap">${detail.cast.map(c => `<button type="button" class="cast-pill" onclick="searchDiscoverByPerson('${escapeJs(c)}')">${escapeHtml(c)}</button>`).join(' ')}</span></div>`
+    const maxCastVisible = 8;
+    const castList = detail.cast || [];
+    const visibleCast = castList.slice(0, maxCastVisible);
+    const hiddenCount = castList.length - visibleCast.length;
+    const castPills = visibleCast.map((c, i) => `<button type="button" class="cast-pill" onclick="searchDiscoverByPerson(${JSON.stringify(c)})" title="View ${escapeHtml(c)}'s filmography">${escapeHtml(c)}</button>`).join('');
+    const moreBtn = hiddenCount > 0 ? `<button type="button" class="cast-pill cast-pill-more" onclick="this.parentElement.querySelectorAll('.cast-pill-hidden').forEach(el=>el.classList.remove('cast-pill-hidden'));this.remove()">+${hiddenCount} more</button>` : '';
+    const hiddenCastPills = castList.slice(maxCastVisible).map(c => `<button type="button" class="cast-pill cast-pill-hidden" onclick="searchDiscoverByPerson(${JSON.stringify(c)})" title="View ${escapeHtml(c)}'s filmography" style="display:none;">${escapeHtml(c)}</button>`).join('');
+    const castRow = castList.length > 0
+      ? `<div class="crew-row"><span class="crew-label">CAST</span><span class="cast-pills-wrap">${castPills}${hiddenCastPills}${moreBtn}</span></div>`
       : '';
 
     // Render episodic section if series/anime
@@ -2339,30 +2342,43 @@ function searchDiscoverByPerson(name) {
 
 async function renderDiscoverRecommendations(type, id) {
   const container = document.getElementById('discover-recommendations-container');
+  const section = document.getElementById('modal-recommendations-section');
   if (!container) return;
+
+  // Show EVO loader while fetching
+  container.innerHTML = `<div style="padding:1rem 0;">${getEvoLoaderHtml('sm', 'Finding similar titles...', '')}</div>`;
 
   try {
     const res = await fetch(`/api/v1/discover/recommendations/${type}/${id}`);
-    if (!res.ok) return;
+    if (!res.ok) { if (section) section.classList.add('hidden'); return; }
     const recs = await res.json();
-    if (!recs || recs.length === 0) return;
+    if (!recs || recs.length === 0) { if (section) section.classList.add('hidden'); return; }
 
-    const cardsHtml = recs.map((item) => `
-      <div class="continue-card recommendation-card" style="min-width:130px; max-width:130px; cursor:pointer;" onclick="openDiscoverModal('${escapeJs(item.id)}', '${escapeJs(item.type || 'movie')}')">
-        <div class="continue-card-thumb-wrap" style="height:190px;">
-          ${item.poster ? `<img src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.title)}" class="continue-card-thumb" style="object-fit:cover;">` : `<div class="media-jacket-placeholder"><i class="fa-solid fa-film"></i></div>`}
-          <div class="continue-play-overlay"><i class="fa-solid fa-play"></i></div>
+    const cardsHtml = recs.map((item) => {
+      const ratingBadge = item.rating ? `<div class="discover-rating-badge" style="position:absolute;top:4px;right:4px;font-size:0.65rem;padding:2px 5px;border-radius:4px;background:rgba(0,0,0,0.75);"><i class="fa-solid fa-star" style="color:#ffd700;"></i> ${escapeHtml(item.rating)}</div>` : '';
+      const yearBadge = item.year ? `<div style="position:absolute;bottom:4px;left:4px;font-size:0.6rem;padding:1px 5px;border-radius:3px;background:rgba(0,0,0,0.7);color:var(--text-dim);">${escapeHtml(item.year)}</div>` : '';
+      const posterImg = item.poster
+        ? `<img src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.title)}" style="width:100%;height:100%;object-fit:cover;border-radius:6px;" loading="lazy">`
+        : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--color-paper-3);border-radius:6px;color:var(--text-dim);"><i class="fa-solid fa-film fa-2x"></i></div>`;
+      return `
+        <div class="recommendation-card" style="min-width:110px;max-width:110px;cursor:pointer;flex-shrink:0;" onclick="openDiscoverModal('${escapeJs(item.id)}', '${escapeJs(item.type || 'movie')}')" title="${escapeHtml(item.title)}">
+          <div style="position:relative;width:100%;height:165px;border-radius:6px;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.5);">
+            ${posterImg}
+            ${ratingBadge}
+            ${yearBadge}
+            <div style="position:absolute;inset:0;background:rgba(0,0,0,0);transition:background 0.2s;" onmouseenter="this.style.background='rgba(0,0,0,0.3)'" onmouseleave="this.style.background='rgba(0,0,0,0)'">
+              <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.2s;" onmouseenter="this.style.opacity='1';this.parentElement.style.background='rgba(0,0,0,0.3)'" onmouseleave="this.style.opacity='0';this.parentElement.style.background='rgba(0,0,0,0)'"><i class="fa-solid fa-play" style="font-size:1.5rem;color:#fff;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.8));"></i></div>
+            </div>
+          </div>
+          <div style="padding:0.3rem 0.1rem 0.1rem;font-size:0.7rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary);" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
         </div>
-        <div class="continue-card-body" style="padding:0.4rem;">
-          <div class="continue-card-title" style="font-size:0.75rem;">${escapeHtml(item.title)}</div>
-          <div class="continue-card-meta"><span class="text-dim">${escapeHtml(item.year || '')}</span><span class="text-green">${escapeHtml(item.rating || '★')}</span></div>
-        </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
 
     container.innerHTML = cardsHtml;
   } catch (err) {
     console.warn('[Discover] Recommendations fetch error:', err);
+    if (section) section.classList.add('hidden');
   }
 }
 

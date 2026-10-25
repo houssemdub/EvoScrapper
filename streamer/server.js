@@ -7,7 +7,10 @@
 import http from 'node:http';
 import { URL } from 'node:url';
 import path from 'node:path';
+import events from 'node:events';
 import engine from './torrent_engine.js';
+
+events.defaultMaxListeners = 100;
 
 const PORT = process.env.STREAM_PORT || 8889;
 
@@ -161,6 +164,7 @@ function pickVideoFile(files, requestedIdx = null, season = null, episode = null
     const videoFiles = files.filter(f => VIDEO_EXT.has(path.extname(f.name || f.path || '').toLowerCase()));
     const validFiles = videoFiles.filter(f => !isBonusOrNonEpisode(f.path || f.name, season));
     const pool = validFiles.length > 0 ? validFiles : (videoFiles.length > 0 ? videoFiles : files);
+    if (pool.length === 1) return pool[0];
 
     // 2. Episode / Season matching (TV Series & Anime) when file_idx was 0 or omitted
     if (episode !== null && episode !== undefined && !isNaN(episode)) {

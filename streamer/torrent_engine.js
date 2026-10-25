@@ -4,6 +4,8 @@
  * dynamic peer management, and idle teardown).
  */
 
+import events from 'node:events';
+events.defaultMaxListeners = 100;
 import WebTorrent from 'webtorrent';
 import path from 'node:path';
 import fs from 'node:fs';

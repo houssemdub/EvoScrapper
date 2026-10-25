@@ -4588,6 +4588,43 @@ p, span, div {
   border-color: var(--color-accent);
   transform: translateY(-1px);
 }
+.crew-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.crew-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-ink-muted);
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  padding-top: 0.25rem;
+  min-width: 65px;
+}
+.director-pill {
+  background: rgba(0, 255, 136, 0.12);
+  border-color: rgba(0, 255, 136, 0.3);
+  color: var(--color-accent);
+}
+.director-pill:hover {
+  background: var(--color-accent);
+  color: #000;
+}
+.cast-pill-more {
+  background: rgba(255, 200, 0, 0.12);
+  border-color: rgba(255, 200, 0, 0.35);
+  color: #ffd700;
+}
+.cast-pill-more:hover {
+  background: #ffd700;
+  color: #000;
+  border-color: #ffd700;
+}
+.cast-pill-hidden {
+  display: none !important;
+}
 .recommendation-card {
   transition: transform var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }

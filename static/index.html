@@ -680,8 +680,21 @@
 
       <div id="trending-results-container">
         <div class="empty-state">
-          <div class="empty-icon loading-pulse"><i class="fa-solid fa-fire"></i></div>
-          <h3>Loading trending...</h3>
+          <div class="evo-loader-container size-lg">
+            <div class="loader evo-loader size-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="52" height="52" class="inline-block evo-svg-e">
+                <path stroke-linejoin="round" stroke-linecap="round" stroke-width="8" stroke="url(#b)" d="M 20,20 L 80,20 L 80,27 L 27,27 L 27,50 L 70,50 L 70,57 L 25,57 L 25,80 L 80,80 L 80,87 L 20,87 Z" class="dash" id="E" pathLength="360"></path>
+              </svg>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="52" height="52" class="inline-block evo-svg-v">
+                <path stroke-linejoin="round" stroke-linecap="round" stroke-width="12" stroke="url(#d)" d="M 20,20 L 50,80 L 80,20" class="dash" id="v" pathLength="360"></path>
+              </svg>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="52" height="52" class="inline-block evo-svg-o">
+                <path stroke-linejoin="round" stroke-linecap="round" stroke-width="11" stroke="url(#c)" d="M 50,15 A 35,35 0 0 1 85,50 A 35,35 0 0 1 50,85 A 35,35 0 0 1 15,50 A 35,35 0 0 1 50,15 Z" class="spin" id="o" pathLength="360"></path>
+              </svg>
+            </div>
+            <div class="evo-loader-title">Loading trending...</div>
+            <div class="evo-loader-sub">Fetching popular swarm torrents...</div>
+          </div>
         </div>
       </div>
     </section>
@@ -859,8 +872,21 @@
       </div>
 
       <div id="discover-loading" class="empty-state hidden">
-        <div class="empty-icon loading-pulse"><i class="fa-solid fa-compass"></i></div>
-        <h3>Loading catalog...</h3>
+        <div class="evo-loader-container size-lg">
+          <div class="loader evo-loader size-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="52" height="52" class="inline-block evo-svg-e">
+              <path stroke-linejoin="round" stroke-linecap="round" stroke-width="8" stroke="url(#b)" d="M 20,20 L 80,20 L 80,27 L 27,27 L 27,50 L 70,50 L 70,57 L 25,57 L 25,80 L 80,80 L 80,87 L 20,87 Z" class="dash" id="E" pathLength="360"></path>
+            </svg>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="52" height="52" class="inline-block evo-svg-v">
+              <path stroke-linejoin="round" stroke-linecap="round" stroke-width="12" stroke="url(#d)" d="M 20,20 L 50,80 L 80,20" class="dash" id="v" pathLength="360"></path>
+            </svg>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="52" height="52" class="inline-block evo-svg-o">
+              <path stroke-linejoin="round" stroke-linecap="round" stroke-width="11" stroke="url(#c)" d="M 50,15 A 35,35 0 0 1 85,50 A 35,35 0 0 1 50,85 A 35,35 0 0 1 15,50 A 35,35 0 0 1 50,15 Z" class="spin" id="o" pathLength="360"></path>
+            </svg>
+          </div>
+          <div class="evo-loader-title">Loading catalog...</div>
+          <div class="evo-loader-sub">Discovering top trending releases from the swarm...</div>
+        </div>
       </div>
 
       <div id="discover-more-wrap" class="flex flex-col items-center justify-center mt-4" style="margin-top: 1.5rem; margin-bottom: 2rem;">
@@ -1888,8 +1914,21 @@
       </div>
       <div id="torrent-files-list" style="overflow-y: auto; padding: 0.75rem 1rem; flex: 1; display: flex; flex-direction: column; gap: 0.45rem; max-height: 55vh;">
         <div class="empty-state" style="padding: 2rem;">
-          <div class="empty-icon loading-pulse"><i class="fa-solid fa-folder-open text-accent"></i></div>
-          <h3>Inspecting torrent files...</h3>
+          <div class="evo-loader-container size-md">
+            <div class="loader evo-loader size-md">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="36" height="36" class="inline-block evo-svg-e">
+                <path stroke-linejoin="round" stroke-linecap="round" stroke-width="8" stroke="url(#b)" d="M 20,20 L 80,20 L 80,27 L 27,27 L 27,50 L 70,50 L 70,57 L 25,57 L 25,80 L 80,80 L 80,87 L 20,87 Z" class="dash" id="E" pathLength="360"></path>
+              </svg>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="36" height="36" class="inline-block evo-svg-v">
+                <path stroke-linejoin="round" stroke-linecap="round" stroke-width="12" stroke="url(#d)" d="M 20,20 L 50,80 L 80,20" class="dash" id="v" pathLength="360"></path>
+              </svg>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 100 100" width="36" height="36" class="inline-block evo-svg-o">
+                <path stroke-linejoin="round" stroke-linecap="round" stroke-width="11" stroke="url(#c)" d="M 50,15 A 35,35 0 0 1 85,50 A 35,35 0 0 1 50,85 A 35,35 0 0 1 15,50 A 35,35 0 0 1 50,15 Z" class="spin" id="o" pathLength="360"></path>
+              </svg>
+            </div>
+            <div class="evo-loader-title">Inspecting torrent files...</div>
+            <div class="evo-loader-sub">Parsing metadata from swarm...</div>
+          </div>
         </div>
       </div>
     </div>
