@@ -3404,9 +3404,12 @@ async function applySubtitle(subItem, isAuto = false) {
         if (window.evoPgsDecoder) window.evoPgsDecoder.detach();
         const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video ? (video.currentTime || 0) : 0);
         const wasPaused = video ? video.paused : false;
-        const burnUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&burn_sub_idx=${subIdx}&start_time=${curTime.toFixed(2)}&transcode_video=true${epParam}${sParam}${magParam}`;
+        const audioTrack = active ? (active.audioTrack || 0) : 0;
+        const audioParam = `&audio_track=${audioTrack}&audio_boost=1.25`;
+        const burnUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&burn_sub_idx=${subIdx}&start_time=${curTime.toFixed(2)}&transcode_video=true${audioParam}${epParam}${sParam}${magParam}`;
         showToast('Activating real-time Blu-ray PGS Burn-in (100% video-frame sync)...', 'info');
         if (active) {
+          active.burnSubIdx = subIdx;
           active.playbackOffset = curTime;
           active.useTransmux = true;
         }
@@ -3422,6 +3425,30 @@ async function applySubtitle(subItem, isAuto = false) {
         return;
       } else {
         // Mode 2: Client-Side Canvas Overlay (Zero video transcoding)
+        if (active) active.burnSubIdx = null;
+        if (video && video.src && video.src.includes('burn_sub_idx=')) {
+          const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+          const wasPaused = video.paused;
+          const audioTrack = active ? (active.audioTrack || 0) : 0;
+          let cleanUrl;
+          if (audioTrack > 0 || (active && (active.isMkv || active.transcodeVideo))) {
+            cleanUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&audio_track=${audioTrack}&audio_boost=1.25&start_time=${curTime.toFixed(2)}${active && active.transcodeVideo ? '&transcode_video=true' : ''}${epParam}${sParam}${magParam}`;
+            if (active) {
+              active.useTransmux = true;
+              active.playbackOffset = curTime;
+            }
+          } else {
+            cleanUrl = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
+            if (active) {
+              active.useTransmux = false;
+              active.playbackOffset = 0;
+            }
+          }
+          video.src = cleanUrl;
+          video.load();
+          if (active && !active.useTransmux) video.currentTime = curTime;
+          if (!wasPaused) video.play().catch(() => {});
+        }
         const canvas = document.getElementById('player-pgs-canvas');
         const supUrl = `/api/v1/stream/subtitles/sup?info_hash=${infoHash}&file_idx=${fileIdx}&sub_index=${subIdx}${epParam}${sParam}${magParam}`;
         showToast('Streaming Blu-ray PGS cues for Canvas rendering...', 'info');
@@ -3455,6 +3482,7 @@ async function applySubtitle(subItem, isAuto = false) {
     const video = document.getElementById('evo-video-player');
     if (video && video.src && video.src.includes('burn_sub_idx=')) {
       const active = state.discover.activeStream;
+      if (active) active.burnSubIdx = null;
       const infoHash = active ? active.infoHash : '';
       const fileIdx = (active ? (active.fileIdx ?? active.playingFileIdx ?? 0) : 0);
       const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
@@ -3462,14 +3490,25 @@ async function applySubtitle(subItem, isAuto = false) {
       const epParam = (active && active.episode !== undefined && active.episode !== null) ? `&episode=${active.episode}` : '';
       const sParam = (active && active.season !== undefined && active.season !== null) ? `&season=${active.season}` : '';
       const magParam = (active && active.magnet) ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
-      const cleanUrl = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
-      if (active) {
-        active.useTransmux = false;
-        active.playbackOffset = 0;
+      const audioTrack = active ? (active.audioTrack || 0) : 0;
+
+      let cleanUrl;
+      if (audioTrack > 0 || (active && (active.isMkv || active.transcodeVideo))) {
+        cleanUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&audio_track=${audioTrack}&audio_boost=1.25&start_time=${curTime.toFixed(2)}${active && active.transcodeVideo ? '&transcode_video=true' : ''}${epParam}${sParam}${magParam}`;
+        if (active) {
+          active.useTransmux = true;
+          active.playbackOffset = curTime;
+        }
+      } else {
+        cleanUrl = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
+        if (active) {
+          active.useTransmux = false;
+          active.playbackOffset = 0;
+        }
       }
       video.src = cleanUrl;
       video.load();
-      video.currentTime = curTime;
+      if (active && !active.useTransmux) video.currentTime = curTime;
       if (!wasPaused) video.play().catch(() => {});
     }
 
@@ -5530,7 +5569,7 @@ function selectAudioTrack(trackIdx) {
   // 2. If selecting primary Track 0 on a direct-compatible stream, return cleanly to Direct Stream of the whole video
   const trackCodec = ((track ? track.codec : '') || '').toLowerCase();
   const trackIsDirectAudio = !trackCodec || ['aac', 'mp3', 'opus', 'vorbis'].includes(trackCodec);
-  const isDirectCompatible = !active.isMkv && !active.transcodeVideo && trackIsDirectAudio && /\b(mp4|m4v|webm|yts|yify|x264|h264|avc)\b/i.test(active.playingFileName || active.title || '');
+  const isDirectCompatible = !active.isMkv && !active.transcodeVideo && (active.burnSubIdx === null || active.burnSubIdx === undefined) && trackIsDirectAudio && /\b(mp4|m4v|webm|yts|yify|x264|h264|avc)\b/i.test(active.playingFileName || active.title || '');
   if (trackIdx === 0 && isDirectCompatible && active.useTransmux) {
     console.log('[EvoPlayer] Reverting to Direct Stream for primary audio track');
     active.useTransmux = false;
@@ -7381,7 +7420,9 @@ function seekPlayer(targetSeconds) {
   // Transmuxed FFmpeg stream: instant input-seek via -ss
   active.playbackOffset = clamped;
 
-  const transcodeParam = active.transcodeVideo ? '&transcode_video=true' : '';
+  const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
+  const burnSubParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
+  const transcodeParam = (active.transcodeVideo || hasBurnSub) ? '&transcode_video=true' : '';
   const epParams = (active.season !== null && active.episode !== null && active.season !== undefined && active.episode !== undefined)
     ? `&season=${active.season}&episode=${active.episode}`
     : '';
@@ -7393,7 +7434,7 @@ function seekPlayer(targetSeconds) {
     : (active.fileIdx || 0);
   const durationParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
 
-  const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${audioParam}&start_time=${clamped.toFixed(2)}${transcodeParam}${epParams}${magnetParam}${durationParam}`;
+  const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${audioParam}&start_time=${clamped.toFixed(2)}${burnSubParam}${transcodeParam}${epParams}${magnetParam}${durationParam}`;
 
   const spinner = document.getElementById('player-buffering-spinner');
   if (spinner) spinner.classList.remove('hidden');
@@ -7481,6 +7522,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     magnet,
     useTransmux,
     transcodeVideo,
+    burnSubIdx: null,
     audioTrack: 0,
     playbackOffset: 0,
     totalDuration: initialDuration,
@@ -7807,7 +7849,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
       active.playbackOffset = video.currentTime || 0;
       const mBadge = document.getElementById('player-hud-mode-label');
       if (mBadge) mBadge.innerText = 'Transmux';
-      const fallbackUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}&audio_track=0&audio_boost=1.25${epParams}${magnetParam}${durationParam}`;
+      const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
+      const burnParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
+      const fallbackUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${burnParam}${epParams}${magnetParam}${durationParam}`;
       video.src = fallbackUrl;
       video.load();
       video.play().catch(() => {});
@@ -7819,7 +7863,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
       if (mBadge) mBadge.innerText = 'Transcode';
       const curPlayTime = (active.playbackOffset || 0) + (video.currentTime || 0);
       const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(1)}` : '';
-      const fallbackUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25&transcode_video=true${startParam}${epParams}${magnetParam}${durationParam}`;
+      const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
+      const burnParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
+      const fallbackUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25&transcode_video=true${burnParam}${startParam}${epParams}${magnetParam}${durationParam}`;
       video.src = fallbackUrl;
       video.load();
       video.play().catch(() => {});
@@ -7920,7 +7966,8 @@ function toggleStreamPipelineMode() {
       'info'
     );
     const startParam = curTime > 0 ? `&start_time=${curTime.toFixed(1)}` : '';
-    const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${startParam}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${tcParam}${epParams}${magnetParam}${durationParam}`;
+    const burnParam = (active.burnSubIdx !== null && active.burnSubIdx !== undefined) ? `&burn_sub_idx=${active.burnSubIdx}` : '';
+    const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${startParam}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${burnParam}${tcParam}${epParams}${magnetParam}${durationParam}`;
     video.src = newUrl;
     video.load();
     video.play().catch(() => {});
@@ -7958,6 +8005,9 @@ function closePlayerModal() {
   }
   if (window.evoP2PPlayer) {
     window.evoP2PPlayer.destroy();
+  }
+  if (window.evoPgsDecoder) {
+    window.evoPgsDecoder.detach();
   }
   stopSwarmStatsMonitor();
   toggleSubtitleDrawer(false);

@@ -182,3 +182,25 @@ def test_pgs_dual_engine_dom_and_exclusive_settings():
     assert 'src="/static/pgs-decoder.js"' in html_content
 
 
+def test_pgs_subs_multi_audio_coexistence():
+    """Verify PGS burn-in subtitles and secondary audio tracks (e.g. JPN) seamlessly coexist."""
+    js_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
+    with open(js_path, "r", encoding="utf-8") as f:
+        js = f.read()
+
+    # 1. applySubtitle includes active audio_track in burnUrl
+    assert "audioParam" in js
+    assert "burnUrl = `/api/v1/stream/transmux?" in js
+    assert "burn_sub_idx=${subIdx}" in js
+    assert "audio_track=" in js
+
+    # 2. seekPlayer maintains active.burnSubIdx across audio track switches
+    assert "const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);" in js
+    assert "burnSubParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';" in js
+    assert "active.burnSubIdx = subIdx;" in js
+
+    # 3. Reverting from burn-in retains secondary audio track
+    assert "if (audioTrack > 0 || (active && (active.isMkv || active.transcodeVideo)))" in js
+
+
+

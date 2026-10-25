@@ -137,9 +137,11 @@ class TorrentEngine {
 
         // 3. Check if WebTorrent client already has this torrent instance (MUST await in WebTorrent 3.x)
         let existing = null;
-        try {
-            existing = await this.client.get(hash);
-        } catch (_) {}
+        if (this.client) {
+            try {
+                existing = await this.client.get(hash);
+            } catch (_) {}
+        }
 
         if (existing) {
             const entry = {
@@ -383,7 +385,7 @@ class TorrentEngine {
             if (now - sess.lastActive > idleTimeoutMs) {
                 console.log(`[TorrentEngine] Reclaiming idle session and purging piece store: ${hash}`);
                 try {
-                    this.client.remove(sess.torrent, { destroyStore: true }, () => {});
+                    this.client?.remove(sess.torrent, { destroyStore: true }, () => {});
                 } catch (_) {}
                 this.sessions.delete(hash);
             }
@@ -445,8 +447,8 @@ class TorrentEngine {
         return {
             status: 'online',
             engine: 'webtorrent-v3',
-            clientDownloadSpeed: (this.client.downloadSpeed / 1024 / 1024).toFixed(2) + ' MB/s',
-            clientUploadSpeed: (this.client.uploadSpeed / 1024 / 1024).toFixed(2) + ' MB/s',
+            clientDownloadSpeed: ((this.client?.downloadSpeed || 0) / 1024 / 1024).toFixed(2) + ' MB/s',
+            clientUploadSpeed: ((this.client?.uploadSpeed || 0) / 1024 / 1024).toFixed(2) + ' MB/s',
             active_torrents: this.sessions.size,
             sessions: active
         };
