@@ -814,17 +814,42 @@
           <h2 id="catalog-heading-title" class="catalog-heading-title">Trending Movies</h2>
           <span id="catalog-count-badge" class="catalog-count-badge">Popular Feed</span>
         </div>
-        <!-- Discover Grid Sort Select -->
-        <div class="discover-sort-wrap flex items-center gap-2">
-          <span class="filter-label"><i class="fa-solid fa-arrow-down-wide-short text-accent"></i> SORT:</span>
-          <select id="discover-sort-select" class="filter-select discover-sort-select" onchange="setDiscoverSort(this.value)">
-            <option value="trending">🔥 Trending / Popular</option>
-            <option value="seeds_desc">🌱 Top Seeders</option>
-            <option value="rating_desc">⭐ Highest Rating</option>
-            <option value="year_desc">📅 Newest First</option>
-            <option value="year_asc">🕰️ Oldest First</option>
-            <option value="title_asc">🔤 Title (A - Z)</option>
-          </select>
+        <!-- Discover Grid Filters & Sort Controls -->
+        <div class="discover-sort-wrap flex items-center gap-2 flex-wrap">
+          <div class="flex items-center gap-1">
+            <span class="filter-label"><i class="fa-solid fa-star text-yellow"></i> RATING:</span>
+            <select id="discover-rating-filter" class="filter-select discover-filter-select" onchange="setDiscoverRatingFilter(this.value)">
+              <option value="">All Ratings</option>
+              <option value="8.0">⭐ 8.0+ Masterpiece</option>
+              <option value="7.5">⭐ 7.5+ Great</option>
+              <option value="7.0">⭐ 7.0+ Good</option>
+              <option value="6.0">⭐ 6.0+ Decent</option>
+            </select>
+          </div>
+
+          <div class="flex items-center gap-1">
+            <span class="filter-label"><i class="fa-regular fa-calendar text-blue"></i> ERA:</span>
+            <select id="discover-year-filter" class="filter-select discover-filter-select" onchange="setDiscoverYearFilter(this.value)">
+              <option value="">All Years</option>
+              <option value="2020-2026">2020s (Current)</option>
+              <option value="2010-2019">2010s</option>
+              <option value="2000-2009">2000s</option>
+              <option value="1990-1999">90s</option>
+              <option value="1900-1989">Classic (&lt; 1990)</option>
+            </select>
+          </div>
+
+          <div class="flex items-center gap-1">
+            <span class="filter-label"><i class="fa-solid fa-arrow-down-wide-short text-accent"></i> SORT:</span>
+            <select id="discover-sort-select" class="filter-select discover-sort-select" onchange="setDiscoverSort(this.value)">
+              <option value="trending">🔥 Trending / Popular</option>
+              <option value="seeds_desc">🌱 Top Seeders</option>
+              <option value="rating_desc">⭐ Highest Rating</option>
+              <option value="year_desc">📅 Newest First</option>
+              <option value="year_asc">🕰️ Oldest First</option>
+              <option value="title_asc">🔤 Title (A - Z)</option>
+            </select>
+          </div>
         </div>
       </div>
 

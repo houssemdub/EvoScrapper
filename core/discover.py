@@ -22,106 +22,238 @@ def _normalize_poster(poster_url: Optional[str]) -> Optional[str]:
     return poster_url
 
 
+def _filter_and_sort_items(
+    items: List[DiscoverItem],
+    min_rating: Optional[float] = None,
+    year_from: Optional[int] = None,
+    year_to: Optional[int] = None,
+    sort: Optional[str] = "popular",
+) -> List[DiscoverItem]:
+    """Filters and sorts catalog items according to criteria."""
+    res = list(items)
+    if min_rating is not None:
+        def _match_rating(it: DiscoverItem) -> bool:
+            if not it.rating:
+                return False
+            try:
+                return float(it.rating) >= float(min_rating)
+            except (ValueError, TypeError):
+                return False
+        res = [it for it in res if _match_rating(it)]
+
+    if year_from is not None or year_to is not None:
+        def _match_year(it: DiscoverItem) -> bool:
+            if not it.year:
+                return False
+            try:
+                m = re.search(r"\b(19\d\d|20\d\d)\b", str(it.year))
+                if not m:
+                    return False
+                y = int(m.group(1))
+                if year_from is not None and y < year_from:
+                    return False
+                if year_to is not None and y > year_to:
+                    return False
+                return True
+            except (ValueError, TypeError):
+                return False
+        res = [it for it in res if _match_year(it)]
+
+    if sort:
+        s = sort.lower().strip()
+        if s == "rating_desc":
+            def _get_rating(it):
+                try:
+                    return float(it.rating or 0)
+                except (ValueError, TypeError):
+                    return 0.0
+            res.sort(key=_get_rating, reverse=True)
+        elif s == "rating_asc":
+            def _get_rating(it):
+                try:
+                    return float(it.rating or 0)
+                except (ValueError, TypeError):
+                    return 0.0
+            res.sort(key=_get_rating)
+        elif s == "year_desc":
+            def _get_year(it):
+                try:
+                    m = re.search(r"\b(19\d\d|20\d\d)\b", str(it.year or ""))
+                    return int(m.group(1)) if m else 0
+                except (ValueError, TypeError):
+                    return 0
+            res.sort(key=_get_year, reverse=True)
+        elif s == "year_asc":
+            def _get_year(it):
+                try:
+                    m = re.search(r"\b(19\d\d|20\d\d)\b", str(it.year or ""))
+                    return int(m.group(1)) if m else 9999
+                except (ValueError, TypeError):
+                    return 9999
+            res.sort(key=_get_year)
+        elif s == "title_asc":
+            res.sort(key=lambda it: (it.title or "").lower())
+
+    return res
+
+
 async def fetch_catalog(
     media_type: str = "movie",
     catalog: str = "top",
     genre: Optional[str] = None,
     page: int = 1,
+    min_rating: Optional[float] = None,
+    year_from: Optional[int] = None,
+    year_to: Optional[int] = None,
+    sort: Optional[str] = "popular",
 ) -> DiscoverCatalogResponse:
     """
     Fetches curated visual catalogs for movies, TV series, or anime.
     Supports catalog feeds (top, trending, new) and genre/category filtering.
     Backed by tiered caching (6 hours).
     """
+    cache_key = f"discover:catalog:{media_type}:{catalog}:{genre or 'all'}:{page}:{min_rating}:{year_from}:{year_to}:{sort}"
+    cached = await cache.get(cache_key)
+    if cached:
+        return cached
+
+    items: List[DiscoverItem] = []
+
     # If media_type is anime and a specific category (all, tv, movie, ova, special) is specified:
     anime_cats = {"all", "tv", "movie", "ova", "ona", "special", "specials", "off-season"}
     if media_type == "anime" and genre and genre.lower() in anime_cats:
         kitsu_items = await AnimeClient.fetch_anime_category(category=genre.lower(), page=page)
         if kitsu_items:
-            return DiscoverCatalogResponse(
-                items=kitsu_items,
-                total=len(kitsu_items),
-                type="anime",
-                catalog=catalog,
-                genre=genre,
-            )
+            items = list(kitsu_items)
 
-    # Normalize anime to series with animation genre if requested
-    actual_type = "series" if media_type == "anime" else media_type
-    actual_genre = "Animation" if media_type == "anime" and not genre else genre
+    if not items:
+        # Normalize anime to series with animation genre if requested
+        actual_type = "series" if media_type == "anime" else media_type
+        actual_genre = "Animation" if media_type == "anime" and not genre else genre
 
-    cache_key = f"discover:catalog:{media_type}:{catalog}:{genre or 'all'}:{page}"
-    cached = await cache.get(cache_key)
-    if cached:
-        return cached
+        # Cinemeta endpoint construction
+        base_catalog = "top"
+        genre_param = f"/genre={actual_genre}" if actual_genre and actual_genre.lower() != "all" else ""
+        
+        # Calculate skip offset for pagination (48 items per page on Cinemeta)
+        skip_param = f"/skip={(page - 1) * 48}" if page > 1 else ""
+        
+        endpoint = f"https://v3-cinemeta.strem.io/catalog/{actual_type}/{base_catalog}{genre_param}{skip_param}.json"
 
-    # Cinemeta endpoint construction
-    base_catalog = "top"
-    genre_param = f"/genre={actual_genre}" if actual_genre and actual_genre.lower() != "all" else ""
-    
-    # Calculate skip offset for pagination (48 items per page on Cinemeta)
-    skip_param = f"/skip={(page - 1) * 48}" if page > 1 else ""
-    
-    endpoint = f"https://v3-cinemeta.strem.io/catalog/{actual_type}/{base_catalog}{genre_param}{skip_param}.json"
+        try:
+            data = await http_client.get_json(endpoint, timeout=4.5)
+            raw_metas = (data.get("metas") or []) if isinstance(data, dict) else []
 
-    items: List[DiscoverItem] = []
-    try:
-        data = await http_client.get_json(endpoint, timeout=4.5)
-        raw_metas = (data.get("metas") or []) if isinstance(data, dict) else []
+            for m in raw_metas:
+                imdb_id = m.get("imdb_id") or m.get("id")
+                if not imdb_id or not str(imdb_id).startswith("tt"):
+                    continue
 
-        for m in raw_metas:
-            imdb_id = m.get("imdb_id") or m.get("id")
-            if not imdb_id or not str(imdb_id).startswith("tt"):
-                continue
+                trailers = m.get("trailers") or []
+                trailer_key = trailers[0].get("source") if trailers else None
+                trailer_url = f"https://www.youtube.com/watch?v={trailer_key}" if trailer_key else None
 
-            trailers = m.get("trailers") or []
-            trailer_key = trailers[0].get("source") if trailers else None
-            trailer_url = f"https://www.youtube.com/watch?v={trailer_key}" if trailer_key else None
+                # Detect if it's anime when under anime catalog or tagged Animation
+                item_genres = m.get("genres") or m.get("genre") or []
+                if isinstance(item_genres, str):
+                    item_genres = [item_genres]
 
-            # Detect if it's anime when under anime catalog or tagged Animation
-            item_genres = m.get("genres") or m.get("genre") or []
-            if isinstance(item_genres, str):
-                item_genres = [item_genres]
+                inferred_type = media_type
+                if media_type == "anime":
+                    inferred_type = "anime"
+                elif m.get("type"):
+                    inferred_type = m.get("type")
 
-            inferred_type = media_type
-            if media_type == "anime":
-                inferred_type = "anime"
-            elif m.get("type"):
-                inferred_type = m.get("type")
-
-            items.append(
-                DiscoverItem(
-                    id=str(imdb_id),
-                    title=m.get("name") or "Unknown Title",
-                    type=inferred_type,
-                    year=str(m.get("year")) if m.get("year") else None,
-                    poster=_normalize_poster(m.get("poster")),
-                    backdrop=m.get("background"),
-                    rating=str(m.get("imdbRating")) if m.get("imdbRating") else None,
-                    genres=item_genres,
-                    description=m.get("description"),
-                    trailer=trailer_url,
+                items.append(
+                    DiscoverItem(
+                        id=str(imdb_id),
+                        title=m.get("name") or "Unknown Title",
+                        type=inferred_type,
+                        year=str(m.get("year")) if m.get("year") else None,
+                        poster=_normalize_poster(m.get("poster")),
+                        backdrop=m.get("background"),
+                        rating=str(m.get("imdbRating")) if m.get("imdbRating") else None,
+                        genres=item_genres,
+                        description=m.get("description"),
+                        trailer=trailer_url,
+                    )
                 )
-            )
-    except Exception:
-        pass
+        except Exception:
+            pass
 
-    # Fallback to local curated seeds if upstream catalog had an issue
-    if not items and page == 1:
-        items = _get_fallback_catalog(media_type, actual_genre)
+        # Fallback to local curated seeds if upstream catalog had an issue
+        if not items and page == 1:
+            items = _get_fallback_catalog(media_type, actual_genre)
+
+    # Apply filters and sort order
+    filtered_items = _filter_and_sort_items(
+        items,
+        min_rating=min_rating,
+        year_from=year_from,
+        year_to=year_to,
+        sort=sort,
+    )
 
     response = DiscoverCatalogResponse(
-        items=items,
-        total=len(items),
+        items=filtered_items,
+        total=len(filtered_items),
         type=media_type,
         catalog=catalog,
         genre=genre,
     )
 
-    if items:
+    if filtered_items:
         await cache.set(cache_key, response, ttl=21600)  # 6 hour TTL
 
     return response
+
+
+async def fetch_recommendations(
+    media_type: str,
+    imdb_id: str,
+    limit: int = 12,
+) -> List[DiscoverItem]:
+    """
+    Fetches curated content recommendations ("More Like This") for a movie, series, or anime.
+    Uses genre-affinity matching against the catalog and filters out the query item itself.
+    """
+    if not imdb_id:
+        return []
+
+    cache_key = f"discover:recommendations:{media_type}:{imdb_id}:{limit}"
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    detail = await fetch_discover_detail(media_type=media_type, imdb_id=imdb_id)
+    recs: List[DiscoverItem] = []
+    first_genre = None
+    if detail and detail.genres:
+        first_genre = detail.genres[0]
+
+    # First attempt: same media type and primary genre
+    if first_genre:
+        cat_resp = await fetch_catalog(media_type=media_type, catalog="top", genre=first_genre, page=1)
+        for it in cat_resp.items:
+            if it.id != imdb_id and not any(r.id == it.id for r in recs):
+                recs.append(it)
+                if len(recs) >= limit:
+                    break
+
+    # Second attempt: top catalog for this media type if still need more
+    if len(recs) < limit:
+        top_resp = await fetch_catalog(media_type=media_type, catalog="top", genre=None, page=1)
+        for it in top_resp.items:
+            if it.id != imdb_id and not any(r.id == it.id for r in recs):
+                recs.append(it)
+                if len(recs) >= limit:
+                    break
+
+    recs = recs[:limit]
+    if recs:
+        await cache.set(cache_key, recs, ttl=21600)  # 6 hour TTL
+
+    return recs
 
 
 async def fetch_discover_detail(

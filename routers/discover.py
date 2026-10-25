@@ -1,7 +1,13 @@
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from core.cache import cache
-from core.discover import fetch_catalog, fetch_discover_detail, get_discover_suggestions, search_catalog
+from core.discover import (
+    fetch_catalog,
+    fetch_discover_detail,
+    fetch_recommendations,
+    get_discover_suggestions,
+    search_catalog,
+)
 from models.discover import DiscoverCatalogResponse, DiscoverDetail, DiscoverItem
 
 router = APIRouter(prefix="/api/v1/discover", tags=["Discover"])
@@ -13,6 +19,10 @@ async def get_discover_catalog(
     catalog: str = Query("top", description="Catalog feed: top, trending, new"),
     genre: Optional[str] = Query(None, description="Optional genre filter, e.g. Action, Sci-Fi"),
     page: int = Query(1, ge=1, le=20, description="Catalog page number (48 items per page)"),
+    min_rating: Optional[float] = Query(None, ge=0.0, le=10.0, description="Minimum IMDb rating"),
+    year_from: Optional[int] = Query(None, ge=1900, le=2100, description="Earliest release year"),
+    year_to: Optional[int] = Query(None, ge=1900, le=2100, description="Latest release year"),
+    sort: Optional[str] = Query("popular", description="Sort order: popular, rating_desc, rating_asc, year_desc, year_asc, title_asc"),
 ):
     """
     Fetches visual catalog cards for Movies, Series, and Anime with posters,
@@ -24,7 +34,34 @@ async def get_discover_catalog(
             status_code=400,
             detail=f"Invalid media type '{type}'. Allowed types: {', '.join(valid_types)}",
         )
-    return await fetch_catalog(media_type=type.lower(), catalog=catalog, genre=genre, page=page)
+    return await fetch_catalog(
+        media_type=type.lower(),
+        catalog=catalog,
+        genre=genre,
+        page=page,
+        min_rating=min_rating,
+        year_from=year_from,
+        year_to=year_to,
+        sort=sort,
+    )
+
+
+@router.get("/recommendations/{type}/{imdb_id}", response_model=List[DiscoverItem])
+async def get_discover_recommendations(
+    type: str,
+    imdb_id: str,
+    limit: int = Query(12, ge=1, le=30, description="Max recommendations to return"),
+):
+    """
+    Returns curated content recommendations ("More Like This") for a movie, series, or anime.
+    """
+    valid_types = ("movie", "series", "anime")
+    if type.lower() not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid media type '{type}'. Allowed types: {', '.join(valid_types)}",
+        )
+    return await fetch_recommendations(media_type=type.lower(), imdb_id=imdb_id, limit=limit)
 
 
 @router.get("/meta/{type}/{imdb_id}", response_model=DiscoverDetail)

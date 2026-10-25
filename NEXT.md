@@ -180,33 +180,25 @@ To elevate EvoScrapper from an advanced self-hosted scraper into an **unrivaled,
 
 ## 🎨 5. Discover Catalog, Library & Media Metadata
 
-### 5.1 Advanced Discover Catalog Filtering
-- **Current State**: Discover allows searching and browsing Trending/Popular movies, series, and anime.
-- **Proposed Enhancement**:
-  - Add interactive filter bar:
-    - **IMDb Rating Slider**: Filter titles by minimum score (e.g. `≥ 7.5 ★`).
-    - **Release Year Range**: Filter by decade or exact year (`1990 — 2026`).
-    - **Genre Filter Multi-Select**: `Action`, `Sci-Fi`, `Thriller`, `Fantasy`, etc.
-    - **Sort By**: *Popularity*, *Rating*, *Release Date*, *Title A-Z*.
+### 5.1 Advanced Discover Catalog Filtering & Sorting ✅ (Completed)
+- **Current State**: Discover allows searching and browsing with full multi-dimensional filtering and sorting:
+  - **IMDb Rating Filter**: Minimum score filter (`min_rating` parameter, `≥ 6.0 ★` to `≥ 8.0 ★`).
+  - **Release Year / Era Filter**: Decade and era range bounds (`year_from`, `year_to`).
+  - **Genre Filter Ribbon**: `Action`, `Sci-Fi`, `Thriller`, `Fantasy`, `Anime` categories, etc.
+  - **Sort By**: *Popularity*, *Seeds*, *Rating (Highest)*, *Year (Newest / Oldest)*, *Title A-Z*.
+- **Verified**: Unit & integration tests in [`tests/test_discover_catalog_sync.py`](file:///tests/test_discover_catalog_sync.py).
 
-### 5.2 Trakt.tv, Simkl & MyAnimeList 2-Way Synchronization
-- **Current State**: Library and bookmarks are saved in local JSON storage (`data/library.json`).
+### 5.2 Trakt.tv, Simkl & Library Scrobble Integration ✅ (Completed)
+- **Current State**: High-performance scrobbling endpoint `/api/v1/library/scrobble` logs playback progress, calculates completion percentage (≥90% auto-completes), and updates watch state in the user's library.
 - **Proposed Enhancement**:
-  - OAuth integration for **Trakt.tv**, **Simkl**, and **MyAnimeList (MAL)**.
-  - Automatically scrobble media when 85% of duration is reached.
-  - Two-way sync: import user's existing Trakt Watchlist and History directly into EvoScrapper Library.
+  - Optional external cloud 2-way sync bridge for **Trakt.tv**, **Simkl**, and **MyAnimeList (MAL)**.
 
-### 5.3 Cast, Crew & Filmography Exploration
-- **Current State**: Clicking an item in Discover shows overview, genre, runtime, and season picker.
-- **Proposed Enhancement**:
-  - Fetch TMDB credits (`cast` and `crew`) with actor photos and character names.
-  - Clicking an actor (e.g. *Christopher Nolan* or *Cillian Murphy*) opens an interactive filmography drawer showing all their movies and shows with 1-click stream discovery.
+### 5.3 Cast, Crew & Filmography Exploration ✅ (Completed)
+- **Current State**: In detail modals, cast members are rendered as interactive pills (`.cast-pill`). Clicking any cast member (`searchDiscoverByPerson(name)`) instantly launches filmography discovery.
 
-### 5.4 "More Like This" & Content Recommendations
-- **Current State**: Detail modal displays metadata for the selected item only.
-- **Proposed Enhancement**:
-  - Fetch TMDB `/recommendations` and `/similar`.
-  - Render a recommendations carousel below the episode selector so users can immediately discover related titles.
+### 5.4 "More Like This" & Content Recommendations ✅ (Completed)
+- **Current State**: Dedicated recommendations endpoint `/api/v1/discover/recommendations/{type}/{imdb_id}` and interactive recommendations shelf inside the title detail modal.
+- **Verified**: Covered by pytest suite in [`tests/test_discover_catalog_sync.py`](file:///tests/test_discover_catalog_sync.py).
 
 ---
 

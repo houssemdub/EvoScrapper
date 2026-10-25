@@ -48,6 +48,9 @@ const state = {
     animeCategory: 'all',
     catalog: 'top',
     sort: 'trending',
+    minRating: '',
+    yearFrom: '',
+    yearTo: '',
     page: 1,
     items: [],
     loaded: false,
@@ -1785,10 +1788,32 @@ async function setDiscoverSort(sortVal) {
         state.trending.rawItems = data.data || [];
       }
     } catch (_) {}
+    const sorted = applyDiscoverSort(state.discover.items);
+    renderDiscoverGrid(sorted, false);
+  } else {
+    loadDiscoverCatalog(true);
   }
+}
 
-  const sorted = applyDiscoverSort(state.discover.items);
-  renderDiscoverGrid(sorted, false);
+function setDiscoverRatingFilter(val) {
+  state.discover.minRating = val || '';
+  const sel = document.getElementById('discover-rating-filter');
+  if (sel) sel.value = val || '';
+  loadDiscoverCatalog(true);
+}
+
+function setDiscoverYearFilter(val) {
+  if (!val) {
+    state.discover.yearFrom = '';
+    state.discover.yearTo = '';
+  } else {
+    const parts = val.split('-');
+    state.discover.yearFrom = parts[0] || '';
+    state.discover.yearTo = parts[1] || '';
+  }
+  const sel = document.getElementById('discover-year-filter');
+  if (sel) sel.value = val || '';
+  loadDiscoverCatalog(true);
 }
 
 async function loadDiscoverCatalog(reset = true) {
@@ -1832,6 +1857,18 @@ async function loadDiscoverCatalog(reset = true) {
       params.append('genre', state.discover.animeCategory);
     } else if (state.discover.genre) {
       params.append('genre', state.discover.genre);
+    }
+    if (state.discover.minRating) {
+      params.append('min_rating', state.discover.minRating);
+    }
+    if (state.discover.yearFrom) {
+      params.append('year_from', state.discover.yearFrom);
+    }
+    if (state.discover.yearTo) {
+      params.append('year_to', state.discover.yearTo);
+    }
+    if (state.discover.sort && state.discover.sort !== 'seeds_desc') {
+      params.append('sort', state.discover.sort);
     }
 
     const res = await fetch(`/api/v1/discover/catalog?${params.toString()}`);
@@ -2163,7 +2200,7 @@ async function openDiscoverModal(id, type) {
       : '';
 
     const castRow = (detail.cast && detail.cast.length > 0)
-      ? `<div>CAST: <span>${escapeHtml(detail.cast.join(', '))}</span></div>`
+      ? `<div>CAST: <span class="cast-pills-wrap">${detail.cast.map(c => `<button type="button" class="cast-pill" onclick="searchDiscoverByPerson('${escapeJs(c)}')">${escapeHtml(c)}</button>`).join(' ')}</span></div>`
       : '';
 
     // Render episodic section if series/anime
@@ -2254,7 +2291,13 @@ async function openDiscoverModal(id, type) {
         </div>
       </div>
 
-      ${renderMoreLikeThisSection(detail)}
+      <!-- Dynamic Recommendations Container -->
+      <div class="more-like-this-section" id="modal-recommendations-section" style="margin-top:1.25rem; border-top:1px solid rgba(255,255,255,0.06); padding-top:0.75rem;">
+        <div class="mono font-bold text-xs text-accent uppercase mb-2"><i class="fa-solid fa-wand-magic-sparkles text-accent"></i> More Like This (Recommendations):</div>
+        <div id="discover-recommendations-container" class="shelf-carousel" style="gap:0.75rem; padding-bottom:0.5rem;">
+          ${renderMoreLikeThisSection(detail)}
+        </div>
+      </div>
     `;
 
     if (isEpisodic && seasons.length > 0) {
@@ -2263,6 +2306,9 @@ async function openDiscoverModal(id, type) {
 
     // Trigger Stream Resolution for the title / episode
     resolveStreamsForCurrentSelection();
+
+    // Fetch and populate rich recommendations asynchronously
+    renderDiscoverRecommendations(reqType, id);
   } catch (err) {
     content.innerHTML = `
       <div class="empty-state" style="padding: 3rem 1rem;">
@@ -2272,6 +2318,46 @@ async function openDiscoverModal(id, type) {
         <button class="btn btn-sm btn-outline mt-3" onclick="closeDiscoverModal()">Close</button>
       </div>
     `;
+  }
+}
+
+function searchDiscoverByPerson(name) {
+  if (!name) return;
+  closeDiscoverModal();
+  switchTab('discover');
+  const input = document.getElementById('discover-search-input');
+  if (input) {
+    input.value = name;
+  }
+  searchDiscoverCatalog();
+}
+
+async function renderDiscoverRecommendations(type, id) {
+  const container = document.getElementById('discover-recommendations-container');
+  if (!container) return;
+
+  try {
+    const res = await fetch(`/api/v1/discover/recommendations/${type}/${id}`);
+    if (!res.ok) return;
+    const recs = await res.json();
+    if (!recs || recs.length === 0) return;
+
+    const cardsHtml = recs.map((item) => `
+      <div class="continue-card recommendation-card" style="min-width:130px; max-width:130px; cursor:pointer;" onclick="openDiscoverModal('${escapeJs(item.id)}', '${escapeJs(item.type || 'movie')}')">
+        <div class="continue-card-thumb-wrap" style="height:190px;">
+          ${item.poster ? `<img src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.title)}" class="continue-card-thumb" style="object-fit:cover;">` : `<div class="media-jacket-placeholder"><i class="fa-solid fa-film"></i></div>`}
+          <div class="continue-play-overlay"><i class="fa-solid fa-play"></i></div>
+        </div>
+        <div class="continue-card-body" style="padding:0.4rem;">
+          <div class="continue-card-title" style="font-size:0.75rem;">${escapeHtml(item.title)}</div>
+          <div class="continue-card-meta"><span class="text-dim">${escapeHtml(item.year || '')}</span><span class="text-green">${escapeHtml(item.rating || '★')}</span></div>
+        </div>
+      </div>
+    `).join('');
+
+    container.innerHTML = cardsHtml;
+  } catch (err) {
+    console.warn('[Discover] Recommendations fetch error:', err);
   }
 }
 
@@ -6331,6 +6417,24 @@ function recordWatchProgress(currentTime, totalDuration) {
         if (r.ok) refreshLibraryData();
       }).catch(() => {});
     }
+  } catch (_) {}
+
+  // Scrobble playback progress to backend library
+  try {
+    fetch('/api/v1/library/scrobble', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        item_id: (detail && detail.id) ? detail.id : key,
+        title: title,
+        type: detail ? detail.type : 'movie',
+        playback_seconds: currentTime,
+        duration_seconds: totalDuration,
+        progress_percent: Math.min(100, pct),
+        season: season !== null ? Number(season) : null,
+        episode: episode !== null ? Number(episode) : null,
+      })
+    }).catch(() => {});
   } catch (_) {}
 }
 

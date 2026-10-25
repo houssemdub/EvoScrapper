@@ -20,6 +20,17 @@ class ProgressUpdateRequest(BaseModel):
     status: Optional[str] = None
 
 
+class ScrobbleRequest(BaseModel):
+    item_id: str
+    title: str
+    type: str = "movie"
+    playback_seconds: float = 0.0
+    duration_seconds: float = 0.0
+    progress_percent: int = 0
+    season: Optional[int] = None
+    episode: Optional[int] = None
+
+
 class BulkLibraryRequest(BaseModel):
     items: List[LibraryItem]
 
@@ -90,6 +101,44 @@ async def update_library_progress(item_id: str, req: ProgressUpdateRequest):
     if not item:
         raise HTTPException(status_code=404, detail="Title not found in library")
     return item
+
+
+@router.post("/scrobble")
+async def scrobble_playback(req: ScrobbleRequest):
+    """
+    Records playback progress and scrobbles watching activity to the library.
+    Upserts or updates progress and marks status as watching or completed.
+    """
+    computed_status = "completed" if req.progress_percent >= 90 else "watching"
+    item = await library_manager.get_item(req.item_id)
+    if not item:
+        new_item = LibraryItem(
+            id=req.item_id,
+            title=req.title,
+            type=req.type,
+            status=computed_status,
+            current_season=req.season,
+            current_episode=req.episode,
+            playback_seconds=req.playback_seconds,
+            duration_seconds=req.duration_seconds,
+            progress_percent=req.progress_percent,
+        )
+        await library_manager.upsert_item(new_item)
+    else:
+        await library_manager.update_progress(
+            item_id=req.item_id,
+            season=req.season,
+            episode=req.episode,
+            progress_percent=req.progress_percent,
+            playback_seconds=req.playback_seconds,
+            duration_seconds=req.duration_seconds,
+            status=computed_status,
+        )
+    return {
+        "status": "success",
+        "item_id": req.item_id,
+        "message": f"Scrobble recorded for {req.title} ({req.progress_percent}%)",
+    }
 
 
 @router.delete("/{item_id}")
