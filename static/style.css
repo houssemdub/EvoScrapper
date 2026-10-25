@@ -3898,7 +3898,8 @@ p, span, div {
   top: 0;
   right: 0;
   bottom: 0;
-  width: clamp(620px, 45vw, 780px);
+  width: clamp(560px, 38vw, 680px);
+  width: clamp(620px, 45vw, 780px); /* Enhanced wider subtitles panel */
   max-width: min(96vw, 820px);
   background: oklch(14% 0.012 165 / 0.96);
   border-left: 1px solid var(--color-rule);
