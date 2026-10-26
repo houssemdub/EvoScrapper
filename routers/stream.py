@@ -130,6 +130,14 @@ async def stream_raw_torrent(
     b_mb = buffer_mb if isinstance(buffer_mb, int) else None
     target_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode, buffer_mb=b_mb)
 
+    # Direct-daemon 307 redirect for localhost clients [Phase 4]
+    client_host = request.client.host if request.client else ""
+    req_host = request.headers.get("host", "").split(":")[0].lower()
+    is_localhost = client_host in ("127.0.0.1", "::1", "localhost", "testclient") or req_host in ("127.0.0.1", "localhost")
+    if is_localhost and os.getenv("EVO_DIRECT_RANGE", "false").lower() in ("1", "true", "yes"):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=target_url, status_code=307)
+
     req_headers = {}
     range_header = request.headers.get("Range")
     if range_header:

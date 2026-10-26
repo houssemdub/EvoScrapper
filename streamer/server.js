@@ -461,9 +461,45 @@ const server = http.createServer(async (req, res) => {
             };
 
             if (range) {
-                const parts = range.replace(/bytes=/, '').split('-');
-                const start = parseInt(parts[0], 10);
-                const end = parts[1] ? parseInt(parts[1], 10) : total - 1;
+                if (range.includes(',')) {
+                    res.writeHead(416, {
+                        'Content-Range': `bytes */${total}`,
+                        'Content-Type': 'text/plain'
+                    });
+                    res.end('Multiple ranges not supported');
+                    return;
+                }
+
+                const matches = range.match(/bytes=(\d*)-(\d*)/);
+                if (!matches) {
+                    res.writeHead(416, {
+                        'Content-Range': `bytes */${total}`,
+                        'Content-Type': 'text/plain'
+                    });
+                    res.end('Malformed range header');
+                    return;
+                }
+
+                let start = matches[1] ? parseInt(matches[1], 10) : undefined;
+                let end = matches[2] ? parseInt(matches[2], 10) : undefined;
+
+                if (start === undefined && end !== undefined) {
+                    start = Math.max(0, total - end);
+                    end = total - 1;
+                } else if (start !== undefined && end === undefined) {
+                    end = total - 1;
+                }
+
+                if (isNaN(start) || isNaN(end) || start >= total || start > end || start < 0) {
+                    res.writeHead(416, {
+                        'Content-Range': `bytes */${total}`,
+                        'Content-Type': 'text/plain'
+                    });
+                    res.end('Requested range not satisfiable');
+                    return;
+                }
+
+                end = Math.min(end, total - 1);
                 const chunksize = (end - start) + 1;
 
                 res.writeHead(206, {
