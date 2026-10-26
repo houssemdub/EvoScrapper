@@ -199,15 +199,59 @@ Returns real-time telemetry from the P2P streaming daemon for a specific active 
 
 ---
 
-#### `GET /api/v1/stream/hls/manifest.m3u8`
-Generates a virtual HLS (HTTP Live Streaming) master manifest for a torrent stream.
+#### `GET /api/v1/stream/hls/playlist.m3u8`
+Generates an RFC 8216 compliant virtual HLS master manifest for a torrent stream with keyframe boundary snapping.
+- **Query Parameters**: `info_hash`, `file_idx`, `duration`, `segment_duration` (default: 6.0), `format` (`ts` or `fmp4`).
+- Supports fMP4 `#EXT-X-MAP:URI` when `format=fmp4`.
 
 ---
 
 #### `GET /api/v1/stream/hls/segment`
-Zero-latency virtual MPEG-TS segment generator with FFmpeg.
-- **Query Parameters**: `info_hash`, `start` (seconds), `duration` (seconds).
-- Preserves PTS timestamp continuity via `-output_ts_offset`.
+Generates and serves cached virtual HLS TS/fMP4 segments with single-flight deduplication and background prefetching.
+- **Query Parameters**: `info_hash`, `file_idx`, `start` (seconds), `duration` (seconds), `format` (`ts` or `fmp4`).
+- Header: `Cache-Control: public, max-age=300, immutable`.
+
+---
+
+#### `GET /api/v1/stream/hls/init.mp4`
+Generates the fMP4 initialization segment (`ftyp` + `moov`) for RFC 8216 `EXT-X-MAP`.
+- **Query Parameters**: `info_hash`, `file_idx`.
+
+---
+
+#### `GET /api/v1/stream/keyframes`
+Returns probed or cached video keyframe timestamps for seek-safe keyframe snapping and client seek timeline synchronization.
+- **Query Parameters**: `info_hash`, `file_idx`, `magnet` (optional).
+- **Returns**: `{ info_hash, file_idx, keyframes: [0.0, 4.25, 8.5, ...], cached: boolean }`.
+
+---
+
+#### `GET /api/v1/stream/health-watch`
+Real-time buffer health state monitoring endpoint from the torrent engine watchdog.
+- **Returns**: `{ hash, health_state: "healthy"|"deficit"|"starved", seconds_ahead, deficit_ratio, speed_bps, num_peers, unchoked_peers }`.
+
+---
+
+#### `Streaming Response Headers`
+- `X-Evo-Buffer-State`: Streaming buffer health (`healthy`, `deficit`, `starved`).
+- `X-Evo-Seek-Keyframe`: Nearest keyframe timestamp aligned for accurate seeking without artifacts.
+- `X-Evo-BurnWarn`: Set to `1` when subtitle burn-in re-encoding is active.
+
+---
+
+#### Internal Daemon Endpoints (Port 8889 / `STREAM_PORT`)
+- `GET /file-info?info_hash=<hash>&file_idx=<idx>`: Returns exact piece length, piece count, file byte offset, and length.
+- `GET /window?info_hash=<hash>&file_idx=<idx>&offset=<bytes>&buffer_mb=<mb>`: Dynamically adjusts time/bitrate adaptive sliding window.
+
+---
+
+#### `GET /api/v1/stream/diagnostics`
+Comprehensive diagnostics snapshot for the Settings Control Center:
+- Node.js micro-daemon health, PID, port, active sessions, and buffer health states.
+- HLS persistent disk cache size, max MB, in-flight locks.
+- Debrid proxy shared client status and keepalive pool metrics.
+- FFmpeg transmux concurrency semaphore and external players.
+- Storage and disk usage.
 
 ---
 

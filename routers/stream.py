@@ -17,6 +17,7 @@ from core.torrent_streamer import (
     warm_torrent,
     warm_window,
 )
+from collections import deque
 import os
 from core.transmuxer import (
     extract_embedded_subtitle_vtt,
@@ -248,6 +249,10 @@ async def stream_transmuxed_torrent(
         "X-EvoStream-Audio": f"track_{audio_track}_boost_{audio_boost}",
         "X-Evo-Buffer-State": "healthy",
     }
+    if burn_sub_idx is not None:
+        resp_hdrs["X-Evo-BurnWarn"] = "1"
+    if start_time and start_time > 0:
+        resp_hdrs["X-Evo-Seek-Keyframe"] = str(round(start_time, 3))
     if duration and isinstance(duration, (int, float)) and duration > 0:
         resp_hdrs["X-Content-Duration"] = str(round(duration, 2))
         resp_hdrs["Content-Duration"] = str(round(duration, 2))
@@ -757,6 +762,51 @@ async def get_hls_segment(
     )
 
 
+@router.get("/keyframes")
+async def get_stream_keyframes(
+    info_hash: str = Query(..., description="Torrent info hash"),
+    file_idx: int = Query(0, description="File index inside torrent"),
+    magnet: Optional[str] = Query(None, description="Optional magnet URI"),
+):
+    """
+    Returns probed or cached video keyframe timestamps for seek-safe keyframe snapping [Phase 7 STRM-HIGH-05].
+    """
+    from core.transmuxer import load_cached_keyframes, probe_keyframes
+    cached = load_cached_keyframes(info_hash, file_idx)
+    if cached is not None:
+        return {"info_hash": info_hash, "file_idx": file_idx, "keyframes": cached, "cached": True}
+    source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet)
+    kfs = await probe_keyframes(source_url, info_hash, file_idx)
+    return {"info_hash": info_hash, "file_idx": file_idx, "keyframes": kfs, "cached": False}
+
+
+_WATCHDOG_HISTORY: deque = deque(maxlen=100)
+
+
+@router.get("/health-watch")
+async def get_stream_health_watch(
+    info_hash: str = Query(..., description="Torrent info hash"),
+):
+    """
+    Real-time buffer health state monitoring endpoint from the torrent engine watchdog.
+    """
+    from core.torrent_streamer import DAEMON_URL
+    try:
+        session = await get_http_session()
+        async with session.get(f"{DAEMON_URL}/health-watch?info_hash={info_hash}", timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                import time
+                data["timestamp"] = time.time()
+                _WATCHDOG_HISTORY.append(data)
+                return data
+            raise HTTPException(status_code=resp.status, detail="Daemon health-watch failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Cannot connect to daemon: {str(e)}")
+
+
 @router.get("/diagnostics")
 async def get_system_diagnostics():
     """
@@ -825,6 +875,17 @@ async def get_system_diagnostics():
                 diag["daemon"]["active_torrents"] = data.get("active_torrents", 0)
                 diag["daemon"]["download_speed"] = data.get("clientDownloadSpeed", "0 KB/s")
                 diag["daemon"]["upload_speed"] = data.get("clientUploadSpeed", "0 KB/s")
+                diag["daemon"]["sessions"] = [
+                    {
+                        "hash": s.get("info_hash"),
+                        "health_state": s.get("health_state", "healthy"),
+                        "seconds_ahead": s.get("seconds_ahead", 0),
+                        "deficit_ratio": s.get("deficit_ratio", 0),
+                        "download_speed": s.get("downloadSpeed", "0 MB/s"),
+                        "peers": s.get("numPeers", 0),
+                    }
+                    for s in data.get("sessions", [])
+                ]
     except Exception as e:
         diag["daemon"]["error"] = str(e)
 
@@ -867,6 +928,50 @@ async def get_system_diagnostics():
         }
     except Exception as e:
         diag["storage"]["error"] = str(e)
+
+    # 3.5 HLS Cache & Transmux Telemetry [Phase 11]
+    try:
+        from core.transmuxer import _hls_cache, get_ffmpeg_max_concurrency, _FFMPEG_SEMAPHORE
+        diag["hls_cache"] = _hls_cache.get_stats()
+        active_permits = 0
+        if _FFMPEG_SEMAPHORE is not None:
+            max_c = get_ffmpeg_max_concurrency()
+            active_permits = max(0, max_c - _FFMPEG_SEMAPHORE._value)
+        diag["transmux"] = {
+            "max_concurrency": get_ffmpeg_max_concurrency(),
+            "active_permits": active_permits,
+        }
+    except Exception:
+        diag["hls_cache"] = {}
+        diag["transmux"] = {}
+
+    try:
+        import core.debrid.proxy as db_proxy
+        client = db_proxy._shared_client
+        pool_stats = {}
+        if client is not None and getattr(client, "_transport", None) and getattr(client._transport, "_pool", None):
+            pool = client._transport._pool
+            pool_stats["open_connections"] = len(getattr(pool, "_requests", []))
+        diag["debrid_proxy"] = {
+            "shared_client_active": bool(client and not client.is_closed),
+            "max_keepalive_connections": 20,
+            "max_connections": 50,
+            **pool_stats,
+        }
+    except Exception as e:
+        diag["debrid_proxy"] = {
+            "shared_client_active": False,
+            "max_keepalive_connections": 20,
+            "max_connections": 50,
+            "error": str(e),
+        }
+
+    diag["watchdog_history"] = list(_WATCHDOG_HISTORY)
+    diag["mesh"] = {
+        "supported": True,
+        "default_enabled": False,
+        "engine": "p2p-media-loader",
+    }
 
     # 4. Stremio Cinemeta check
     s_start = time.time()

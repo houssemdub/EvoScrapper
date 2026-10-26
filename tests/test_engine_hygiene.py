@@ -28,7 +28,8 @@ def test_peer_cache_save_and_load():
             console.error('Failed to load saved peers:', loaded);
             process.exit(1);
         }
+        process.exit(0);
         """
     ]
-    res = subprocess.run(node_cmd, capture_output=True, text=True)
+    res = subprocess.run(node_cmd, capture_output=True, text=True, timeout=10)
     assert res.returncode == 0, f"Node peer cache test failed: {res.stderr}\n{res.stdout}"

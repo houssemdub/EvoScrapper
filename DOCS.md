@@ -205,6 +205,29 @@ PIKPAK_PASSWORD=
 
 ## 5. Streaming Engine & Player Architecture
 
+### Flaw-Fix Matrix (Streaming & Buffering Overhaul)
+
+| Flaw ID | Severity | Phase | Files Touched | Tests | Status |
+|---|---|---|---|---|---|
+| `STRM-CRIT-01` | Critical | Phase 0 | `routers/stream.py` | `tests/test_streaming_overhaul_phase0.py` | FIXED |
+| `STRM-CRIT-02` | Critical | Phase 0 | `streamer/server.js`, `streamer/torrent_engine.js` | `tests/test_streaming_overhaul_phase0.py` | FIXED |
+| `STRM-CRIT-03` | Critical | Phase 0 | `streamer/torrent_engine.js` | `tests/test_streaming_overhaul_phase0.py` | FIXED |
+| `STRM-CRIT-04` | Critical | Phase 0 | `core/transmuxer.py` | `tests/test_streaming_overhaul_phase0.py` | FIXED |
+| `STRM-CRIT-05` | Critical | Phase 0 | `routers/stream.py`, `core/discover.py` | `tests/test_streaming_overhaul_phase0.py` | FIXED |
+| `STRM-HIGH-01` | High | Phase 5 | `core/transmuxer.py`, `routers/stream.py` | `tests/test_transmux_audio_and_concurrency.py` | FIXED |
+| `STRM-HIGH-02` | High | Phase 6 | `core/debrid/proxy.py`, `main.py` | `tests/test_debrid_pooling.py` | FIXED |
+| `STRM-HIGH-03` | High | Phase 5 | `core/transmuxer.py` | `tests/test_transmux_audio_and_concurrency.py` | FIXED |
+| `STRM-HIGH-04` | High | Phase 1 | `core/transmuxer.py`, `routers/stream.py` | `tests/test_hls_stream.py` | FIXED |
+| `STRM-HIGH-05` | High | Phase 7 | `core/transmuxer.py`, `routers/stream.py` | `tests/test_hls_keyframes.py` | FIXED |
+| `STRM-MED-01` | Medium | Phase 3 | `streamer/torrent_engine.js`, `streamer/server.js` | `tests/test_buffer_watchdog.py` | FIXED |
+| `STRM-MED-02` | Medium | Phase 3 | `core/transmuxer.py`, `static/app.js` | `tests/test_buffer_watchdog.py` | FIXED |
+| `STRM-MED-03` | Medium | Phase 9 | `core/torrent_streamer.py`, `streamer/server.js` | `tests/test_process_management.py` | FIXED |
+| `STRM-MED-04` | Medium | Phase 10 | `static/app.js`, `static/p2p-player.js` | `tests/test_webrtc_mesh_wiring.py` | FIXED |
+| `STRM-MED-05` | Medium | Phase 2 | `streamer/torrent_engine.js`, `routers/stream.py` | `tests/test_p2p_streaming_overhaul.py` | FIXED |
+| `STRM-LOW-01` | Low | Phase 8 | `streamer/torrent_engine.js` | `tests/test_engine_hygiene.py` | FIXED |
+| `STRM-LOW-02` | Low | Phase 5 | `static/app.js`, `static/index.html` | `tests/test_transmux_audio_and_concurrency.py` | FIXED |
+| `STRM-LOW-03` | Low | Phase 9 | `config.py`, `core/torrent_streamer.py` | `tests/test_process_management.py` | FIXED |
+
 ### 5.1. 4-Tier Concurrent Swarm Buffering (streamer/torrent_engine.js)
 To eliminate playback stalls during 4K and 1080p high-bitrate streaming, the WebTorrent streaming engine employs an adaptive 4-tier piece prioritization horizon:
 1. **Tier 1 (Critical Header & Index Lock)**:
@@ -292,3 +315,23 @@ EvoScrapper eliminates this via a two-stage tokenized classification engine in `
 
 ### 5.7. Contract-First Testing Suite (SPEC.md)
 - Architectural boundaries and I/O contracts are formally defined in `SPEC.md` and enforced via deterministic unit and regression tests in `tests/test_core_contract.py`, `tests/test_player_and_buffering.py`, `tests/test_player_alignment_and_discover_sort.py`, and `tests/test_subs_lang_and_player_cleanup.py`.
+
+### 5.8. Bitrate-Adaptive Sliding Window & Backward-Seek Retention [STRM-MED-05]
+- Instead of static piece counts, window boundaries dynamically calculate from file bitrate:
+  - Critical playback horizon: 20 seconds ahead at Priority 3 + `critical()`.
+  - Multi-peer swarm horizon: 90 seconds ahead * buffer multiplier at Priority 2.
+  - Background lookahead reservoir: 240 seconds ahead * buffer multiplier at Priority 1.
+- **Backward-Seek Protection**: Maintains a 10-piece retention tail behind cursor (`cursorPiece - 11`) and immediately re-selects critical priority upon backward seek to eliminate playback stalls.
+
+### 5.9. Virtual HLS Keyframe Snapping & Persistent Cache [STRM-HIGH-04, STRM-HIGH-05]
+- `HlsSegmentCache` persists generated TS/fMP4 segments to disk with single-flight mutex deduplication, background prefetching of sequential segments, and LRU eviction.
+- Keyframe boundary analysis (`ffprobe`) indexes video keyframes (`data/keyframes/<hash>_<idx>.json`) and aligns `#EXTINF` segment durations to exact keyframes, eliminating timestamp discontinuities.
+- Supports fragmented MP4 container format with `#EXT-X-MAP:URI="init.mp4"` for zero-transmuxing overhead.
+
+### 5.10. High-Fidelity Audio Downmixing (ITU-R BS.775) & PGS Canvas [STRM-HIGH-01, STRM-LOW-02]
+- Audio streams with > 2 channels (5.1 / 7.1) are downmixed using the ITU-R BS.775 stereo pan matrix (`FL=0.5*c0+0.7071*c2+0.7071*c4|FR=0.5*c1+0.7071*c2+0.7071*c5`), restoring center dialogue clarity.
+- PGS bitmap subtitles default to client-side WebAssembly canvas decoding (`pgs-decoder.js` via `/api/v1/stream/subtitles/sup`), avoiding GPU/CPU video re-encoding.
+
+### 5.11. WebRTC Mesh Acceleration & Kill-Fast Hygiene [STRM-HIGH-03, STRM-MED-04]
+- Client player integrates P2P Media Loader over WebRTC with automatic direct HTTP chunk fallback.
+- Transmux FFmpeg processes are bounded by dynamic semaphore sizing and terminated with 1.0s kill-fast timeout on client disconnect to prevent hanging processes.

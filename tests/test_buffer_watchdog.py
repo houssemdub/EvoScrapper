@@ -8,37 +8,34 @@ from core.transmuxer import stream_transmuxed_video
 
 def test_watchdog_detects_deficit():
     """Verifies torrent_engine.js buffer-health watchdog detects download speed deficits."""
-    node_cmd = [
-        "node", "--input-type=module", "-e",
-        """
-        import engine from './streamer/torrent_engine.js';
-        let criticalCalled = false;
-        const dummyTorrent = {
-            pieceLength: 1048576,
-            downloadSpeed: 50000, // 50 KB/s - well below 8Mbps (1MB/s)
-            numPeers: 5,
-            infoHash: 'c'.repeat(40),
-            wires: [{ connected: true, downloaded: 0, lastActive: Date.now() - 5000, choke: () => {} }],
-            select: () => {},
-            critical: () => { criticalCalled = true; }
-        };
-        // 2 verified pieces ahead = 2MB = ~2s buffer (< 5s threshold)
-        dummyTorrent.bitfield = { get: (i) => i <= 1 };
-        const dummyFile = { offset: 0, length: 100 * 1048576 };
-        engine.sessions.set('c'.repeat(40), { lastActive: Date.now(), avg_bitrate_bps: 8000000 });
+    js_code = """
+    import engine from './streamer/torrent_engine.js';
+    let criticalCalled = false;
+    const dummyTorrent = {
+        pieceLength: 1048576,
+        downloadSpeed: 50000,
+        numPeers: 5,
+        infoHash: 'c'.repeat(40),
+        wires: [{ connected: true, downloaded: 0, lastActive: Date.now() - 5000, choke: () => {} }],
+        select: () => {},
+        critical: () => { criticalCalled = true; }
+    };
+    dummyTorrent.bitfield = { get: (i) => i <= 1 };
+    const dummyFile = { offset: 0, length: 100 * 1048576 };
+    engine.sessions.set('c'.repeat(40), { lastActive: Date.now(), avg_bitrate_bps: 8000000 });
 
-        const res = engine.checkBufferHealth(dummyTorrent, dummyFile, 0);
-        if (res.health_state !== 'deficit') {
-            console.error('Expected health_state deficit, got:', res);
-            process.exit(1);
-        }
-        if (!criticalCalled) {
-            console.error('Expected critical pieces to be engaged during deficit');
-            process.exit(2);
-        }
-        """
-    ]
-    res = subprocess.run(node_cmd, capture_output=True, text=True)
+    const res = engine.checkBufferHealth(dummyTorrent, dummyFile, 0);
+    if (res.health_state !== 'deficit') {
+        console.error('Expected health_state deficit, got:', res);
+        process.exit(1);
+    }
+    if (!criticalCalled) {
+        console.error('Expected critical pieces to be engaged during deficit');
+        process.exit(2);
+    }
+    process.exit(0);
+    """
+    res = subprocess.run(["node", "--input-type=module"], input=js_code, capture_output=True, text=True, timeout=10)
     assert res.returncode == 0, f"Node script failed: {res.stderr}\n{res.stdout}"
 
 

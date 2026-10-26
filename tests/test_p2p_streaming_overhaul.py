@@ -388,9 +388,10 @@ def test_sliding_window_bitrate_scales_window():
         const highRes = selected.find(s => s.prio === 1)?.end || 0;
 
         if (!(highRes > lowRes)) process.exit(1);
+        process.exit(0);
         """
     ]
-    res = subprocess.run(node_cmd, capture_output=True, text=True)
+    res = subprocess.run(node_cmd, capture_output=True, text=True, timeout=10)
     assert res.returncode == 0, f"Node script failed: {res.stderr}"
 
 
@@ -428,9 +429,10 @@ def test_sliding_window_backward_seek_retains_tail():
         const reselected = selected.some(s => s.start <= 20 && s.end >= 20 && s.prio === 3);
 
         if (!reselected || lastDeselect.end !== 39) process.exit(1);
+        process.exit(0);
         """
     ]
-    res = subprocess.run(node_cmd, capture_output=True, text=True)
+    res = subprocess.run(node_cmd, capture_output=True, text=True, timeout=10)
     assert res.returncode == 0, f"Node script failed: {res.stderr}"
 
 

@@ -501,7 +501,30 @@ class HlsSegmentCache:
         self.ttl_sec = ttl_sec
         self._in_flight: dict[str, asyncio.Future] = {}
         self._lock = asyncio.Lock()
+        self.hits: int = 0
+        self.misses: int = 0
+        self._latencies: list[float] = []
         os.makedirs(self.cache_dir, exist_ok=True)
+
+    def record_latency(self, latency: float):
+        self._latencies.append(latency)
+        if len(self._latencies) > 100:
+            self._latencies.pop(0)
+
+    def get_stats(self) -> dict:
+        total = self.hits + self.misses
+        ratio = round(self.hits / total, 3) if total > 0 else 1.0
+        avg_latency = round(sum(self._latencies) / len(self._latencies), 4) if self._latencies else 0.0
+        return {
+            "cache_dir": self.cache_dir,
+            "max_mb": round(self.max_bytes / (1024 * 1024), 1),
+            "ttl_sec": self.ttl_sec,
+            "in_flight_count": len(self._in_flight),
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_ratio": ratio,
+            "avg_first_byte_latency_sec": avg_latency,
+        }
 
     def get_cache_key(self, source_url: str, start: float, duration: float) -> str:
         m_hash = re.search(r"info_hash=([0-9a-fA-F]{40})", source_url)
@@ -680,14 +703,22 @@ async def stream_hls_ts_segment(
     single-flight deduplication, and bounded FFmpeg concurrency [STRM-HIGH-04].
     """
     key = _hls_cache.get_cache_key(source_url_or_path, start_seconds, duration_seconds)
+    t0 = time.time()
 
     # 1. Cache hit: serve directly from disk with ZERO ffmpeg spawns
     if _hls_cache.has(key):
+        _hls_cache.hits += 1
+        first_chunk = True
         async for chunk in _hls_cache.get_cached_chunks(key, chunk_size=chunk_size):
+            if first_chunk:
+                _hls_cache.record_latency(time.time() - t0)
+                first_chunk = False
             yield chunk
         if prefetch:
             _trigger_hls_prefetch(source_url_or_path, start_seconds, duration_seconds)
         return
+
+    _hls_cache.misses += 1
 
     # 2. Single-flight lock: if another request is currently generating this exact segment, wait for it
     fut = None
