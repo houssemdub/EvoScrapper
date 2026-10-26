@@ -18,6 +18,7 @@ const __dirname = path.dirname(__filename);
 const CACHE_DIR = path.resolve(process.env.EVO_STREAM_CACHE_DIR || path.resolve(__dirname, '../.stream_cache'));
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 const PEER_CACHE_FILE = path.join(CACHE_DIR, 'peers.json');
+const DHT_TABLE_FILE = path.join(CACHE_DIR, 'dht_table.json');
 
 // ── Ultra-Expanded Public Trackers ──────────────────────────────────────────
 const DEFAULT_TRACKERS = [
@@ -125,7 +126,9 @@ class TorrentEngine {
                 torrentPort: TORRENT_PORT,
                 dhtPort: DHT_PORT,
                 maxConns: OFFLINE_MODE ? 8 : 200,
-                dht: !OFFLINE_MODE,
+                // NEXT.md 3.4: restore the DHT routing table saved on a
+                // previous run for near-instant non-tracker peer discovery.
+                dht: OFFLINE_MODE ? false : { nodes: this._loadDhtTable() },
                 tracker: !OFFLINE_MODE,
                 utp: !OFFLINE_MODE,
                 lsd: !OFFLINE_MODE,
@@ -159,7 +162,31 @@ class TorrentEngine {
             this._idleSweepTimer.unref?.();
             this._peerReinjectTimer = setInterval(() => this._reinjectCachedPeers(), 120 * 1000);
             this._peerReinjectTimer.unref?.();
+            this._dhtSaveTimer = setInterval(() => this._saveDhtTable(), 300 * 1000);
+            this._dhtSaveTimer.unref?.();
         }
+    }
+
+    _loadDhtTable() {
+        try {
+            if (fs.existsSync(DHT_TABLE_FILE)) {
+                const nodes = JSON.parse(fs.readFileSync(DHT_TABLE_FILE, 'utf-8'));
+                if (Array.isArray(nodes)) {
+                    return nodes.filter(n => n && typeof n.host === 'string' && Number.isFinite(n.port)).slice(0, 200);
+                }
+            }
+        } catch (_) {}
+        return [];
+    }
+
+    _saveDhtTable() {
+        try {
+            const dht = this.client && this.client.dht;
+            if (!dht || typeof dht.toArray !== 'function') return;
+            const nodes = dht.toArray();
+            if (!Array.isArray(nodes) || nodes.length === 0) return;
+            fs.writeFileSync(DHT_TABLE_FILE, JSON.stringify(nodes.slice(0, 200)), 'utf-8');
+        } catch (_) {}
     }
 
     canonicalHash(magnetOrHash) {
@@ -774,6 +801,26 @@ class TorrentEngine {
                 reader.lastCursorPiece = cursorPiece;
                 reader.cursorPiece = cursorPiece;
             }
+            // P1 impact metric: when seek hints exist, count whether this
+            // seek landed inside a pre-warmed hint window.
+            if (sess && Array.isArray(sess.seekHints) && sess.seekHints.length > 0
+                && (reader.transientSeek === true
+                    || (!reader.transient && reader.lastCursorPiece !== undefined && cursorPiece !== reader.lastCursorPiece))) {
+                if (!sess.hintStats) sess.hintStats = { seeks: 0, hits: 0 };
+                sess.hintStats.seeks += 1;
+                const hintBytesPerSec = positiveNumber(sess.avg_bitrate_bps, 8000000) / 8;
+                const hintSpan = clamp(Math.ceil((120 * hintBytesPerSec) / pieceLength), 2, 64);
+                const nearHint = sess.seekHints.some(h => {
+                    const hintPiece = clamp(
+                        fileStartPiece + Math.floor(Math.max(0, h * hintBytesPerSec) / pieceLength),
+                        fileStartPiece,
+                        fileEndPiece
+                    );
+                    return Math.abs(cursorPiece - hintPiece) <= hintSpan;
+                });
+                if (nearHint) sess.hintStats.hits += 1;
+            }
+
             readerCursors.push(cursorPiece);
             const readerSchedule = this._buildReaderIntervals(
                 fileStartPiece,
@@ -824,11 +871,12 @@ class TorrentEngine {
                 : [reader];
         } else if (hasOffset) {
             // Legacy warm-up call: emphasis only, no reader registration.
-            readers = [{ cursorByte: byteOffset, transient: true }];
+            // transientSeek marks this as an actual seek for the P1 metric.
+            readers = [{ cursorByte: byteOffset, transient: true, transientSeek: true }];
         } else if (sess && sess.readers instanceof Map && sess.readers.size > 0) {
             readers = Array.from(sess.readers.values());
         } else {
-            readers = [{ cursorByte: 0, transient: true }];
+            readers = [{ cursorByte: 0, transient: true, transientSeek: false }];
         }
 
         const schedule = this._collectSchedule(torrent, file, opts, readers);
@@ -1244,6 +1292,11 @@ class TorrentEngine {
                 deficit_ratio: sess.deficitRatio || 0,
                 swarm_paused: Boolean(sess.swarmPaused),
                 source_stats: source_stats,
+                hint_stats: sess.hintStats ? {
+                    seeks: sess.hintStats.seeks,
+                    hits: sess.hintStats.hits,
+                    hit_rate: sess.hintStats.seeks > 0 ? Math.round(sess.hintStats.hits / sess.hintStats.seeks * 100) : null
+                } : null,
                 duration_seconds: sess.duration_seconds || null,
                 avg_bitrate_bps: sess.avg_bitrate_bps || null,
                 readers: sess.readers instanceof Map ? sess.readers.size : (sess.activeReaders || 0),

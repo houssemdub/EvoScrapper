@@ -1391,6 +1391,24 @@
                 <i class="fa-solid fa-clone"></i>
               </button>
 
+              <!-- Watch Party (P8) -->
+              <div class="player-dropdown-wrap">
+                <button id="btn-player-party" class="player-btn" onclick="toggleWatchPartyPanel()" title="Watch Together">
+                  <i class="fa-solid fa-users"></i>
+                </button>
+                <div id="watch-party-popover" class="player-dropdown-menu hidden" onclick="event.stopPropagation()">
+                  <div class="popover-header">Watch Together</div>
+                  <div id="watch-party-body" class="mono text-xs" style="padding:10px 14px; display:flex; flex-direction:column; gap:8px; min-width:230px;">
+                    <button class="btn btn-sm btn-primary" onclick="createWatchParty()">Create Party</button>
+                    <div style="display:flex; gap:6px;">
+                      <input id="watch-party-code-input" placeholder="CODE" maxlength="6" style="flex:1; text-transform:uppercase; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:8px; color:var(--text-primary); padding:6px 8px;">
+                      <button class="btn btn-sm btn-ghost" onclick="joinWatchParty()">Join</button>
+                    </div>
+                    <div id="watch-party-status" class="text-dim"></div>
+                  </div>
+                </div>
+              </div>
+
               <!-- Quick Settings & Playback Studio Popover -->
               <div class="player-dropdown-wrap">
                 <button id="btn-hud-settings" class="player-btn" onclick="togglePlayerSettingsMenu()" title="Playback Settings & Studio">

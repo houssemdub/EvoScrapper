@@ -5313,7 +5313,12 @@ function initPlayerTimelineControls() {
           body: JSON.stringify({ info_hash: active.infoHash, position: video.currentTime })
         }).catch(() => {});
       }
+      // P8: share the seek with watch-party members (suppressed while
+      // applying a remote event to avoid echo loops).
+      reportWatchPartyEvent('seek', video.currentTime);
     });
+    video.addEventListener('play', () => { reportWatchPartyEvent('play', video.currentTime); });
+    video.addEventListener('pause', () => { if (!video.ended) reportWatchPartyEvent('pause', video.currentTime); });
     video.addEventListener('play', () => {
       updatePlayPauseIcon(true);
       startPlayerTicker();
@@ -8037,6 +8042,7 @@ function loadSpriteSheet(infoHash, fileIdx, duration) {
 
 function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet = '', seasonOverride = null, episodeOverride = null, forceDirectIdx = false) {
   initPlayerTimelineControls();
+  _startLadderWatch();
   const discSuggestions = document.getElementById('discover-search-suggestions');
   if (discSuggestions) discSuggestions.classList.add('hidden');
   document.querySelectorAll('.bookmark-quick-popup').forEach((el) => el.remove());
@@ -8575,6 +8581,10 @@ function closePlayerModal() {
   }
 
   stopPlayerTicker();
+  // P8/P5 cleanup: stop party polling and ladder watch
+  if (state.discover._partyTimer) { clearInterval(state.discover._partyTimer); state.discover._partyTimer = null; }
+  if (state.discover._ladderTimer) { clearInterval(state.discover._ladderTimer); state.discover._ladderTimer = null; }
+  state.discover.watchParty = null;
   if (window._evoProbeTimer) {
     clearTimeout(window._evoProbeTimer);
     window._evoProbeTimer = null;

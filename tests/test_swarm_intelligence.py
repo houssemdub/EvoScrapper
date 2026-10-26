@@ -5,6 +5,7 @@ import os
 import time
 
 import pytest
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -172,3 +173,24 @@ class TestCoverageSeededResolve:
         res = await manager.resolve_stream("f" * 40)
         assert res.provider == "TorBox", "mesh coverage hint did not order the resolve attempt"
         assert rd.resolve_calls == 0
+
+
+class TestMeshImpact:
+    @pytest.mark.asyncio
+    async def test_impact_aggregates_heatmap_and_coverage(self, tmp_path, monkeypatch):
+        import core.swarm_intelligence as si
+        from routers.cometnet import get_mesh_impact
+
+        monkeypatch.setattr(si, "_heatmap_store", SeekHeatmapStore(path=str(tmp_path / "hm.json")))
+        monkeypatch.setattr(si, "_coverage_store", DebridCoverageIndex(path=str(tmp_path / "cov.json")))
+        si.get_seek_heatmap().record(HASH, 1500.0)
+        si.get_coverage_index().record(HASH, "torbox")
+
+        daemon_status = {"sessions": [{"hint_stats": {"seeks": 4, "hits": 3}}]}
+        with patch("core.torrent_streamer.get_daemon_status", new=AsyncMock(return_value=daemon_status)):
+            result = await get_mesh_impact()
+
+        assert result["hint_hit_rate_pct"] == 75.0
+        assert result["hint_seeks"] == 4 and result["hint_hits"] == 3
+        assert result["heatmap_hashes_tracked"] == 1
+        assert result["coverage"]["tracked_hashes"] == 1

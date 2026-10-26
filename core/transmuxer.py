@@ -1104,7 +1104,7 @@ async def stream_hls_ts_segment(
 
 
 SPRITES_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "sprites")
-SPRITE_SCAN_SECONDS = 900  # v1: contact sheet covers the first 15 minutes
+SPRITE_SCAN_SECONDS = int(os.getenv("EVO_SPRITE_SCAN_SECONDS", "900"))  # v1: contact sheet covers the opening window; extending scans more P2P bytes
 SPRITE_GRID = 5
 
 

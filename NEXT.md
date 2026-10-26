@@ -1,7 +1,7 @@
 # 🚀 EvoScrapper — Next-Gen Roadmap & Feature Analysis (`NEXT.md`)
 
 > **Comprehensive Architectural Audit, Feature Gap Analysis, and Optimization Blueprint**  
-> *Generated: October 2026 | Codebase Version: 2.5.0 | Test Suite: 126/126 Passing (100%)*
+> *Generated: October 2026 | Codebase Version: 2.3.0 | Test Suite: 381/381 Passing (100%)*
 
 ---
 

@@ -853,6 +853,73 @@ def test_seek_hints_create_low_priority_warm_ranges():
     assert_ok(result)
 
 
+def test_dht_table_roundtrip_and_bootstrap_option():
+    result = run_node(
+        """
+        import fs from 'node:fs';
+        import os from 'node:os';
+        import path from 'node:path';
+
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'evo-dht-'));
+        process.env.EVO_STREAM_CACHE_DIR = tmp;
+        process.env.EVO_ENGINE_NO_DEFAULT = '1';
+
+        const { TorrentEngine } = await import('./streamer/torrent_engine.js');
+        const check = (condition, message) => {
+            if (!condition) { console.error(message); process.exit(1); }
+        };
+
+        const engine = new TorrentEngine({ client: {}, idleSweep: false });
+        engine.client = { dht: { toArray: () => [{ host: '1.2.3.4', port: 1337 }, { host: 'bad' }, { host: '5.6.7.8', port: 6969 }] } };
+        engine._saveDhtTable();
+        check(fs.existsSync(path.join(tmp, 'dht_table.json')), 'dht table not saved');
+
+        const loaded = engine._loadDhtTable();
+        check(loaded.length === 2, `malformed nodes not filtered: ${JSON.stringify(loaded)}`);
+        check(loaded[0].host === '1.2.3.4' && loaded[0].port === 1337, `node shape wrong: ${JSON.stringify(loaded[0])}`);
+
+        // Fresh load from disk (simulating restart bootstrap)
+        const engine2 = new TorrentEngine({ client: {}, idleSweep: false });
+        const restored = engine2._loadDhtTable();
+        check(restored.length === 2, `restart restore failed: ${JSON.stringify(restored)}`);
+        process.exit(0);
+        """
+    )
+    assert_ok(result)
+
+
+def test_seek_hint_hit_rate_metric():
+    result = run_node(
+        """
+        import { makeEngine, makeTorrent, makeFile, installSession, check } from './tests/node/engine_harness.mjs';
+
+        const engine = makeEngine();
+        const { torrent, calls } = makeTorrent();
+        const file = makeFile();
+        const sess = installSession(engine, torrent);
+
+        // Hint at 1800 s -> piece 1716, span 64 -> window [1652, 1780].
+        engine.setSeekHints(torrent.infoHash, [1800]);
+
+        // A seek landing inside the pre-warmed window counts as a hit.
+        engine.applySlidingWindow(torrent, file, 1700 * 1048576, {});
+        // A seek landing far away counts as a miss.
+        engine.applySlidingWindow(torrent, file, 3000 * 1048576, {});
+        // Periodic slides (no offset, transient reader) do not count.
+        engine.applySlidingWindow(torrent, file, undefined, {});
+
+        check(sess.hintStats.seeks === 2, `seek count wrong: ${JSON.stringify(sess.hintStats)}`);
+        check(sess.hintStats.hits === 1, `hit count wrong: ${JSON.stringify(sess.hintStats)}`);
+
+        const status = engine.getStatus();
+        const hs = status.sessions[0].hint_stats;
+        check(hs && hs.seeks === 2 && hs.hits === 1 && hs.hit_rate === 50, `status metric wrong: ${JSON.stringify(hs)}`);
+        process.exit(0);
+        """
+    )
+    assert_ok(result)
+
+
 def test_reader_metrics_capture_first_byte_and_served_bytes():
     result = run_node(
         """

@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
     host_display = "localhost" if settings.HOST in ("0.0.0.0", "127.0.0.1") else settings.HOST
     url = f"http://{host_display}:{settings.PORT}"
     print("\n" + "=" * 58, flush=True)
-    print("  [+] EvoScrapper v2.0 is live!", flush=True)
+    print("  [+] EvoScrapper v2.3.0 is live!", flush=True)
     print(f"  -> Web UI:   {url}", flush=True)
     print(f"  -> API Docs: {url}/docs", flush=True)
     if not settings.API_KEY:
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     if settings.DEBRID_PROXY_SECRET == "evoscrapper-debrid-proxy-secret-key":
         print("  [!] Security Advisory: DEBRID_PROXY_SECRET is using default placeholder.", flush=True)
     print("=" * 58 + "\n", flush=True)
-    app_logger.info(f"EvoScrapper v2.0 live on http://{host_display}:{settings.PORT}")
+    app_logger.info(f"EvoScrapper v2.3.0 live on http://{host_display}:{settings.PORT}")
 
     # Start Node.js WebTorrent streaming micro-daemon
     try:
@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="EvoScrapper API",
-    version="2.2.0",
+    version="2.3.0",
     description="Next-Generation Fault-Tolerant Torrent & Subtitle Scraping Engine",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -156,7 +156,7 @@ async def api_manifest():
     return JSONResponse(
         {
             "name": "EvoScrapper API",
-            "version": "2.2.0",
+            "version": "2.3.0",
             "docs": "/docs",
             "redoc": "/redoc",
             "health": "/health",

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.1] - 2026-10-27
+
+### Pipeline Completion: Failover Relay, Watch-Party UI, DHT Persistence
+
+#### Fixed
+- **CI (Python 3.12)**: `typing.Dict` import in `stream_resolver` — PEP 649 (Python 3.14) defers annotation evaluation, which masked the missing import locally while CI's 3.12 evaluates annotations eagerly.
+- Stale `streamer/daemon.log` orphan removed (the daemon logs to stdout).
+- README badge/count drift (322 → 381) and version strings (banner and FastAPI now 2.3.0).
+
+#### Added
+- **Automatic Cross-Source Failover (P4 complete)**: `core/failover_stream.py` streams from an ordered candidate list and resumes at the exact byte offset on the next source when the active one stalls; `GET /api/v1/stream/relay` resolves both sources, orders them via the race probe, and serves one URL with failover for external players. The race probe now captures the winner's total size for exact 206 headers.
+- **Watch-Together UI (P8 complete)**: player HUD button with create/join panel, 2s event polling, and echo-suppressed application of remote play/pause/seek; local transport events are shared to members.
+- **Quality Ladder Wiring (P5 wired)**: 5s buffer-health polling with a 3-starved-streak trigger; fetches ladder candidates and hot-swaps to the largest lighter release of the same episode at the current position.
+- **DHT Routing-Table Persistence (NEXT.md 3.4)**: the daemon saves its DHT routing table to `.stream_cache/dht_table.json` every 5 minutes and bootstraps from it on restart for near-instant non-tracker peer discovery.
+- **Mesh Impact Metric (plan metric #4)**: per-session seek-hint hit-rate in daemon status; `GET /api/v1/cometnet/impact` aggregates hint hits, heatmap volume, and coverage-index size.
+- **hls.js VOD tuning**: deep buffering (90s/600s/256MB) and disabled LL-HLS scheduling for local VOD playback.
+- **`EVO_SPRITE_SCAN_SECONDS`**: configurable trick-play coverage window.
+
+#### Tests
+- 66 parametrized regression tests sealing the HLS playlist `division by zero` crash class (pathological keyframe shapes x durations, route-level, plus real cached keyframes).
+- Failover offset continuation, DHT roundtrip, hint hit-rate, and mesh impact coverage (381 → 457 tests).
+
 ## [2.3.0] - 2026-10-26
 
 ### Beyond Stremio — Swarm Intelligence Layer & Playback Pipeline

@@ -9,7 +9,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-3776AB.svg?style=flat&logo=python&logoColor=white)](https://python.org)
 [![WebTorrent](https://img.shields.io/badge/WebTorrent-Node.js%20Daemon-brightgreen.svg?style=flat&logo=webtorrent)](https://webtorrent.io)
-[![Tests](https://img.shields.io/badge/Tests-322%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-381%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
 [![Spec-Driven](https://img.shields.io/badge/Architecture-Contract--First%20(SPEC.md)-informational.svg)](SPEC.md)
 [![Security Audit](https://img.shields.io/badge/Security%20Audit-28%20Flaws%20Remediated-blueviolet.svg?style=flat)](FLAWS.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -161,7 +161,7 @@ EvoScrapper/
 │   ├── package.json          # Node.js dependencies
 │   ├── server.js             # Express micro-daemon HTTP API
 │   └── torrent_engine.js     # Sequential piece priority & disk LRU eviction
-└── tests/                    # Comprehensive Test Suite (322/322 Passing)
+└── tests/                    # Comprehensive Test Suite (381/381 Passing)
     ├── test_phase1_hotfixes.py       # 9 Critical hotfix regression tests
     ├── test_phase2_high.py           # 7 High-severity regression tests
     ├── test_phase3_remaining.py      # 15 Medium/Low regression tests
@@ -185,14 +185,14 @@ EvoScrapper/
 EvoScrapper includes an exhaustive automated test suite verified via `pytest`:
 
 ```bash
-# Run all 322 unit, regression, and end-to-end tests
+# Run all 381 unit, regression, and end-to-end tests
 python -m pytest -v
 ```
 
 ```text
 ============================= test session starts =============================
 platform win32 -- Python 3.14.4, pytest-9.1.1
-collected 322 items
+collected 381 items
 
 tests/test_phase1_hotfixes.py .........................                  [ 11%]
 tests/test_phase2_high.py .............................                  [ 20%]
@@ -202,7 +202,7 @@ tests/test_title_parser.py ............................                  [ 68%]
 tests/test_api_e2e.py .................................                  [ 85%]
 tests/test_circuit_breaker.py .........................                  [100%]
 
-============================= 322 passed in 76.29s ============================
+============================= 381 passed in 66.78s ============================
 ```
 
 ---

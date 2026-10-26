@@ -76,8 +76,14 @@ class EvoP2PPlayerManager {
             let hlsConfig = {
                 debug: false,
                 enableWorker: true,
-                lowLatencyMode: true,
-                backBufferLength: 90
+                lowLatencyMode: false, // VOD from a local source: LL-HLS scheduling hurts more than it helps
+                backBufferLength: 90,
+                // Deep VOD buffering for a fast local origin (streamer daemon / debrid CDN)
+                maxBufferLength: 90,
+                maxMaxBufferLength: 600,
+                maxBufferSize: 256 * 1000 * 1000,
+                maxFragLookUpTolerance: 0.25,
+                abrEwmaDefaultEstimate: 5_000_000
             };
 
             if (p2pMeshEnabled && p2pSupported) {

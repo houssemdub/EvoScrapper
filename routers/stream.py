@@ -949,6 +949,74 @@ async def find_ladder_candidates(
     return {"enabled": True, "candidates": candidates[:5]}
 
 
+@router.get("/relay")
+async def relay_stream_with_failover(
+    request: Request,
+    info_hash: str = Query(..., description="Torrent info hash"),
+    file_idx: int = Query(0, description="File index inside torrent"),
+    magnet: Optional[str] = Query(None, description="Original magnet link"),
+    season: Optional[int] = Query(None, description="Season number"),
+    episode: Optional[int] = Query(None, description="Episode number"),
+):
+    """
+    P4 complete: one URL that streams with automatic cross-source failover.
+    Orders the Debrid CDN and the P2P swarm via the 256KB race probe, then
+    serves bytes from the winner; if it stalls or dies mid-stream, the backup
+    resumes at the exact byte offset. External players can point straight at
+    this endpoint.
+    """
+    from core.source_racer import race_stream_sources
+    from core.failover_stream import stream_with_failover
+    await ensure_streaming_daemon()
+
+    p2p_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+    debrid_upstream = None
+    try:
+        from core.debrid.manager import get_debrid_manager
+        result = await get_debrid_manager().resolve_stream(
+            info_hash=info_hash, file_idx=file_idx, magnet=magnet, season=season, episode=episode,
+        )
+        if result and result.url:
+            debrid_upstream = result.url
+    except Exception:
+        debrid_upstream = None
+
+    race = await race_stream_sources(p2p_url, debrid_upstream)
+    if race.get("winner") == "debrid" and debrid_upstream:
+        candidates = [debrid_upstream, p2p_url]
+    else:
+        candidates = [p2p_url, debrid_upstream] if debrid_upstream else [p2p_url]
+
+    range_header = request.headers.get("Range")
+    session = await get_http_session()
+    total = race.get("total_bytes")
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "X-Evo-Sources": ",".join("debrid" if c == debrid_upstream else "p2p" for c in candidates),
+        "X-Evo-Race-Winner": race.get("winner") or "none",
+    }
+    status_code = 200
+    if range_header and total:
+        start = int(range_header.split("=")[1].split("-")[0]) if "=" in range_header else 0
+        headers["Content-Range"] = f"bytes {start}-{total - 1}/{total}"
+        headers["Content-Length"] = str(total - start)
+        status_code = 206
+
+    async def _gen():
+        async for chunk in stream_with_failover(
+            session, candidates, original_range=range_header,
+        ):
+            yield chunk
+
+    return StreamingResponse(
+        _gen(),
+        status_code=status_code,
+        headers=headers,
+        media_type="video/mp4",
+    )
+
+
 @router.get("/explain")
 async def explain_stream_decision(
     info_hash: str = Query(..., description="Torrent info hash"),

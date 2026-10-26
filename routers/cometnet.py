@@ -197,3 +197,36 @@ async def get_party_events(code: str, since: int = Query(0, ge=0)) -> Dict[str, 
 @router.get("/party/stats")
 async def get_party_stats() -> Dict[str, Any]:
     return get_watch_party_manager().stats()
+
+
+@router.get("/impact")
+async def get_mesh_impact() -> Dict[str, Any]:
+    """
+    Plan metric #4: proves the swarm-intelligence layer is paying off —
+    hint hit-rate from live daemon sessions, mesh coverage index size, and
+    heatmap volume.
+    """
+    totals = {"seeks": 0, "hits": 0}
+    sessions_tracked = 0
+    try:
+        from core.torrent_streamer import get_daemon_status
+        status = await get_daemon_status()
+        for sess in status.get("sessions", []):
+            hs = sess.get("hint_stats")
+            if hs:
+                sessions_tracked += 1
+                totals["seeks"] += hs.get("seeks") or 0
+                totals["hits"] += hs.get("hits") or 0
+    except Exception:
+        pass
+
+    heatmap = get_seek_heatmap()
+    coverage = get_coverage_index()
+    return {
+        "hint_hit_rate_pct": round(totals["hits"] / totals["seeks"] * 100, 1) if totals["seeks"] else None,
+        "hint_seeks": totals["seeks"],
+        "hint_hits": totals["hits"],
+        "sessions_tracked": sessions_tracked,
+        "heatmap_hashes_tracked": len(heatmap._heat),
+        "coverage": coverage.stats(),
+    }

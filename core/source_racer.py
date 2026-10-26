@@ -11,8 +11,12 @@ from config import settings
 from core.logger import streaming_logger
 
 
-async def _fetch_probe(url: str, api_key: Optional[str], timeout: float = 3.0) -> bool:
-    """Downloads the first 256KB of a candidate source. Returns True on success."""
+async def _fetch_probe(url: str, api_key: Optional[str], timeout: float = 3.0) -> Tuple[bool, Optional[int]]:
+    """
+    Downloads the first 256KB of a candidate source.
+    Returns (ok, total_bytes) — total from Content-Range when the source
+    supports ranges, so callers can emit exact 206 headers.
+    """
     headers = {"Range": "bytes=0-262143"}
     if api_key:
         headers["X-API-Key"] = api_key
@@ -24,12 +28,21 @@ async def _fetch_probe(url: str, api_key: Optional[str], timeout: float = 3.0) -
             timeout=aiohttp.ClientTimeout(total=timeout, sock_connect=2.0),
         ) as resp:
             if resp.status not in (200, 206):
-                return False
+                return False, None
             # Consume a chunk to prove real bytes flow, not just headers.
             chunk = await resp.content.read(65536)
-            return bool(chunk)
+            if not chunk:
+                return False, None
+            total: Optional[int] = None
+            content_range = resp.headers.get("Content-Range", "")
+            if "/" in content_range:
+                try:
+                    total = int(content_range.rsplit("/", 1)[1])
+                except (IndexError, ValueError):
+                    total = None
+            return True, total
     except Exception:
-        return False
+        return False, None
 
 
 _session: Optional[aiohttp.ClientSession] = None
@@ -67,7 +80,7 @@ async def race_stream_sources(
         candidates["debrid"] = debrid_url
 
     if not candidates:
-        return {"winner": None, "winner_url": None, "backup": None, "backup_url": None, "raced": False}
+        return {"winner": None, "winner_url": None, "backup": None, "backup_url": None, "raced": False, "total_bytes": None}
 
     if len(candidates) == 1:
         kind, url = next(iter(candidates.items()))
@@ -77,9 +90,11 @@ async def race_stream_sources(
             "backup": None,
             "backup_url": None,
             "raced": False,
+            "total_bytes": None,
         }
 
     probes = {kind: asyncio.create_task(_fetch_probe(url, api_key)) for kind, url in candidates.items()}
+    totals: Dict[str, Optional[int]] = {}
 
     # Keep waiting through failed completions: a fast failure must not end the
     # race before a slower healthy candidate gets its chance.
@@ -93,10 +108,11 @@ async def race_stream_sources(
         for kind, task in probes.items():
             if task in done:
                 try:
-                    succeeded = bool(task.result())
+                    ok, total = task.result()
                 except Exception:
-                    succeeded = False
-                if succeeded:
+                    ok, total = False, None
+                totals[kind] = total
+                if ok:
                     winner = kind
                     break
         if winner is None and (not done or loop.time() >= deadline):
@@ -117,4 +133,5 @@ async def race_stream_sources(
         "backup_url": candidates.get(loser),
         "raced": True,
         "race_window_seconds": race_window_seconds,
+        "total_bytes": totals.get(winner),
     }

@@ -31,9 +31,9 @@ class TestSourceRacing:
         async def fake_probe(url, api_key=None, timeout=3.0):
             if "cdn" in url:
                 await asyncio.sleep(0.01)
-                return True
+                return True, 1000
             await asyncio.sleep(1.0)  # swarm: cancelled mid-probe
-            return True
+            return True, None
 
         monkeypatch.setattr(sr, "_fetch_probe", fake_probe)
         res = await race_stream_sources("http://p2p", "http://cdn", race_window_seconds=2.0)
@@ -47,9 +47,9 @@ class TestSourceRacing:
 
         async def fake_probe(url, api_key=None, timeout=3.0):
             if "cdn" in url:
-                return False
+                return False, None
             await asyncio.sleep(0.01)
-            return True
+            return True, None
 
         monkeypatch.setattr(sr, "_fetch_probe", fake_probe)
         res = await race_stream_sources("http://p2p", "http://cdn", race_window_seconds=2.0)
@@ -62,7 +62,7 @@ class TestSourceRacing:
 
         async def fake_probe(url, api_key=None, timeout=3.0):
             await asyncio.sleep(30.0)  # neither answers in time
-            return True
+            return True, None
 
         monkeypatch.setattr(sr, "_fetch_probe", fake_probe)
         res = await race_stream_sources("http://p2p", "http://cdn", race_window_seconds=0.05)
