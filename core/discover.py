@@ -837,7 +837,7 @@ async def get_discover_suggestions(
                 for f_it in film_items:
                     if f_it.id not in seen_ids:
                         seen_ids.add(f_it.id)
-                        items.append(f_it)
+                        suggestions.append(f_it)
 
             for it in entries:
                 entry_id = it.get("id") or ""

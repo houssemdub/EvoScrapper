@@ -139,7 +139,7 @@ async def stream_raw_torrent(
             upstream_resp = await session.get(
                 target_url,
                 headers=req_headers,
-                timeout=aiohttp.ClientTimeout(total=45.0, sock_connect=8.0),
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=10.0, sock_read=45.0),
             )
             # If 503 (swarm buffering with Retry-After), wait briefly and retry
             if upstream_resp.status == 503 and attempt < 3:
@@ -165,7 +165,7 @@ async def stream_raw_torrent(
             resp_headers[key] = val
     if "Accept-Ranges" not in resp_headers:
         resp_headers["Accept-Ranges"] = "bytes"
-    if duration and duration > 0:
+    if duration and isinstance(duration, (int, float)) and duration > 0:
         resp_headers["X-Content-Duration"] = str(round(duration, 2))
         resp_headers["Content-Duration"] = str(round(duration, 2))
 
@@ -225,7 +225,7 @@ async def stream_transmuxed_torrent(
         "Accept-Ranges": "none",
         "X-EvoStream-Audio": f"track_{audio_track}_boost_{audio_boost}",
     }
-    if duration and duration > 0:
+    if duration and isinstance(duration, (int, float)) and duration > 0:
         resp_hdrs["X-Content-Duration"] = str(round(duration, 2))
         resp_hdrs["Content-Duration"] = str(round(duration, 2))
 
@@ -640,7 +640,7 @@ async def get_debrid_statuses():
     """
     Returns account and connection statuses for all configured Debrid providers.
     """
-    debrid_logger.info(f"Resolving Debrid stream info_hash={info_hash} file_idx={file_idx} provider={provider}")
+    debrid_logger.info("Fetching Debrid provider connection statuses")
     from core.debrid.manager import get_debrid_manager
     manager = get_debrid_manager()
     statuses = await manager.get_all_statuses()

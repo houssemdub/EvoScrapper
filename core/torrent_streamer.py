@@ -256,7 +256,7 @@ def get_internal_stream_url(
 ) -> str:
     """Generates the direct loopback streaming URL for the P2P engine."""
     url = f"{DAEMON_URL}/stream?info_hash={info_hash}&file_idx={file_idx}"
-    if magnet:
+    if magnet and isinstance(magnet, str):
         url += f"&magnet={urllib.parse.quote(magnet)}"
     if season is not None:
         url += f"&season={season}"

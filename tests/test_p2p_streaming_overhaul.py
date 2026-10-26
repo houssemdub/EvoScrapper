@@ -339,11 +339,11 @@ def test_stream_cache_cleanup_and_no_accidental_overdownload():
     assert "destroyStore: true" in engine_js
     assert "cleanupIdleSessions(idleTimeoutMs = 5 * 60 * 1000)" in engine_js
 
-    # 2. Verify streamer/server.js evicts non-active sessions when streaming starts
+    # 2. Verify streamer/server.js preserves concurrent sessions and does NOT wipe stores on /stream
     server_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "server.js"))
     with open(server_path, "r", encoding="utf-8") as f:
         server_js = f.read()
-    assert "engine.cleanupOtherSessions(torrent.infoHash)" in server_js
+    assert "engine.cleanupOtherSessions(torrent.infoHash)" not in server_js
 
     # 3. Verify static/app.js does not auto-download streams on hover or stream modal open
     app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))

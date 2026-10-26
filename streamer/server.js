@@ -344,7 +344,6 @@ const server = http.createServer(async (req, res) => {
 
         try {
             const torrent = await engine.addTorrent(infoHash, magnet);
-            engine.cleanupOtherSessions(torrent.infoHash);
             const targetFile = pickVideoFile(torrent.files, requestedIdx, season, episode);
 
             if (!targetFile) {

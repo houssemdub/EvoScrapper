@@ -46,6 +46,7 @@ const DEFAULT_TRACKERS = [
 
 const TORRENT_PORT = parseInt(process.env.TORRENT_PORT || '50000', 10);
 const DHT_PORT = parseInt(process.env.DHT_PORT || '50001', 10);
+const MAX_ACTIVE_TORRENTS = parseInt(process.env.MAX_ACTIVE_TORRENTS || '3', 10);
 
 class TorrentEngine {
     constructor() {
@@ -123,6 +124,27 @@ class TorrentEngine {
         };
     }
 
+    enforceSessionCapacity() {
+        if (this.sessions.size < MAX_ACTIVE_TORRENTS) return;
+        // Evict only the least recently active session that has NO active readers
+        let oldestHash = null;
+        let oldestTime = Infinity;
+        for (const [hash, sess] of this.sessions.entries()) {
+            if ((sess.activeReaders || 0) === 0 && sess.lastActive < oldestTime) {
+                oldestTime = sess.lastActive;
+                oldestHash = hash;
+            }
+        }
+        if (oldestHash) {
+            console.log(`[TorrentEngine] Session limit (${MAX_ACTIVE_TORRENTS}) reached. Evicting idle session: ${oldestHash}`);
+            const sess = this.sessions.get(oldestHash);
+            try {
+                this.client?.remove(sess.torrent, { destroyStore: false }, () => {});
+            } catch (_) {}
+            this.sessions.delete(oldestHash);
+        }
+    }
+
     async addTorrent(target, explicitMagnet = null) {
         const { hash, magnet } = this.buildMagnet(target, explicitMagnet);
 
@@ -140,6 +162,8 @@ class TorrentEngine {
             return await this.inFlight.get(hash);
         }
 
+        this.enforceSessionCapacity();
+
         // 3. Check if WebTorrent client already has this torrent instance (MUST await in WebTorrent 3.x)
         let existing = null;
         if (this.client) {
@@ -152,6 +176,7 @@ class TorrentEngine {
             const entry = {
                 torrent: existing,
                 lastActive: Date.now(),
+                activeReaders: 0,
                 files: (existing.files || []).map((f, i) => ({
                     idx: i,
                     name: f.name,
@@ -257,6 +282,7 @@ class TorrentEngine {
                 const entry = {
                     torrent,
                     lastActive: Date.now(),
+                    activeReaders: 0,
                     files: (torrent.files || []).map((f, i) => ({
                         idx: i,
                         name: f.name,
@@ -301,9 +327,13 @@ class TorrentEngine {
         if (!torrent || !torrent.pieces || !torrent.pieceLength || !file) return;
         const pieceLength = torrent.pieceLength;
 
-        // Reset stale critical bitfield to prevent emergency queue starvation
-        if (torrent._critical && Array.isArray(torrent._critical)) {
-            torrent._critical.fill(false);
+        // Clear ONLY verified pieces, NEVER blanket-fill false (protects FileIterator critical pieces)
+        if (torrent._critical && Array.isArray(torrent._critical) && torrent.bitfield) {
+            for (let i = 0; i < torrent._critical.length; i++) {
+                if (torrent._critical[i] && torrent.bitfield.get(i)) {
+                    torrent._critical[i] = false;
+                }
+            }
         }
 
         // Stremio-grade sequential engine: avoid file.select(1) on whole file
@@ -387,6 +417,15 @@ class TorrentEngine {
             const sess = this.sessions.get(hash);
             if (sess) {
                 sess.lastActive = Date.now();
+                sess.activeReaders = (sess.activeReaders || 0) + 1;
+                const releaseReader = () => {
+                    if (sess.activeReaders > 0) sess.activeReaders--;
+                    sess.lastActive = Date.now();
+                };
+                stream.once('close', releaseReader);
+                stream.once('end', releaseReader);
+                stream.once('error', releaseReader);
+
                 stream.on('data', (chunk) => {
                     sess.lastActive = Date.now();
                     const len = chunk ? chunk.length : 0;
@@ -402,27 +441,30 @@ class TorrentEngine {
         return stream;
     }
 
-    cleanupOtherSessions(activeHash) {
-        if (!activeHash) return;
-        const normActive = String(activeHash).toLowerCase();
-        for (const [hash, sess] of this.sessions.entries()) {
-            if (String(hash).toLowerCase() !== normActive) {
-                console.log(`[TorrentEngine] Evicting non-active session and clearing cache: ${hash}`);
-                try {
-                    this.client?.remove(sess.torrent, { destroyStore: true }, () => {});
-                } catch (_) {}
-                this.sessions.delete(hash);
-            }
+    forceEvictSession(targetHash, destroyStore = false) {
+        if (!targetHash) return;
+        const normActive = String(targetHash).toLowerCase();
+        const sess = this.sessions.get(normActive);
+        if (sess) {
+            console.log(`[TorrentEngine] Evicting session ${normActive} (destroyStore=${destroyStore})`);
+            try {
+                this.client?.remove(sess.torrent, { destroyStore }, () => {});
+            } catch (_) {}
+            this.sessions.delete(normActive);
         }
+    }
+
+    cleanupOtherSessions(activeHash) {
+        // Deprecated: No longer called on request path to protect concurrent playback
     }
 
     cleanupIdleSessions(idleTimeoutMs = 5 * 60 * 1000) {
         const now = Date.now();
         for (const [hash, sess] of this.sessions.entries()) {
-            if (now - sess.lastActive > idleTimeoutMs) {
-                console.log(`[TorrentEngine] Reclaiming idle session and purging piece store: ${hash}`);
+            if ((sess.activeReaders || 0) === 0 && now - sess.lastActive > idleTimeoutMs) {
+                console.log(`[TorrentEngine] Reclaiming idle session (retaining disk cache): ${hash}`);
                 try {
-                    this.client?.remove(sess.torrent, { destroyStore: true }, () => {});
+                    this.client?.remove(sess.torrent, { destroyStore: false }, () => {});
                 } catch (_) {}
                 this.sessions.delete(hash);
             }

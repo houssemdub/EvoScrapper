@@ -345,8 +345,6 @@ async def stream_transmuxed_video(
 
     # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes
     if start_seconds and start_seconds > 0:
-        if not transcode_video and burn_sub_idx is None:
-            cmd.append("-noaccurate_seek")
         cmd.extend(["-ss", f"{start_seconds:.2f}"])
 
     if duration_seconds and duration_seconds > 0:
@@ -381,6 +379,8 @@ async def stream_transmuxed_video(
             "-c:v", "copy",
             *get_passthrough_fps_flag(),       # Preserve original video PTS (avoids A/V drift from copy)
         ])
+        if start_seconds and start_seconds > 0:
+            cmd.append("-copyts")
 
     # Build audio filter chain with full timestamp correction:
     # 1. aresample=async=1:first_pts=0 dynamically synchronizes audio clock to video stream with instant start alignment
