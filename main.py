@@ -76,6 +76,11 @@ async def lifespan(app: FastAPI):
 
     await http_client.close()
     try:
+        from core.debrid.proxy import aclose_debrid_proxy_client
+        await aclose_debrid_proxy_client()
+    except Exception:
+        pass
+    try:
         from core.torrent_streamer import stop_daemon_process
         stop_daemon_process()
     except Exception:

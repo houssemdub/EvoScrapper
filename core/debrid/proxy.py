@@ -10,6 +10,29 @@ from config import settings
 from core.security import validate_outbound_proxy_url
 
 
+_shared_client: Optional[httpx.AsyncClient] = None
+
+
+def get_debrid_proxy_client() -> httpx.AsyncClient:
+    """Returns the shared pooled AsyncClient for Debrid range proxying [Phase 6 STRM-HIGH-02]."""
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=5.0),
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=30.0),
+            follow_redirects=True,
+        )
+    return _shared_client
+
+
+async def aclose_debrid_proxy_client():
+    """Closes the shared pooled AsyncClient during app shutdown."""
+    global _shared_client
+    if _shared_client and not _shared_client.is_closed:
+        await _shared_client.aclose()
+        _shared_client = None
+
+
 class DebridStreamProxy:
     """
     Debrid Multi-IP Stream Proxy Gateway.
@@ -98,10 +121,7 @@ class DebridStreamProxy:
             if range_val:
                 headers_to_send["Range"] = range_val
 
-        client = httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=httpx.Timeout(connect=15.0, read=None, write=30.0, pool=None),
-        )
+        client = get_debrid_proxy_client()
 
         req = client.build_request("GET", upstream_url, headers=headers_to_send)
         resp = await client.send(req, stream=True)
@@ -124,7 +144,6 @@ class DebridStreamProxy:
                     yield chunk
             finally:
                 await resp.aclose()
-                await client.aclose()
 
         return stream_generator(), status_code, out_headers
 
