@@ -5252,6 +5252,9 @@ function initPlayerTimelineControls() {
   const video = document.getElementById('evo-video-player');
 
   if (video) {
+    if (video._timelineListenersAttached) return;
+    video._timelineListenersAttached = true;
+
     video.addEventListener('timeupdate', () => {
       updatePlayerTimeline();
       updateSubtitleOverlay();
@@ -5269,21 +5272,15 @@ function initPlayerTimelineControls() {
       startPlayerTicker();
     });
     video.addEventListener('playing', () => {
-      hidePlayerBufferingHUD();
+      requestHideBufferingHUD();
       updatePlayPauseIcon(true);
       startPlayerTicker();
     });
-    video.addEventListener('canplay', () => {
-      hidePlayerBufferingHUD();
-    });
-    video.addEventListener('loadeddata', () => {
-      hidePlayerBufferingHUD();
-    });
     video.addEventListener('waiting', () => {
-      showPlayerBufferingHUD();
+      requestShowBufferingHUD(450);
     });
     video.addEventListener('stalled', () => {
-      showPlayerBufferingHUD();
+      requestShowBufferingHUD(450);
     });
     video.addEventListener('pause', () => {
       updatePlayPauseIcon(false);
@@ -7752,6 +7749,41 @@ function clearDiscoverSearch() {
 // ── In-Player Buffering Progress HUD ───────────────────────────────────────
 let playerBufferingInterval = null;
 let playerBufferingStartTime = 0;
+let _hudShowDebounceTimer = null;
+let _hudMinDisplayUntil = 0;
+
+function requestShowBufferingHUD(delayMs = 450) {
+  if (_hudShowDebounceTimer) clearTimeout(_hudShowDebounceTimer);
+  _hudShowDebounceTimer = setTimeout(() => {
+    const video = document.getElementById('evo-video-player');
+    if (video && (video.paused || video.readyState < 3)) {
+      showPlayerBufferingHUD();
+      _hudMinDisplayUntil = Date.now() + 500;
+    }
+  }, delayMs);
+}
+
+function requestHideBufferingHUD(force = false) {
+  if (_hudShowDebounceTimer) {
+    clearTimeout(_hudShowDebounceTimer);
+    _hudShowDebounceTimer = null;
+  }
+  const video = document.getElementById('evo-video-player');
+  if (!force && video && (video.paused || video.readyState < 3)) {
+    return;
+  }
+  const remaining = _hudMinDisplayUntil - Date.now();
+  if (remaining > 0 && !force) {
+    setTimeout(() => {
+      const vid = document.getElementById('evo-video-player');
+      if (vid && !vid.paused && vid.readyState >= 3) {
+        hidePlayerBufferingHUD();
+      }
+    }, remaining);
+  } else {
+    hidePlayerBufferingHUD();
+  }
+}
 
 function showPlayerBufferingHUD() {
   const hud = document.getElementById('player-buffering-hud');
@@ -7798,9 +7830,9 @@ function showPlayerBufferingHUD() {
       }
     }
 
-    // Auto-dismiss HUD as soon as video is ready or actively playing
-    if (video && (!video.paused && video.currentTime > 0 || video.readyState >= 3 || (video.readyState >= 2 && bufferAheadSec >= 0.2) || (video.readyState >= 1 && bufferAheadSec >= 0.5))) {
-      hidePlayerBufferingHUD();
+    // Auto-dismiss HUD only once video is actively advancing with a healthy playback buffer (>= 1.5s)
+    if (video && !video.paused && video.currentTime > 0 && (video.readyState >= 3 || bufferAheadSec >= 1.5)) {
+      requestHideBufferingHUD();
       return;
     }
 
@@ -8301,7 +8333,6 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
 
   video.onplay = () => {
     updatePlayPauseIcon(true);
-    hidePlayerBufferingHUD();
     checkMuteState();
   };
 
@@ -8309,23 +8340,16 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     updatePlayPauseIcon(false);
   };
 
-  let waitingDebounceTimer = null;
   video.onwaiting = () => {
-    clearTimeout(waitingDebounceTimer);
-    waitingDebounceTimer = setTimeout(() => {
-      if (video.readyState < 3) showPlayerBufferingHUD();
-    }, 500);
+    requestShowBufferingHUD(450);
   };
   video.oncanplay = () => {
-    clearTimeout(waitingDebounceTimer);
-    hidePlayerBufferingHUD();
     if (!state.discover.activeStream?.audioTracks?.length) {
       triggerStreamProbe();
     }
   };
   video.onplaying = () => {
-    clearTimeout(waitingDebounceTimer);
-    hidePlayerBufferingHUD();
+    requestHideBufferingHUD();
     checkMuteState();
   };
 
@@ -8389,7 +8413,6 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     video.volume = 1.0;
     checkMuteState();
     updatePlayPauseIcon(true);
-    hidePlayerBufferingHUD();
 
     // Check resume history
     const historyItem = getWatchHistory().find(h => {
@@ -8516,7 +8539,7 @@ function closePlayerModal() {
 
   if (unmuteOverlay) unmuteOverlay.classList.add('hidden');
   if (spinner) spinner.classList.add('hidden');
-  hidePlayerBufferingHUD();
+  requestHideBufferingHUD(true);
   if (audioMenu) audioMenu.classList.add('hidden');
   if (wrap) wrap.classList.remove('user-idle');
   clearTimeout(playerIdleTimer);
