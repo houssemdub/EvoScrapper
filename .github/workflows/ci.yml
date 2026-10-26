@@ -26,6 +26,17 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
 
+      # The control-plane tests spawn the real Node daemon, which imports
+      # webtorrent from streamer/node_modules.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install streamer dependencies
+        run: npm ci
+        working-directory: streamer
+
       - name: Run pytest
         run: python -m pytest -q
 
