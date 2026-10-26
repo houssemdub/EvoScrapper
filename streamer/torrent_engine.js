@@ -418,6 +418,9 @@ class TorrentEngine {
         const indexPieceCount = Math.min(2, totalPieces);
         const indexStart = Math.max(fileStartPiece, fileEndPiece - indexPieceCount + 1);
         torrent.select(indexStart, fileEndPiece, 3);
+        if (typeof torrent.critical === 'function') {
+            try { torrent.critical(indexStart, fileEndPiece); } catch (_) {}
+        }
 
         // 3. Time/Bitrate-Adaptive Sliding Window [Phase 2]
         // Target windows in seconds:
@@ -459,7 +462,7 @@ class TorrentEngine {
             const immediateEnd = Math.min(fileEndPiece, cursorPiece + immediateWindow);
             torrent.select(cursorPiece, immediateEnd, 3);
             if (typeof torrent.critical === 'function') {
-                try { torrent.critical(cursorPiece, Math.min(fileEndPiece, cursorPiece + 3)); } catch (_) {}
+                try { torrent.critical(cursorPiece, Math.min(fileEndPiece, cursorPiece + Math.min(8, criticalPieces))); } catch (_) {}
             }
 
             // Tier 2: Multi-Peer Horizon (Priority 2)

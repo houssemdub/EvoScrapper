@@ -1,0 +1,80 @@
+import os
+import subprocess
+import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
+from fastapi.testclient import TestClient
+from main import app
+from core.transmuxer import stream_transmuxed_video, save_cached_keyframes
+
+
+client = TestClient(app)
+AUTH_HEADERS = {"X-API-Key": "test_key"}
+
+
+@pytest.mark.asyncio
+async def test_transmux_seek_av_alignment_flags():
+    """Verifies that transmux seeking sets asetpts=PTS-STARTPTS and avoids -copyts desync."""
+    captured_cmd = None
+
+    async def mock_subprocess_exec(*cmd, **kwargs):
+        nonlocal captured_cmd
+        captured_cmd = list(cmd)
+        mock_proc = MagicMock()
+        mock_proc.stdout = AsyncMock()
+        mock_proc.stdout.read = AsyncMock(side_effect=[b"fMP4data", b""])
+        mock_proc.returncode = 0
+        mock_proc.wait = AsyncMock(return_value=0)
+        return mock_proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_subprocess_exec):
+        gen = stream_transmuxed_video(
+            source_url_or_path="http://127.0.0.1:8889/stream?info_hash=abc",
+            start_seconds=360.0,
+            transcode_video=False,
+            burn_sub_idx=None,
+        )
+        async for chunk in gen:
+            break
+
+    assert captured_cmd is not None
+    assert "-copyts" not in captured_cmd
+    assert "-avoid_negative_ts" in captured_cmd
+    af_idx = captured_cmd.index("-af")
+    assert "asetpts=PTS-STARTPTS" in captured_cmd[af_idx + 1]
+
+
+def test_keyframe_snapping_on_transmux_seek():
+    """Verifies that /transmux snaps start_time to nearest preceding keyframe."""
+    test_hash = "1234567890123456789012345678901234567890"
+    save_cached_keyframes(test_hash, 0, [0.0, 60.0, 120.0, 180.0, 240.0, 300.0, 354.2, 420.0])
+
+    async def mock_gen(*args, **kwargs):
+        yield b"chunk"
+
+    try:
+        with patch("routers.stream.ensure_streaming_daemon", new=AsyncMock(return_value=True)), \
+             patch("routers.stream.warm_window", new=AsyncMock(return_value=True)), \
+             patch("routers.stream.stream_transmuxed_video", side_effect=mock_gen):
+            resp = client.get(
+                f"/api/v1/stream/transmux?info_hash={test_hash}&file_idx=0&start_time=360.0&duration=6000",
+                headers=AUTH_HEADERS,
+            )
+            assert resp.status_code == 200
+            assert resp.headers.get("X-Evo-Seek-Keyframe") == "354.2"
+    finally:
+        from core.transmuxer import get_keyframes_cache_path
+        p = get_keyframes_cache_path(test_hash, 0)
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def test_engine_sliding_window_critical_index_pieces():
+    """Verifies that applySlidingWindow calls critical() on container index pieces at file end."""
+    engine_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "torrent_engine.js"))
+    with open(engine_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "torrent.critical(indexStart, fileEndPiece)" in content

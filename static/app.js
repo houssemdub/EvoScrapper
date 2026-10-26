@@ -5279,6 +5279,12 @@ function initPlayerTimelineControls() {
     video.addEventListener('loadeddata', () => {
       hidePlayerBufferingHUD();
     });
+    video.addEventListener('waiting', () => {
+      showPlayerBufferingHUD();
+    });
+    video.addEventListener('stalled', () => {
+      showPlayerBufferingHUD();
+    });
     video.addEventListener('pause', () => {
       updatePlayPauseIcon(false);
       stopPlayerTicker();
@@ -7866,19 +7872,14 @@ function seekTransmuxOffset(clamped) {
 
   const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${audioParam}&start_time=${clamped.toFixed(2)}${burnSubParam}${transcodeParam}${epParams}${magnetParam}${durationParam}${bufferParam}`;
 
-  const spinner = document.getElementById('player-buffering-spinner');
-  if (spinner) spinner.classList.remove('hidden');
+  showPlayerBufferingHUD();
 
   video.pause();
   video.src = newUrl;
   video.load();
   video.play().then(() => {
-    hidePlayerBufferingHUD();
-    if (spinner) spinner.classList.add('hidden');
     updatePlayPauseIcon(true);
-  }).catch(() => {
-    if (spinner) spinner.classList.add('hidden');
-  });
+  }).catch(() => {});
 
   updatePlayerTimeline();
   updateSubtitleOverlay();

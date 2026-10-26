@@ -395,14 +395,16 @@ async def stream_transmuxed_video(
             "-c:v", "copy",
             *get_passthrough_fps_flag(),       # Preserve original video PTS (avoids A/V drift from copy)
         ])
-        if start_seconds and start_seconds > 0:
-            cmd.append("-copyts")
 
     # Build audio filter chain with ITU-R BS.775 downmix and timestamp correction:
-    # 1. aresample=async=1:first_pts=0 dynamically synchronizes audio clock to video stream
-    # 2. ITU-R BS.775 downmix pan matrix for surround audio (> 2 channels)
-    # 3. volume boost restores center channel dialogue
-    af_filters = ["aresample=async=1:first_pts=0:min_hard_comp=0.100000"]
+    # 1. asetpts=PTS-STARTPTS resets audio PTS to zero on seek, perfectly aligning with video's -avoid_negative_ts make_zero
+    # 2. aresample=async=1 dynamically synchronizes audio clock to video stream without PTS jumps
+    # 3. ITU-R BS.775 downmix pan matrix for surround audio (> 2 channels)
+    # 4. volume boost restores center channel dialogue
+    af_filters = []
+    if start_seconds and start_seconds > 0:
+        af_filters.append("asetpts=PTS-STARTPTS")
+    af_filters.append("aresample=async=1:min_hard_comp=0.100000")
     if channels is not None and channels > 2:
         af_filters.append("pan=stereo|FL=0.5*c0+0.7071*c2+0.7071*c4|FR=0.5*c1+0.7071*c2+0.7071*c5")
     if audio_boost and audio_boost > 0:

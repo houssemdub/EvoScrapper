@@ -261,6 +261,8 @@ async def warm_window(
     info_hash: str,
     file_idx: int = 0,
     byte_offset: int = 0,
+    start_time: Optional[float] = None,
+    duration: Optional[float] = None,
     buffer_mb: Optional[int] = None,
 ) -> bool:
     """Explicitly signals the torrent engine to align its sliding window around a seek offset [Phase 2]."""
@@ -274,6 +276,10 @@ async def warm_window(
             "fileIdx": file_idx,
             "byteOffset": byte_offset,
         }
+        if start_time is not None:
+            payload["startTime"] = start_time
+        if duration is not None:
+            payload["duration"] = duration
         if buffer_mb is not None:
             payload["bufferMb"] = buffer_mb
         async with session.post(f"{DAEMON_URL}/window", json=payload, timeout=aiohttp.ClientTimeout(total=3.0)) as resp:

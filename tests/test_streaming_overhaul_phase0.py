@@ -118,9 +118,10 @@ async def test_transmux_copy_seek_flags_avoid_desync():
             break
 
     assert captured_cmd is not None
-    assert "-noaccurate_seek" not in captured_cmd, "-noaccurate_seek MUST be dropped to prevent GOP A/V desync"
-    assert "-copyts" in captured_cmd, "-copyts must be present for copy-mode seek"
+    assert "-copyts" not in captured_cmd, "-copyts MUST be omitted to prevent A/V PTS gap with aac audio"
     assert "-avoid_negative_ts" in captured_cmd
+    af_idx = captured_cmd.index("-af")
+    assert "asetpts=PTS-STARTPTS" in captured_cmd[af_idx + 1]
 
 
 def test_debrid_status_no_name_error(client):

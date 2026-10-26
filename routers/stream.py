@@ -228,13 +228,30 @@ async def stream_transmuxed_torrent(
     await ensure_streaming_daemon()
     b_mb = buffer_mb if isinstance(buffer_mb, int) else None
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode, buffer_mb=b_mb)
-    if start_time and start_time > 0 and duration and isinstance(duration, (int, float)) and duration > 0:
-        approx_offset = int((start_time / duration) * 1000000000)
-        asyncio.create_task(warm_window(info_hash, file_idx=file_idx, byte_offset=approx_offset, buffer_mb=b_mb))
+    snapped_start = start_time
+    if start_time and start_time > 0:
+        from core.transmuxer import load_cached_keyframes
+        cached_kfs = load_cached_keyframes(info_hash, file_idx)
+        if cached_kfs:
+            preceding = [k for k in cached_kfs if k <= start_time]
+            if preceding:
+                snapped_start = preceding[-1]
+
+    if snapped_start and snapped_start > 0:
+        dur_val = duration if (duration and isinstance(duration, (int, float)) and duration > 0) else None
+        asyncio.create_task(
+            warm_window(
+                info_hash,
+                file_idx=file_idx,
+                start_time=snapped_start,
+                duration=dur_val,
+                buffer_mb=b_mb,
+            )
+        )
 
     generator = stream_transmuxed_video(
         source_url_or_path=source_url,
-        start_seconds=start_time,
+        start_seconds=snapped_start,
         duration_seconds=duration_slice,
         transcode_video=transcode_video or (burn_sub_idx is not None),
         burn_sub_idx=burn_sub_idx,
@@ -251,8 +268,8 @@ async def stream_transmuxed_torrent(
     }
     if burn_sub_idx is not None:
         resp_hdrs["X-Evo-BurnWarn"] = "1"
-    if start_time and start_time > 0:
-        resp_hdrs["X-Evo-Seek-Keyframe"] = str(round(start_time, 3))
+    if snapped_start and snapped_start > 0:
+        resp_hdrs["X-Evo-Seek-Keyframe"] = str(round(snapped_start, 3))
     if duration and isinstance(duration, (int, float)) and duration > 0:
         resp_hdrs["X-Content-Duration"] = str(round(duration, 2))
         resp_hdrs["Content-Duration"] = str(round(duration, 2))

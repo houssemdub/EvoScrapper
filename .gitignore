@@ -59,6 +59,8 @@ yarn-error.log*
 # User Data / Watchlist
 data/library.json
 !data/.gitkeep
+data/keyframes/
+data/hls_cache/
 
 # Scratch files
 scratch/

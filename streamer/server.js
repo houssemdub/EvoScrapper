@@ -295,6 +295,8 @@ const server = http.createServer(async (req, res) => {
         const infoHash = data.hash || data.info_hash || query.get('hash') || query.get('info_hash');
         const fileIdx = data.fileIdx !== undefined ? data.fileIdx : (query.has('file_idx') ? parseInt(query.get('file_idx'), 10) : 0);
         const byteOffset = data.byteOffset !== undefined ? data.byteOffset : (query.has('offset') ? parseInt(query.get('offset'), 10) : 0);
+        const startTime = data.startTime !== undefined ? data.startTime : (query.has('start_time') ? parseFloat(query.get('start_time')) : null);
+        const duration = data.duration !== undefined ? data.duration : (query.has('duration') ? parseFloat(query.get('duration')) : null);
         const bufferMb = data.bufferMb !== undefined ? data.bufferMb : (query.has('buffer_mb') ? parseInt(query.get('buffer_mb'), 10) : null);
 
         if (!infoHash) {
@@ -306,11 +308,15 @@ const server = http.createServer(async (req, res) => {
         try {
             const torrent = await engine.addTorrent(infoHash);
             const file = torrent.files[fileIdx] || torrent.files[0];
+            let effectiveOffset = byteOffset;
+            if (startTime > 0 && duration > 0 && file && file.length > 0) {
+                effectiveOffset = Math.max(0, Math.min(file.length - 1, Math.floor((startTime / duration) * file.length)));
+            }
             if (file) {
-                engine.applySlidingWindow(torrent, file, byteOffset, { bufferMb });
+                engine.applySlidingWindow(torrent, file, effectiveOffset, { bufferMb });
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, info_hash: infoHash, file_idx: fileIdx, byte_offset: byteOffset }));
+            res.end(JSON.stringify({ success: true, info_hash: infoHash, file_idx: fileIdx, byte_offset: effectiveOffset }));
         } catch (err) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message }));
@@ -377,7 +383,7 @@ const server = http.createServer(async (req, res) => {
             const torrent = await engine.addTorrent(infoHash, magnet);
             const targetFile = pickVideoFile(torrent.files, requestedIdx, season, episode);
             if (targetFile) {
-                engine.applySlidingWindow(torrent, targetFile, 0);
+                engine.applySlidingWindow(torrent, targetFile, 0, { bufferMb });
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
