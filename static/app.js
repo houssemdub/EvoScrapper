@@ -86,7 +86,7 @@ const state = {
     activeLangFilter: 'all',
     preferredLang: 'en',
     drawerOpen: false,
-    pgsEngine: (function() { try { return localStorage.getItem('evo_pgs_engine') || 'server_burnin'; } catch(_) { return 'server_burnin'; } })(),
+    pgsEngine: (function() { try { return localStorage.getItem('evo_pgs_engine') || 'client_canvas'; } catch(_) { return 'client_canvas'; } })(),
     secondaryTrack: null,
     secondaryCues: [],
     styles: {
@@ -3602,7 +3602,7 @@ async function applySubtitle(subItem, isAuto = false) {
 
     // Manual click on an image-based Blu-ray PGS track: route to active engine
     if (!isAuto && subItem.is_image_based) {
-      const pgsEngine = state.subtitles.pgsEngine || 'server_burnin';
+      const pgsEngine = state.subtitles.pgsEngine || 'client_canvas';
       const video = document.getElementById('evo-video-player');
       const active = state.discover.activeStream;
       const infoHash = subItem.info_hash || (active ? active.infoHash : '');
@@ -4092,7 +4092,7 @@ function loadSubtitleStyles() {
   applySubtitleStyles();
 
   // Initialize PGS subtitle engine selection
-  const pgsEngine = state.subtitles.pgsEngine || 'server_burnin';
+  const pgsEngine = state.subtitles.pgsEngine || 'client_canvas';
   document.querySelectorAll('input[name="pgs-render-engine"]').forEach((r) => {
     r.checked = (r.value === pgsEngine);
   });
@@ -7840,21 +7840,13 @@ function searchDiscoverCatalogByTitle(title) {
   }
 }
 
-function seekPlayer(targetSeconds) {
+let _seekDebounceTimer = null;
+
+function seekTransmuxOffset(clamped) {
   const video = document.getElementById('evo-video-player');
   const active = state.discover.activeStream;
   if (!video || !active) return;
 
-  const maxDuration = (active.totalDuration > 0) ? active.totalDuration : 7200;
-  const clamped = Math.max(0, Math.min(maxDuration - 1, targetSeconds));
-
-  if (!active.useTransmux) {
-    video.currentTime = clamped;
-    updatePlayerTimeline();
-    return;
-  }
-
-  // Transmuxed FFmpeg stream: instant input-seek via -ss
   active.playbackOffset = clamped;
 
   const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
@@ -7890,6 +7882,34 @@ function seekPlayer(targetSeconds) {
 
   updatePlayerTimeline();
   updateSubtitleOverlay();
+}
+
+function seekPlayer(targetSeconds, immediate = false) {
+  const video = document.getElementById('evo-video-player');
+  const active = state.discover.activeStream;
+  if (!video || !active) return;
+
+  const maxDuration = (active.totalDuration > 0) ? active.totalDuration : 7200;
+  const clamped = Math.max(0, Math.min(maxDuration - 1, targetSeconds));
+
+  if (!active.useTransmux) {
+    video.currentTime = clamped;
+    updatePlayerTimeline();
+    return;
+  }
+
+  // Update UI timeline immediately for smooth dragging feedback
+  active.playbackOffset = clamped;
+  updatePlayerTimeline();
+
+  if (_seekDebounceTimer) clearTimeout(_seekDebounceTimer);
+  if (immediate) {
+    seekTransmuxOffset(clamped);
+  } else {
+    _seekDebounceTimer = setTimeout(() => {
+      seekTransmuxOffset(clamped);
+    }, 250);
+  }
 }
 
 function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet = '', seasonOverride = null, episodeOverride = null, forceDirectIdx = false) {

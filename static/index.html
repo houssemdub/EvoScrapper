@@ -1769,14 +1769,14 @@
                   </label>
                   <div class="flex flex-col gap-2 mt-1">
                     <label class="flex items-start gap-2 cursor-pointer text-xs p-2 rounded" style="background:var(--color-paper-2); border:1px solid var(--color-rule);">
-                      <input type="radio" name="pgs-render-engine" value="server_burnin" checked onchange="setPgsRenderEngine('server_burnin')" class="mt-0.5">
+                      <input type="radio" name="pgs-render-engine" value="server_burnin" onchange="setPgsRenderEngine('server_burnin')" class="mt-0.5">
                       <div>
                         <span class="mono font-bold text-bright block">Server-Side Real-Time Burn-In</span>
                         <span class="text-dim text-2xs block" style="font-size:0.68rem;">FFmpeg ultrafast overlay directly into video frames. 100% Blu-ray sync, custom signs/fonts.</span>
                       </div>
                     </label>
                     <label class="flex items-start gap-2 cursor-pointer text-xs p-2 rounded" style="background:var(--color-paper-2); border:1px solid var(--color-rule);">
-                      <input type="radio" name="pgs-render-engine" value="client_canvas" onchange="setPgsRenderEngine('client_canvas')" class="mt-0.5">
+                      <input type="radio" name="pgs-render-engine" value="client_canvas" checked onchange="setPgsRenderEngine('client_canvas')" class="mt-0.5">
                       <div>
                         <span class="mono font-bold text-bright block">Client-Side Canvas Overlay</span>
                         <span class="text-dim text-2xs block" style="font-size:0.68rem;">Zero video transcoding. Decodes Blu-ray SUP bitmaps directly onto transparent canvas.</span>

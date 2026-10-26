@@ -303,7 +303,18 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
 
 
 
-_FFMPEG_SEMAPHORE = asyncio.Semaphore(4)
+def get_ffmpeg_max_concurrency() -> int:
+    env_val = os.getenv("EVO_MAX_CONCURRENT_FFMPEG")
+    if env_val:
+        try:
+            return max(1, int(env_val))
+        except ValueError:
+            pass
+    cpu = os.cpu_count() or 4
+    return min(8, max(2, cpu // 2))
+
+
+_FFMPEG_SEMAPHORE = asyncio.Semaphore(get_ffmpeg_max_concurrency())
 
 
 async def stream_transmuxed_video(
@@ -315,6 +326,7 @@ async def stream_transmuxed_video(
     audio_track: int = 0,
     audio_boost: float = 1.25,
     chunk_size: int = 65536,
+    channels: Optional[int] = None,
 ) -> AsyncGenerator[bytes, None]:
     """
     Spawns an ultra-low latency FFmpeg pipeline that losslessly transmuxes video into
@@ -386,10 +398,13 @@ async def stream_transmuxed_video(
         if start_seconds and start_seconds > 0:
             cmd.append("-copyts")
 
-    # Build audio filter chain with full timestamp correction:
-    # 1. aresample=async=1:first_pts=0 dynamically synchronizes audio clock to video stream with instant start alignment
-    # 2. volume boost restores center channel dialogue lost during 5.1/7.1 downmix
+    # Build audio filter chain with ITU-R BS.775 downmix and timestamp correction:
+    # 1. aresample=async=1:first_pts=0 dynamically synchronizes audio clock to video stream
+    # 2. ITU-R BS.775 downmix pan matrix for surround audio (> 2 channels)
+    # 3. volume boost restores center channel dialogue
     af_filters = ["aresample=async=1:first_pts=0:min_hard_comp=0.100000"]
+    if channels is not None and channels > 2:
+        af_filters.append("pan=stereo|FL=0.5*c0+0.7071*c2+0.7071*c4|FR=0.5*c1+0.7071*c2+0.7071*c5")
     if audio_boost and audio_boost > 0:
         af_filters.append(f"volume={audio_boost:.2f}")
 
@@ -447,7 +462,11 @@ async def stream_transmuxed_video(
             try:
                 if process.returncode is None:
                     process.terminate()
-                    await process.wait()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=1.0)
+                    except (asyncio.TimeoutError, TimeoutError):
+                        process.kill()
+                        await process.wait()
             except Exception:
                 pass
             if not drain_task.done():

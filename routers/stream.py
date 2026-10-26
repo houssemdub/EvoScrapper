@@ -216,6 +216,7 @@ async def stream_transmuxed_torrent(
     episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
     duration: Optional[float] = Query(None, description="Known media duration in seconds"),
     buffer_mb: Optional[int] = Query(None, description="Buffer window size in MB"),
+    channels: Optional[int] = Query(None, description="Audio channels for BS.775 downmix"),
 ):
     """
     Real-time FFmpeg transmuxing pipeline.
@@ -238,6 +239,7 @@ async def stream_transmuxed_torrent(
         burn_sub_idx=burn_sub_idx,
         audio_track=audio_track,
         audio_boost=audio_boost,
+        channels=channels if isinstance(channels, int) else None,
     )
 
     resp_hdrs = {
