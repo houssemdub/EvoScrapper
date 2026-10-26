@@ -7,9 +7,10 @@ Also allows querying external community Stremio addons via /api/v1/addons/*.
 """
 
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from core.media_meta import fetch_media_details
+from core.security import verify_api_key
 from core.stream_resolver import resolve_streams
 from core.stremio_addon import fetch_addon_manifest, fetch_addon_streams
 
@@ -33,7 +34,7 @@ async def get_stremio_manifest() -> Dict[str, Any]:
         "version": "3.0.0",
         "name": "EvoScrapper Streams",
         "description": "Decentralized Multi-Indexer Torrent & 6-Provider Multi-Debrid Streaming Gateway",
-        "resources": ["stream"],
+        "resources": ["stream", "subtitles"],
         "types": ["movie", "series", "anime"],
         "catalogs": [],
         "idPrefixes": ["tt", "kitsu:"],
@@ -125,7 +126,54 @@ async def get_stremio_stream(type: str, item_id: str) -> Dict[str, List[Dict[str
 # External Addon Client Endpoints
 # ==============================================================================
 
-@router.get("/api/v1/addons/manifest")
+@router.get("/subtitles/{stype}/{item_id}.json")
+@router.get("/stremio/subtitles/{stype}/{item_id}.json")
+async def get_stremio_subtitles(
+    stype: str,
+    item_id: str,
+    season: Optional[int] = None,
+    episode: Optional[int] = None,
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    T4.6 Stremio v3 subtitles resource: serves EvoScrapper's aggregated
+    subtitle providers (OpenSubtitles, Gestdown, SubDL, SubSource, YIFY) to
+    official Stremio apps.
+    """
+    clean_id = item_id.split(".")[0]
+    import re as _re
+    if not _re.match(r"^tt\d+$", clean_id, _re.I):
+        return {"subtitles": []}
+
+    from routers.subtitles import search_subtitles
+    try:
+        response = await search_subtitles(
+            query=None,
+            imdb_id=clean_id,
+            season=season,
+            episode=episode,
+            language=language,
+            info_hash=None,
+            provider="all",
+            limit=20,
+        )
+    except Exception:
+        return {"subtitles": []}
+
+    subtitles = []
+    for sub in getattr(response, "data", []) or []:
+        url = getattr(sub, "url", None) or getattr(sub, "download_url", None)
+        if not url:
+            continue
+        subtitles.append({
+            "id": str(getattr(sub, "id", "")) or f"evo:{len(subtitles)}",
+            "url": url,
+            "lang": str(getattr(sub, "language_code", "") or getattr(sub, "language", "") or "eng"),
+        })
+    return {"subtitles": subtitles}
+
+
+@router.get("/api/v1/addons/manifest", dependencies=[Depends(verify_api_key)])
 async def get_external_addon_manifest(
     url: str = Query(..., description="Stremio addon manifest URL or base URL"),
 ):
@@ -135,11 +183,13 @@ async def get_external_addon_manifest(
     try:
         manifest = await fetch_addon_manifest(url)
         return {"success": True, "manifest": manifest}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/api/v1/addons/streams")
+@router.get("/api/v1/addons/streams", dependencies=[Depends(verify_api_key)])
 async def get_external_addon_streams(
     url: str = Query(..., description="Stremio addon base URL"),
     media_type: str = Query("movie", description="Media type: movie, series, or anime"),

@@ -2,6 +2,31 @@ import re
 from typing import Dict, List, Optional
 from models.torrent import TorrentItem
 
+# Torrentio-style swarm-health constants (T0.2): present results by the health
+# of the swarm behind them, not just raw count.
+HEALTHY_SEEDERS = 5
+SEEDED_SEEDERS = 1
+MIN_HEALTHY_COUNT = 50
+MAX_UNHEALTHY_COUNT = 5
+
+
+def gate_by_swarm_health(items: List[TorrentItem], debrid_configured: bool = False) -> List[TorrentItem]:
+    """
+    Suppresses dead torrents when a strong swarm exists, and caps the result
+    list to the few best candidates when the swarm is weak. Skipped entirely
+    when a Debrid provider is configured: swarm health only matters for P2P
+    playback, and gate-hiding results would only hide debrid options.
+    """
+    if debrid_configured or not items:
+        return items
+    healthy = [x for x in items if x.seeders >= HEALTHY_SEEDERS]
+    seeded = [x for x in items if x.seeders >= SEEDED_SEEDERS]
+    if len(healthy) >= MIN_HEALTHY_COUNT:
+        return healthy
+    if len(seeded) >= MAX_UNHEALTHY_COUNT:
+        return seeded[:MIN_HEALTHY_COUNT]
+    return items[:MAX_UNHEALTHY_COUNT]
+
 
 def deduplicate_torrents(items: List[TorrentItem]) -> List[TorrentItem]:
     """

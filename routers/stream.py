@@ -14,6 +14,7 @@ from core.torrent_streamer import (
     get_http_session,
     get_internal_stream_url,
     get_torrent_files,
+    streamer_auth_headers,
     warm_torrent,
     warm_window,
 )
@@ -26,6 +27,7 @@ from core.transmuxer import (
     find_vlc,
     launch_external_player_process,
     launch_vlc_process,
+    stream_hls_fmp4_init,
     stream_hls_ts_segment,
     stream_transmuxed_video,
 )
@@ -44,6 +46,7 @@ async def resolve_media_streams(
     episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
     media_type: str = Query("movie", description="Media type: movie, series, or anime"),
     include_cdn: bool = Query(False, description="Whether to include third-party web CDN embed streams"),
+    lang: Optional[str] = Query(None, description="Preferred audio language (e.g. english, french, multi); boosts matching releases"),
 ):
     """
     Torrentio-style multi-tracker stream resolver.
@@ -57,6 +60,7 @@ async def resolve_media_streams(
         episode=episode,
         media_type=media_type.lower(),
         include_cdn=include_cdn,
+        preferred_lang=lang,
     )
 
 
@@ -99,14 +103,19 @@ async def warm_swarm_endpoint(
     magnet: Optional[str] = Query(None, description="Original magnet link with trackers"),
     season: Optional[int] = Query(None, description="Season number (for series/anime)"),
     episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
+    duration: Optional[float] = Query(None, description="Known media duration in seconds"),
     buffer_mb: Optional[int] = Query(None, description="Buffer window size in MB"),
+    stage_seconds: Optional[float] = Query(None, description="Deep-stage this many seconds of media bytes (next-episode staging)"),
 ):
     """
     Pre-warms the torrent swarm and pre-buffers headers in background for instant playback.
     """
-    data = await warm_torrent(info_hash, file_idx=file_idx, magnet=magnet, season=season, episode=episode)
+    data = await warm_torrent(
+        info_hash, file_idx=file_idx, magnet=magnet, season=season, episode=episode,
+        duration=duration, stage_seconds=stage_seconds,
+    )
     b_mb = buffer_mb if isinstance(buffer_mb, int) else None
-    await warm_window(info_hash, file_idx=file_idx, byte_offset=0, buffer_mb=b_mb)
+    await warm_window(info_hash, file_idx=file_idx, byte_offset=0, duration=duration, buffer_mb=b_mb, stage_seconds=stage_seconds)
     if isinstance(data, dict):
         return data
     return {"status": "warming" if data else "failed", "info_hash": info_hash}
@@ -131,15 +140,17 @@ async def stream_raw_torrent(
     b_mb = buffer_mb if isinstance(buffer_mb, int) else None
     target_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode, buffer_mb=b_mb)
 
-    # Direct-daemon 307 redirect for localhost clients [Phase 4]
+    # Direct-daemon 307 redirect for localhost clients [Phase 4].
+    # Default on: the daemon is loopback-bound, Host-validated, and the URL
+    # carries a short-lived HMAC signature, so the proxy hop is pure overhead.
     client_host = request.client.host if request.client else ""
     req_host = request.headers.get("host", "").split(":")[0].lower()
     is_localhost = client_host in ("127.0.0.1", "::1", "localhost", "testclient") or req_host in ("127.0.0.1", "localhost")
-    if is_localhost and os.getenv("EVO_DIRECT_RANGE", "false").lower() in ("1", "true", "yes"):
+    if is_localhost and os.getenv("EVO_DIRECT_RANGE", "true").lower() in ("1", "true", "yes"):
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url=target_url, status_code=307)
 
-    req_headers = {}
+    req_headers = dict(streamer_auth_headers())
     range_header = request.headers.get("Range")
     if range_header:
         req_headers["Range"] = range_header
@@ -202,6 +213,22 @@ async def stream_raw_torrent(
     )
 
 
+async def _capture_seek_event(info_hash: str, position_seconds: float) -> None:
+    """Records a seek into the collective heatmap, gossips it, and pushes the
+    resulting hotspot hints into the daemon scheduler. Best-effort only."""
+    try:
+        from core.swarm_intelligence import get_seek_heatmap
+        get_seek_heatmap().record(info_hash, position_seconds)
+        from core.cometnet import get_cometnet_node
+        get_cometnet_node().announce_seek(info_hash, position_seconds)
+        hints = get_seek_heatmap().top_seek_targets(info_hash, k=3)
+        if hints:
+            from core.torrent_streamer import push_seek_hints
+            await push_seek_hints(info_hash, [h["position"] for h in hints])
+    except Exception:
+        pass
+
+
 @router.get("/transmux")
 async def stream_transmuxed_torrent(
     info_hash: str = Query(..., description="Torrent info hash"),
@@ -256,6 +283,9 @@ async def stream_transmuxed_torrent(
                 buffer_mb=b_mb,
             )
         )
+        # P1/P3: every seek is an anonymous observation for the collective
+        # seek heatmap; the resulting hotspots feed back as engine hints.
+        asyncio.create_task(_capture_seek_event(info_hash, snapped_start))
 
     generator = stream_transmuxed_video(
         source_url_or_path=source_url,
@@ -306,7 +336,17 @@ async def probe_stream_metadata(
     await ensure_streaming_daemon()
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
     from core.transmuxer import probe_media_stream
-    return await probe_media_stream(source_url)
+    probe = await probe_media_stream(source_url)
+    if probe.get("success") and probe.get("duration", 0) > 0:
+        from core.torrent_streamer import push_stream_metadata
+        measured_bitrate = probe.get("bit_rate") or 0
+        await push_stream_metadata(
+            info_hash,
+            file_idx=file_idx,
+            duration=probe["duration"],
+            bitrate_bps=measured_bitrate if measured_bitrate > 0 else None,
+        )
+    return probe
 
 
 @router.post("/launch-vlc")
@@ -705,11 +745,11 @@ async def get_hls_playlist(
     info_hash: str = Query(..., description="Torrent info hash"),
     file_idx: int = Query(0, description="File index inside torrent"),
     magnet: Optional[str] = Query(None, description="Optional magnet URI"),
-    duration: float = Query(7200.0, description="Total video duration in seconds"),
-    segment_duration: float = Query(6.0, description="HLS chunk duration in seconds"),
+    duration: float = Query(7200.0, gt=0, allow_inf_nan=False, description="Total video duration in seconds"),
+    segment_duration: float = Query(6.0, gt=0, allow_inf_nan=False, description="HLS chunk duration in seconds"),
     season: Optional[int] = Query(None, description="Season number"),
     episode: Optional[int] = Query(None, description="Episode number"),
-    format: str = Query("ts", description="Segment format: 'ts' or 'fmp4'"),
+    format: str = Query("ts", pattern="^(ts|fmp4)$", description="Segment format: 'ts' or 'fmp4'"),
 ):
     """
     Returns an RFC 8216 compliant HLS VOD playlist with virtual segment references.
@@ -747,14 +787,8 @@ async def get_hls_init_segment(
     """Generates the fMP4 initialization segment (ftyp + moov) for RFC 8216 EXT-X-MAP [Phase 7 STRM-HIGH-05]."""
     await ensure_streaming_daemon()
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
-    generator = stream_transmuxed_video(
-        source_url_or_path=source_url,
-        start_seconds=0.0,
-        duration_seconds=0.5,
-        transcode_video=False,
-    )
     return StreamingResponse(
-        generator,
+        stream_hls_fmp4_init(source_url),
         media_type="video/mp4",
         headers={
             "Cache-Control": "public, max-age=3600, immutable",
@@ -767,24 +801,266 @@ async def get_hls_init_segment(
 async def get_hls_segment(
     info_hash: str = Query(..., description="Torrent info hash"),
     file_idx: int = Query(0, description="File index inside torrent"),
-    start: float = Query(0.0, description="Segment start timestamp in seconds"),
-    duration: float = Query(6.0, description="Segment duration in seconds"),
+    start: float = Query(0.0, ge=0, allow_inf_nan=False, description="Segment start timestamp in seconds"),
+    duration: float = Query(6.0, gt=0, allow_inf_nan=False, description="Segment duration in seconds"),
     magnet: Optional[str] = Query(None, description="Optional magnet URI"),
     season: Optional[int] = Query(None, description="Season number"),
     episode: Optional[int] = Query(None, description="Episode number"),
+    format: str = Query("ts", pattern="^(ts|fmp4)$", description="Segment format: 'ts' or 'fmp4'"),
 ):
     """
-    Generates an individual MPEG-TS/MP4 segment on-the-fly for Hls.js and P2P Media Loader.
+    Generates an individual MPEG-TS or fragmented-MP4 segment for Hls.js and P2P Media Loader.
     """
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
     return StreamingResponse(
-        stream_hls_ts_segment(source_url, start_seconds=start, duration_seconds=duration),
-        media_type="video/mp2t",
+        stream_hls_ts_segment(
+            source_url,
+            start_seconds=start,
+            duration_seconds=duration,
+            segment_format=format,
+        ),
+        media_type="video/mp4" if format == "fmp4" else "video/mp2t",
         headers={
             "Access-Control-Allow-Origin": "*",
             "Cache-Control": "public, max-age=300, immutable",
         },
     )
+
+
+from config import settings as _evo_settings
+QUALITY_LADDER_ENABLED = bool(getattr(_evo_settings, "QUALITY_LADDER", False)) or os.getenv("EVO_QUALITY_LADDER", "false").lower() in ("1", "true", "yes")
+LADDER_MIN_SIZE_DROP_RATIO = 0.8
+
+
+@router.post("/race")
+async def race_stream_sources_endpoint(
+    info_hash: str = Query(..., description="Torrent info hash"),
+    file_idx: int = Query(0, description="File index inside torrent"),
+    magnet: Optional[str] = Query(None, description="Original magnet link"),
+    season: Optional[int] = Query(None, description="Season number"),
+    episode: Optional[int] = Query(None, description="Episode number"),
+):
+    """
+    P4 dual-source racing: probes the P2P swarm and the best Debrid CDN in
+    parallel for the first 256KB and returns the winner plus a warm backup URL.
+    Falls back to a single default winner when only one candidate exists.
+    """
+    from core.source_racer import race_stream_sources
+    await ensure_streaming_daemon()
+
+    p2p_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+
+    debrid_url = None
+    provider_name = None
+    try:
+        from core.debrid.manager import get_debrid_manager
+        result = await get_debrid_manager().resolve_stream(
+            info_hash=info_hash, file_idx=file_idx, magnet=magnet, season=season, episode=episode,
+        )
+        if result and result.url:
+            debrid_url = result.url
+            provider_name = result.provider
+    except Exception:
+        debrid_url = None
+
+    race = await race_stream_sources(p2p_url, debrid_url)
+
+    client_urls = {}
+    if race.get("winner") == "debrid":
+        from core.debrid.proxy import get_debrid_proxy
+        client_urls["winner_url"] = get_debrid_proxy().get_proxy_url(debrid_url) if debrid_url else None
+    if race.get("backup") == "debrid":
+        from core.debrid.proxy import get_debrid_proxy
+        client_urls["backup_url"] = get_debrid_proxy().get_proxy_url(debrid_url) if debrid_url else None
+
+    return {
+        "success": True,
+        "info_hash": info_hash,
+        "file_idx": file_idx,
+        "winner": race.get("winner"),
+        "winner_url": client_urls.get("winner_url", race.get("winner_url")),
+        "winner_provider": provider_name if race.get("winner") == "debrid" else None,
+        "backup": race.get("backup"),
+        "backup_url": client_urls.get("backup_url", race.get("backup_url")),
+        "raced": race.get("raced", False),
+    }
+
+
+@router.post("/ladder")
+async def quality_ladder_endpoint(
+    title: str = Query(..., description="Media title"),
+    current_size_bytes: int = Query(..., gt=0, description="Size of the currently playing release"),
+    season: Optional[int] = Query(None, description="Season number"),
+    episode: Optional[int] = Query(None, description="Episode number"),
+    media_type: str = Query("series", description="Media type"),
+):
+    """
+    P5 cross-torrent quality ladder: when playback is starving, returns
+    lower-bitrate releases of the SAME episode, largest first, so the player
+    can hot-swap at a keyframe instead of showing a spinner.
+    Controlled by EVO_QUALITY_LADDER (default off).
+    """
+    res = await find_ladder_candidates(
+        title=title,
+        current_size_bytes=current_size_bytes,
+        season=season,
+        episode=episode,
+        media_type=media_type,
+    )
+    return res
+
+
+async def find_ladder_candidates(
+    title: str,
+    current_size_bytes: int,
+    season: Optional[int] = None,
+    episode: Optional[int] = None,
+    media_type: str = "series",
+) -> dict:
+    """Testable helper behind /ladder (P5)."""
+    if not QUALITY_LADDER_ENABLED:
+        return {"enabled": False, "candidates": []}
+
+    try:
+        response = await resolve_streams(
+            title=title, season=season, episode=episode, media_type=media_type,
+        )
+    except Exception:
+        return {"enabled": True, "candidates": [], "error": "resolve failed"}
+
+    threshold = current_size_bytes * LADDER_MIN_SIZE_DROP_RATIO
+    candidates = []
+    for s in sorted(response.streams, key=lambda x: (x.size_bytes, -(x.score)), reverse=False):
+        if not s.size_bytes or s.size_bytes >= threshold:
+            continue
+        if season is not None and episode is not None:
+            s_path = (s.title or "").lower()
+            if f"s{season:02d}e{episode:02d}" not in s_path.replace(" ", ".") and f"{season}x{episode:02d}" not in s_path:
+                continue
+        candidates.append({
+            "info_hash": s.info_hash,
+            "file_idx": s.file_idx,
+            "title": s.title,
+            "size_bytes": s.size_bytes,
+            "score": s.score,
+            "magnet": s.magnet,
+        })
+    candidates.sort(key=lambda c: c["size_bytes"], reverse=True)
+    return {"enabled": True, "candidates": candidates[:5]}
+
+
+@router.get("/explain")
+async def explain_stream_decision(
+    info_hash: str = Query(..., description="Torrent info hash"),
+    file_idx: int = Query(0, description="File index inside torrent"),
+):
+    """
+    P10 "Why this stream?": the full decision breakdown for a torrent —
+    debrid coverage (mesh hints + configured providers), live engine telemetry,
+    cached keyframe inventory, and an honest first-frame prediction.
+    """
+    from core.transmuxer import load_cached_keyframes
+    factors: List[str] = []
+
+    try:
+        from core.debrid.manager import get_debrid_manager
+        configured = [p.provider_name for p in get_debrid_manager().active_providers]
+    except Exception:
+        configured = []
+    try:
+        from core.swarm_intelligence import get_coverage_index
+        mesh_hints = get_coverage_index().providers_for(info_hash)
+    except Exception:
+        mesh_hints = []
+
+    engine_state = None
+    try:
+        status = await get_daemon_status()
+        for sess in status.get("sessions", []):
+            if str(sess.get("info_hash", "")).lower() == info_hash.strip().lower():
+                engine_state = sess
+                break
+    except Exception:
+        engine_state = None
+
+    kfs = load_cached_keyframes(info_hash, file_idx)
+    keyframes_cached = len(kfs) if kfs else 0
+
+    if mesh_hints:
+        factors.append(f"Mesh coverage hints: {', '.join(h['provider'] for h in mesh_hints)} (confidence-ordered)")
+    if configured:
+        factors.append(f"Debrid providers configured: {', '.join(configured)}; resolution prefers cache-holding providers")
+    if engine_state:
+        factors.append(
+            f"Swarm: {engine_state.get('numPeers', 0)} peers, {engine_state.get('seconds_ahead', 0)}s ahead, "
+            f"health {engine_state.get('health_state', 'unknown')}"
+        )
+        if engine_state.get("swarm_paused"):
+            factors.append("Swarm paused: buffer is deep, lookahead paused (hysteresis)")
+    else:
+        factors.append("No live engine session yet; first request will resolve metadata + peers")
+    if keyframes_cached:
+        factors.append(f"{keyframes_cached} keyframes cached for seek snapping")
+
+    if mesh_hints:
+        prediction = "likely-instant"
+    elif engine_state and (engine_state.get("numPeers") or 0) > 0:
+        prediction = "p2p-dependent"
+    else:
+        prediction = "unknown"
+
+    return {
+        "info_hash": info_hash,
+        "file_idx": file_idx,
+        "debrid": {"configured": configured, "mesh_hints": mesh_hints},
+        "engine": engine_state,
+        "keyframes_cached": keyframes_cached,
+        "prediction": {
+            "time_to_first_frame": prediction,
+            "note": "hints are mesh-reported and always confirmed by a live probe before streaming",
+        },
+        "factors": factors,
+    }
+
+
+@router.get("/sprites")
+async def get_stream_sprites(
+    info_hash: str = Query(..., description="Torrent info hash"),
+    file_idx: int = Query(0, description="File index inside torrent"),
+    duration: float = Query(..., gt=0, description="Media duration in seconds"),
+):
+    """
+    P7: trick-play thumbnail contact sheet for scrubber hover previews.
+    Generated once, cached on disk, served immutable. v1 covers the opening
+    15 minutes of media (bounded to avoid full-file P2P scans).
+    """
+    import os
+    from fastapi.responses import FileResponse
+    from core.transmuxer import generate_sprite_sheet
+    await ensure_streaming_daemon()
+    source_url = get_internal_stream_url(info_hash, file_idx)
+    result = await generate_sprite_sheet(source_url, info_hash, file_idx, duration_seconds=duration)
+    if not result:
+        raise HTTPException(status_code=502, detail="Sprite sheet generation failed")
+    sheet, _was_cached = result
+    return FileResponse(
+        sheet,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
+
+
+async def get_or_generate_sprite(info_hash: str, file_idx: int, duration: float) -> dict:
+    """Testable helper behind /sprites: returns path + cache status or an error."""
+    import os
+    from core.transmuxer import generate_sprite_sheet
+    result = await generate_sprite_sheet("", info_hash, file_idx, duration_seconds=duration)
+    if not result:
+        return {"info_hash": info_hash, "file_idx": file_idx, "cached": False, "error": "sprite generation failed"}
+    sheet, was_cached = result
+    if not os.path.isfile(sheet):
+        return {"info_hash": info_hash, "file_idx": file_idx, "cached": False, "error": "sprite generation failed"}
+    return {"info_hash": info_hash, "file_idx": file_idx, "cached": was_cached, "path": sheet}
 
 
 @router.get("/keyframes")
@@ -818,7 +1094,11 @@ async def get_stream_health_watch(
     from core.torrent_streamer import DAEMON_URL
     try:
         session = await get_http_session()
-        async with session.get(f"{DAEMON_URL}/health-watch?info_hash={info_hash}", timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
+        async with session.get(
+            f"{DAEMON_URL}/health-watch?info_hash={info_hash}",
+            headers=streamer_auth_headers(),
+            timeout=aiohttp.ClientTimeout(total=2.0),
+        ) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 import time
@@ -892,7 +1172,11 @@ async def get_system_diagnostics():
     d_start = time.time()
     try:
         session = await get_http_session()
-        async with session.get(f"{DAEMON_URL}/status", timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
+        async with session.get(
+            f"{DAEMON_URL}/status",
+            headers=streamer_auth_headers(),
+            timeout=aiohttp.ClientTimeout(total=2.0),
+        ) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 diag["daemon"]["status"] = "online"

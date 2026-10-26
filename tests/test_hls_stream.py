@@ -65,6 +65,40 @@ async def test_hls_segment_cache_zero_spawns_on_second_request(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_hls_prefetch_muxes_lookahead_segments_concurrently(tmp_path, monkeypatch):
+    """The 1-3 lookahead segments must mux concurrently so a post-seek buffer
+    refills in a fraction of the sequential time."""
+    import core.transmuxer as tm
+    from core.transmuxer import HlsSegmentCache
+
+    monkeypatch.setattr(tm, "_hls_cache", HlsSegmentCache(cache_dir=str(tmp_path / "hls_cache")))
+
+    events = {"active": 0, "max_active": 0, "starts": []}
+
+    async def fake_segment_chunks(source_url_or_path, start_seconds, duration_seconds, chunk_size, segment_format):
+        events["active"] += 1
+        events["max_active"] = max(events["max_active"], events["active"])
+        events["starts"].append(start_seconds)
+        await asyncio.sleep(0.02)
+        events["active"] -= 1
+        yield b"segment-data"
+
+    monkeypatch.setattr(tm, "_segment_chunks", fake_segment_chunks)
+
+    unique_source = f"http://127.0.0.1:8889/stream?info_hash={'d' * 40}&file_idx=0"
+    tm._trigger_hls_prefetch(unique_source, 0.0, 6.0, "ts")
+
+    tasks = list(tm._PREFETCH_TASKS)
+    assert tasks, "prefetch did not schedule any background work"
+    await asyncio.gather(*tasks)
+
+    assert sorted(events["starts"]) == [6.0, 12.0, 18.0], f"wrong lookahead starts: {events['starts']}"
+    assert events["max_active"] >= 2, (
+        f"lookahead segments muxed sequentially (max concurrent = {events['max_active']})"
+    )
+
+
+@pytest.mark.asyncio
 async def test_hls_muxer_concurrency_bounded_to_semaphore(tmp_path):
     """[STRM-HIGH-04] Asserts 15 concurrent HLS segment requests never exceed bounded concurrency."""
     current_active = 0

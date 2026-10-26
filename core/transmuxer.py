@@ -1,8 +1,10 @@
 import asyncio
 import hashlib
+import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import time
 from typing import AsyncGenerator, List, Optional
@@ -527,23 +529,24 @@ class HlsSegmentCache:
             "avg_first_byte_latency_sec": avg_latency,
         }
 
-    def get_cache_key(self, source_url: str, start: float, duration: float) -> str:
+    def get_cache_key(self, source_url: str, start: float, duration: float, segment_format: str = "ts") -> str:
         m_hash = re.search(r"info_hash=([0-9a-fA-F]{40})", source_url)
         m_idx = re.search(r"file_idx=(\d+)", source_url)
         start_ms = int(round(start * 1000))
         dur_ms = int(round(duration * 1000))
+        suffix = "" if segment_format == "ts" else f"_{segment_format}"
         if m_hash:
             h = m_hash.group(1).lower()
             idx = m_idx.group(1) if m_idx else "0"
-            return f"{h}_{idx}_{start_ms}_{dur_ms}"
-        raw = f"{source_url}_{start_ms}_{dur_ms}"
+            return f"{h}_{idx}_{start_ms}_{dur_ms}{suffix}"
+        raw = f"{source_url}_{start_ms}_{dur_ms}_{segment_format}"
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
-    def get_file_path(self, key: str) -> str:
-        return os.path.join(self.cache_dir, f"{key}.ts")
+    def get_file_path(self, key: str, extension: str = "ts") -> str:
+        return os.path.join(self.cache_dir, f"{key}.{extension}")
 
-    def has(self, key: str) -> bool:
-        ts_path = self.get_file_path(key)
+    def has(self, key: str, extension: str = "ts") -> bool:
+        ts_path = self.get_file_path(key, extension)
         done_path = f"{ts_path}.done"
         if os.path.isfile(ts_path) and os.path.isfile(done_path):
             try:
@@ -553,8 +556,8 @@ class HlsSegmentCache:
                 pass
         return False
 
-    async def get_cached_chunks(self, key: str, chunk_size: int = 65536) -> AsyncGenerator[bytes, None]:
-        ts_path = self.get_file_path(key)
+    async def get_cached_chunks(self, key: str, chunk_size: int = 65536, extension: str = "ts") -> AsyncGenerator[bytes, None]:
+        ts_path = self.get_file_path(key, extension)
         try:
             now = time.time()
             os.utime(ts_path, (now, now))
@@ -572,7 +575,7 @@ class HlsSegmentCache:
             total_size = 0
             files = []
             for entry in os.scandir(self.cache_dir):
-                if entry.name.endswith(".ts"):
+                if entry.name.endswith((".ts", ".m4s")):
                     try:
                         stat = entry.stat()
                         total_size += stat.st_size
@@ -599,55 +602,92 @@ class HlsSegmentCache:
 _hls_cache = HlsSegmentCache()
 
 
-async def _spawn_ts_segment(
+async def _create_hls_process(cmd: List[str]):
+    return await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+
+
+async def _terminate_hls_process(process) -> None:
+    try:
+        if process.returncode is None:
+            process.terminate()
+            await process.wait()
+    except Exception:
+        pass
+
+
+def _build_hls_ffmpeg_cmd(
     source_url_or_path: str,
-    start_seconds: float = 0.0,
-    duration_seconds: float = 6.0,
-    chunk_size: int = 65536,
-) -> AsyncGenerator[bytes, None]:
-    """Spawns an FFmpeg process to slice an individual MPEG-TS segment through the bounded HLS semaphore."""
-    async with _HLS_SEMAPHORE:
-        ffmpeg_bin = find_ffmpeg() or "ffmpeg"
-        cmd: List[str] = [
-            ffmpeg_bin,
-            "-hide_banner",
-            "-loglevel", "error",
-        ]
+    start_seconds: float,
+    duration_seconds: float,
+    segment_format: str,
+) -> List[str]:
+    ffmpeg_bin = find_ffmpeg() or "ffmpeg"
+    cmd: List[str] = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel", "error",
+    ]
 
-        if source_url_or_path.startswith("http"):
-            cmd.extend([
-                "-reconnect", "1",
-                "-reconnect_at_eof", "1",
-                "-reconnect_streamed", "1",
-                "-reconnect_on_network_error", "1",
-                "-reconnect_delay_max", "15",
-            ])
-
+    if source_url_or_path.startswith("http"):
         cmd.extend([
-            "-ss", f"{start_seconds:.3f}",
-            "-t", f"{duration_seconds:.3f}",
-            "-i", source_url_or_path,
-            "-map", "0:V:0?",
-            "-map", "0:a:0?",
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-ac", "2",
-            "-af", "aresample=async=1:first_pts=0",
-            "-sn",
-            "-dn",
+            "-reconnect", "1",
+            "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_delay_max", "15",
+        ])
+
+    cmd.extend([
+        "-ss", f"{start_seconds:.3f}",
+        "-t", f"{duration_seconds:.3f}",
+        "-i", source_url_or_path,
+        "-map", "0:V:0?",
+        "-map", "0:a:0?",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ac", "2",
+        "-af", "aresample=async=1:first_pts=0",
+        "-sn",
+        "-dn",
+    ])
+
+    if segment_format == "fmp4":
+        cmd.extend([
+            "-avoid_negative_ts", "make_zero",
+            "-max_muxing_queue_size", "2048",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
+            "-flush_packets", "1",
+            "-f", "mp4",
+            "pipe:1",
+        ])
+    else:
+        cmd.extend([
             "-f", "mpegts",
             "-mpegts_copyts", "1",
             "-output_ts_offset", f"{start_seconds:.3f}",
             "pipe:1",
         ])
+    return cmd
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+
+async def _spawn_hls_segment(
+    source_url_or_path: str,
+    start_seconds: float = 0.0,
+    duration_seconds: float = 6.0,
+    chunk_size: int = 65536,
+    segment_format: str = "ts",
+) -> AsyncGenerator[bytes, None]:
+    """Spawns a bounded FFmpeg process that emits one raw HLS segment."""
+    async with _HLS_SEMAPHORE:
+        cmd = _build_hls_ffmpeg_cmd(
+            source_url_or_path, start_seconds, duration_seconds, segment_format
         )
-
+        process = await _create_hls_process(cmd)
         try:
             while True:
                 chunk = await process.stdout.read(chunk_size)
@@ -657,37 +697,306 @@ async def _spawn_ts_segment(
         except (asyncio.CancelledError, GeneratorExit):
             pass
         finally:
+            await _terminate_hls_process(process)
+
+
+async def _read_exact_or_none(stream, size: int) -> Optional[bytes]:
+    data = bytearray()
+    while len(data) < size:
+        chunk = await stream.read(size - len(data))
+        if not chunk:
+            if not data:
+                return None
+            raise asyncio.IncompleteReadError(bytes(data), size)
+        data.extend(chunk)
+    return bytes(data)
+
+
+class _AsyncByteReader:
+    """Adapts an async byte generator to a minimal read(n) interface for box parsing."""
+
+    def __init__(self, generator):
+        self._generator = generator
+        self._buffer = bytearray()
+        self._eof = False
+
+    async def read(self, size: int) -> bytes:
+        while len(self._buffer) < size and not self._eof:
             try:
-                if process.returncode is None:
-                    process.terminate()
-                    await process.wait()
-            except Exception:
-                pass
+                chunk = await self._generator.__anext__()
+            except StopAsyncIteration:
+                self._eof = True
+                break
+            self._buffer.extend(chunk)
+        data = bytes(self._buffer[:size])
+        del self._buffer[:size]
+        return data
+
+    async def aclose(self) -> None:
+        try:
+            await self._generator.aclose()
+        except Exception:
+            pass
 
 
-def _trigger_hls_prefetch(source_url_or_path: str, current_start: float, duration_seconds: float):
-    """Enqueues background muxing of the next 1-3 segments through the bounded semaphore."""
+async def _discard_exact(stream, size: int) -> None:
+    remaining = size
+    while remaining > 0:
+        chunk = await stream.read(min(65536, remaining))
+        if not chunk:
+            raise asyncio.IncompleteReadError(b"", remaining)
+        remaining -= len(chunk)
+
+
+async def _read_mp4_box_header(stream):
+    header = await _read_exact_or_none(stream, 8)
+    if header is None:
+        return None
+    size = struct.unpack(">I", header[:4])[0]
+    box_type = header[4:8].decode("latin1")
+    if size == 1:
+        extended = await _read_exact_or_none(stream, 8)
+        if extended is None:
+            raise asyncio.IncompleteReadError(header, 16)
+        header += extended
+        size = struct.unpack(">Q", extended)[0]
+    elif size == 0:
+        raise ValueError("MP4 boxes with size 0 are not supported")
+    if size < len(header):
+        raise ValueError(f"Invalid MP4 box size {size} for {box_type}")
+    return box_type, header, size - len(header)
+
+
+def _iter_child_boxes(data, start: int, end: int):
+    offset = start
+    while offset + 8 <= end:
+        size = struct.unpack(">I", data[offset:offset + 4])[0]
+        box_type = data[offset + 4:offset + 8].decode("latin1")
+        header = 8
+        if size == 1:
+            size = struct.unpack(">Q", data[offset + 8:offset + 16])[0]
+            header = 16
+        elif size == 0:
+            size = end - offset
+        if size < header or offset + size > end:
+            break
+        yield box_type, offset, size, header
+        offset += size
+
+
+def _moov_track_timescales(moov: bytes) -> dict:
+    timescales = {}
+    for box_type, offset, size, header in _iter_child_boxes(moov, 8, len(moov)):
+        if box_type != "trak":
+            continue
+        track_id = None
+        timescale = None
+        for child_type, child_offset, child_size, child_header in _iter_child_boxes(
+            moov, offset + header, offset + size
+        ):
+            payload = child_offset + child_header
+            if child_type == "tkhd":
+                version = moov[payload]
+                id_offset = payload + (12 if version == 0 else 20)
+                track_id = struct.unpack(">I", moov[id_offset:id_offset + 4])[0]
+            elif child_type == "mdia":
+                for mdia_type, mdia_offset, mdia_size, mdia_header in _iter_child_boxes(
+                    moov, child_offset + child_header, child_offset + child_size
+                ):
+                    if mdia_type != "mdhd":
+                        continue
+                    mdhd_payload = mdia_offset + mdia_header
+                    version = moov[mdhd_payload]
+                    ts_offset = mdhd_payload + (12 if version == 0 else 20)
+                    timescale = struct.unpack(">I", moov[ts_offset:ts_offset + 4])[0]
+        if track_id is not None and timescale:
+            timescales[track_id] = timescale
+    return timescales
+
+
+def _rewrite_moof_decode_time(moof: bytes, timescales: dict, start_seconds: float) -> bytes:
+    data = bytearray(moof)
+    for box_type, offset, size, header in _iter_child_boxes(data, 8, len(data)):
+        if box_type != "traf":
+            continue
+        track_id = None
+        for child_type, child_offset, child_size, child_header in _iter_child_boxes(
+            data, offset + header, offset + size
+        ):
+            payload = child_offset + child_header
+            if child_type == "tfhd":
+                track_id = struct.unpack(">I", data[payload + 4:payload + 8])[0]
+            elif child_type == "tfdt" and track_id is not None:
+                timescale = timescales.get(track_id)
+                if not timescale:
+                    continue
+                delta = int(round(start_seconds * timescale))
+                version = data[payload]
+                if version == 1:
+                    old = struct.unpack(">Q", data[payload + 4:payload + 12])[0]
+                    data[payload + 4:payload + 12] = struct.pack(">Q", old + delta)
+                else:
+                    old = struct.unpack(">I", data[payload + 4:payload + 8])[0]
+                    new = old + delta
+                    if new <= 0xFFFFFFFF:
+                        data[payload + 4:payload + 8] = struct.pack(">I", new)
+    return bytes(data)
+
+
+async def _iter_fmp4_media(stream, start_seconds: float) -> AsyncGenerator[bytes, None]:
+    """Strip ftyp/moov/mfra from a fragmented MP4 and offset tfdt to the HLS timeline."""
+    timescales = {}
+    while True:
+        box = await _read_mp4_box_header(stream)
+        if box is None:
+            return
+        box_type, header, payload_size = box
+
+        if box_type == "moov":
+            payload = await _read_exact_or_none(stream, payload_size)
+            if payload is None:
+                raise asyncio.IncompleteReadError(header, len(header) + payload_size)
+            timescales = _moov_track_timescales(header + payload)
+            continue
+        if box_type in ("ftyp", "mfra"):
+            await _discard_exact(stream, payload_size)
+            continue
+        if box_type == "moof":
+            payload = await _read_exact_or_none(stream, payload_size)
+            if payload is None:
+                raise asyncio.IncompleteReadError(header, len(header) + payload_size)
+            yield _rewrite_moof_decode_time(header + payload, timescales, start_seconds)
+            continue
+        if box_type == "mdat":
+            yield header
+            remaining = payload_size
+            while remaining > 0:
+                chunk = await stream.read(min(65536, remaining))
+                if not chunk:
+                    raise asyncio.IncompleteReadError(b"", remaining)
+                remaining -= len(chunk)
+                yield chunk
+            continue
+
+        payload = await _read_exact_or_none(stream, payload_size)
+        if payload is None:
+            raise asyncio.IncompleteReadError(header, len(header) + payload_size)
+        yield header + payload
+
+
+async def _iter_fmp4_init(stream) -> AsyncGenerator[bytes, None]:
+    """Emit only ftyp+moov so EXT-X-MAP contains a valid initialization segment."""
+    yielded_moov = False
+    while True:
+        box = await _read_mp4_box_header(stream)
+        if box is None:
+            break
+        box_type, header, payload_size = box
+        if box_type in ("ftyp", "moov"):
+            payload = await _read_exact_or_none(stream, payload_size)
+            if payload is None:
+                raise asyncio.IncompleteReadError(header, len(header) + payload_size)
+            yield header + payload
+            if box_type == "moov":
+                yielded_moov = True
+                return
+        else:
+            await _discard_exact(stream, payload_size)
+    if not yielded_moov:
+        raise HTTPException(status_code=502, detail="FFmpeg produced no fMP4 initialization segment")
+
+
+async def stream_hls_fmp4_init(
+    source_url_or_path: str,
+) -> AsyncGenerator[bytes, None]:
+    """Generate the fMP4 initialization segment (ftyp+moov) for HLS EXT-X-MAP."""
+    async with _HLS_SEMAPHORE:
+        cmd = _build_hls_ffmpeg_cmd(source_url_or_path, 0.0, 0.5, "fmp4")
+        process = await _create_hls_process(cmd)
+        try:
+            async for chunk in _iter_fmp4_init(process.stdout):
+                yield chunk
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        finally:
+            await _terminate_hls_process(process)
+
+
+async def _segment_chunks(
+    source_url_or_path: str,
+    start_seconds: float,
+    duration_seconds: float,
+    chunk_size: int,
+    segment_format: str,
+) -> AsyncGenerator[bytes, None]:
+    raw = _spawn_hls_segment(
+        source_url_or_path, start_seconds, duration_seconds, chunk_size, segment_format
+    )
+    reader = _AsyncByteReader(raw)
+    try:
+        if segment_format == "fmp4":
+            async for chunk in _iter_fmp4_media(reader, start_seconds):
+                yield chunk
+        else:
+            async for chunk in raw:
+                yield chunk
+    finally:
+        await reader.aclose()
+
+
+_PREFETCH_TASKS: set = set()
+_PREFETCH_QUEUED: set = set()
+
+
+def _trigger_hls_prefetch(
+    source_url_or_path: str,
+    current_start: float,
+    duration_seconds: float,
+    segment_format: str = "ts",
+):
+    """
+    Enqueues background muxing of the next 1-3 segments. The lookahead segments
+    mux concurrently (bounded by the global HLS semaphore) so a post-seek buffer
+    refills in a fraction of the sequential time.
+    """
+    extension = "m4s" if segment_format == "fmp4" else "ts"
+
+    async def _prefetch_one(next_start: float) -> None:
+        next_key = _hls_cache.get_cache_key(
+            source_url_or_path, next_start, duration_seconds, segment_format
+        )
+        if next_key in _PREFETCH_QUEUED or _hls_cache.has(next_key, extension):
+            return
+        _PREFETCH_QUEUED.add(next_key)
+        try:
+            ts_path = _hls_cache.get_file_path(next_key, extension)
+            tmp_path = f"{ts_path}.tmp.{os.getpid()}.{time.time_ns()}"
+            async with aiofiles.open(tmp_path, "wb") as f:
+                async for chunk in _segment_chunks(
+                    source_url_or_path, next_start, duration_seconds, 65536, segment_format
+                ):
+                    await f.write(chunk)
+            if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 0:
+                os.replace(tmp_path, ts_path)
+                with open(f"{ts_path}.done", "w") as df:
+                    df.write("1")
+        except Exception:
+            pass
+        finally:
+            _PREFETCH_QUEUED.discard(next_key)
+
     async def _prefetch_worker():
-        for i in range(1, 4):
-            next_start = current_start + (i * duration_seconds)
-            next_key = _hls_cache.get_cache_key(source_url_or_path, next_start, duration_seconds)
-            if _hls_cache.has(next_key):
-                continue
-            try:
-                ts_path = _hls_cache.get_file_path(next_key)
-                tmp_path = f"{ts_path}.tmp.{os.getpid()}.{time.time_ns()}"
-                async with aiofiles.open(tmp_path, "wb") as f:
-                    async for chunk in _spawn_ts_segment(source_url_or_path, next_start, duration_seconds):
-                        await f.write(chunk)
-                if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 0:
-                    os.replace(tmp_path, ts_path)
-                    with open(f"{ts_path}.done", "w") as df:
-                        df.write("1")
-            except Exception:
-                pass
+        await asyncio.gather(
+            *(
+                _prefetch_one(current_start + i * duration_seconds)
+                for i in range(1, 4)
+            )
+        )
 
     try:
-        asyncio.create_task(_prefetch_worker())
+        task = asyncio.create_task(_prefetch_worker())
+        _PREFETCH_TASKS.add(task)
+        task.add_done_callback(_PREFETCH_TASKS.discard)
     except RuntimeError:
         pass
 
@@ -698,25 +1007,31 @@ async def stream_hls_ts_segment(
     duration_seconds: float = 6.0,
     chunk_size: int = 65536,
     prefetch: bool = True,
+    segment_format: str = "ts",
 ) -> AsyncGenerator[bytes, None]:
     """
-    Extracts an individual MPEG-TS segment for HLS streaming with persistent disk cache,
-    single-flight deduplication, and bounded FFmpeg concurrency [STRM-HIGH-04].
+    Extracts an individual HLS segment (MPEG-TS or fragmented MP4) with persistent disk
+    cache, single-flight deduplication, and bounded FFmpeg concurrency [STRM-HIGH-04].
     """
-    key = _hls_cache.get_cache_key(source_url_or_path, start_seconds, duration_seconds)
+    if segment_format not in ("ts", "fmp4"):
+        raise ValueError("segment_format must be 'ts' or 'fmp4'")
+    extension = "m4s" if segment_format == "fmp4" else "ts"
+    key = _hls_cache.get_cache_key(
+        source_url_or_path, start_seconds, duration_seconds, segment_format
+    )
     t0 = time.time()
 
     # 1. Cache hit: serve directly from disk with ZERO ffmpeg spawns
-    if _hls_cache.has(key):
+    if _hls_cache.has(key, extension):
         _hls_cache.hits += 1
         first_chunk = True
-        async for chunk in _hls_cache.get_cached_chunks(key, chunk_size=chunk_size):
+        async for chunk in _hls_cache.get_cached_chunks(key, chunk_size=chunk_size, extension=extension):
             if first_chunk:
                 _hls_cache.record_latency(time.time() - t0)
                 first_chunk = False
             yield chunk
         if prefetch:
-            _trigger_hls_prefetch(source_url_or_path, start_seconds, duration_seconds)
+            _trigger_hls_prefetch(source_url_or_path, start_seconds, duration_seconds, segment_format)
         return
 
     _hls_cache.misses += 1
@@ -738,18 +1053,20 @@ async def stream_hls_ts_segment(
             await asyncio.wait_for(asyncio.shield(fut), timeout=30.0)
         except Exception:
             pass
-        if _hls_cache.has(key):
-            async for chunk in _hls_cache.get_cached_chunks(key, chunk_size=chunk_size):
+        if _hls_cache.has(key, extension):
+            async for chunk in _hls_cache.get_cached_chunks(key, chunk_size=chunk_size, extension=extension):
                 yield chunk
             return
 
     # 3. Cache miss initiator: spawn bounded FFmpeg, stream chunks to caller, and write to cache
-    ts_path = _hls_cache.get_file_path(key)
+    ts_path = _hls_cache.get_file_path(key, extension)
     tmp_path = f"{ts_path}.tmp.{os.getpid()}.{time.time_ns()}"
     out_f = None
     try:
         out_f = await aiofiles.open(tmp_path, "wb")
-        async for chunk in _spawn_ts_segment(source_url_or_path, start_seconds, duration_seconds, chunk_size):
+        async for chunk in _segment_chunks(
+            source_url_or_path, start_seconds, duration_seconds, chunk_size, segment_format
+        ):
             await out_f.write(chunk)
             yield chunk
         await out_f.close()
@@ -783,7 +1100,60 @@ async def stream_hls_ts_segment(
 
     # 4. Trigger background prefetch for subsequent segments
     if prefetch:
-        _trigger_hls_prefetch(source_url_or_path, start_seconds, duration_seconds)
+        _trigger_hls_prefetch(source_url_or_path, start_seconds, duration_seconds, segment_format)
+
+
+SPRITES_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "sprites")
+SPRITE_SCAN_SECONDS = 900  # v1: contact sheet covers the first 15 minutes
+SPRITE_GRID = 5
+
+
+async def generate_sprite_sheet(
+    source_url: str,
+    info_hash: str,
+    file_idx: int = 0,
+    duration_seconds: float = 0.0,
+    scan_seconds: float = SPRITE_SCAN_SECONDS,
+    grid: int = SPRITE_GRID,
+) -> Optional[str]:
+    """
+    P7: renders a tiled thumbnail contact sheet for scrubber hover previews.
+    v1 scope: samples the first `scan_seconds` of media (bounded so a 4K remux
+    cannot trigger a full-file sequential download just for thumbnails).
+    Returns (path, was_cached), or None on failure.
+    """
+    os.makedirs(SPRITES_CACHE_DIR, exist_ok=True)
+    out_path = os.path.abspath(os.path.join(SPRITES_CACHE_DIR, f"{info_hash[:40].lower()}_{file_idx}.jpg"))
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+        return out_path, True
+
+    ffmpeg_bin = find_ffmpeg() or "ffmpeg"
+    effective_scan = max(30.0, min(scan_seconds, duration_seconds if duration_seconds > 0 else scan_seconds))
+    interval = max(1.0, effective_scan / float(grid * grid))
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel", "error",
+        "-t", f"{effective_scan:.1f}",
+        "-i", source_url,
+        "-vf", f"fps=1/{interval:.2f},scale=320:-1,tile={grid}x{grid}",
+        "-frames:v", "1",
+        "-q:v", "5",
+        "-y",
+        out_path,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=180.0)
+    except Exception:
+        return None
+    if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+        return out_path, False
+    return None
 
 
 _TRACKED_VLC_PIDS: set[int] = set()
@@ -1029,7 +1399,13 @@ def generate_hls_manifest(
 ) -> str:
     """Generates an RFC 8216 compliant HLS VOD playlist with virtual segment references and keyframe snapping."""
     import urllib.parse
-    import math
+
+    for name, value in (
+        ("total_duration_sec", total_duration_sec),
+        ("segment_duration_sec", segment_duration_sec),
+    ):
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be a positive finite number")
 
     if keyframes is None:
         keyframes = load_cached_keyframes(info_hash, file_idx)
@@ -1064,10 +1440,12 @@ def generate_hls_manifest(
             segments.append((cur_start, seg_dur))
             cur_start = next_start
     else:
-        total_segments = max(1, int(total_duration_sec / segment_duration_sec))
+        total_segments = max(1, math.ceil(total_duration_sec / segment_duration_sec))
         for i in range(total_segments):
             start_time = i * segment_duration_sec
-            seg_dur = min(segment_duration_sec, total_duration_sec - start_time) if total_duration_sec > start_time else segment_duration_sec
+            if start_time >= total_duration_sec:
+                break
+            seg_dur = min(segment_duration_sec, total_duration_sec - start_time)
             segments.append((start_time, seg_dur))
 
     max_seg_dur = max([s[1] for s in segments], default=segment_duration_sec)

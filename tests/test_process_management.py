@@ -35,6 +35,7 @@ def test_config_wiring_and_child_env():
 
     with patch("subprocess.Popen", side_effect=mock_popen), \
          patch("core.torrent_streamer.kill_stale_daemon"), \
+         patch("core.torrent_streamer.get_streamer_token", return_value="test-daemon-token"), \
          patch("builtins.open", MagicMock()):
         start_daemon_process()
 
@@ -43,6 +44,9 @@ def test_config_wiring_and_child_env():
         assert captured_env["STREAM_PORT"] == str(settings.STREAM_PORT)
         assert captured_env["TORRENT_PORT"] == str(settings.TORRENT_PORT)
         assert captured_env["DHT_PORT"] == str(settings.DHT_PORT)
+        assert captured_env["EVO_STREAM_BIND_HOST"] == settings.STREAM_BIND_HOST
+        assert captured_env["EVO_STREAMER_TOKEN"] == "test-daemon-token"
+        assert captured_env["EVO_STREAM_CACHE_DIR"].endswith(".stream_cache")
 
 
 def test_kill_stale_daemon_safe_takeover():

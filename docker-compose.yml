@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   evoscrapper:
     build:
@@ -17,7 +15,7 @@ services:
       - PORT=8009
       - DEBUG=false
       - API_KEY=${API_KEY:-}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["*"]}
       - REALDEBRID_API_KEY=${REALDEBRID_API_KEY:-}
       - ALLDEBRID_API_KEY=${ALLDEBRID_API_KEY:-}
       - DEBRIDLINK_API_KEY=${DEBRIDLINK_API_KEY:-}
@@ -26,7 +24,11 @@ services:
       - PIKPAK_USER=${PIKPAK_USER:-}
       - PIKPAK_PASSWORD=${PIKPAK_PASSWORD:-}
       - COMETNET_ENABLED=true
+      - COMETNET_RELAYS=${COMETNET_RELAYS:-[]}
       - STREAM_CACHE_DIR=.stream_cache
+      - STREAM_BIND_HOST=127.0.0.1
+      - STREAMER_TOKEN=${STREAMER_TOKEN:-}
+      - STREAM_URL_TTL_SECONDS=1800
       - MAX_DISK_CACHE_GB=15
       - TORRENT_PORT=50000
       - DHT_PORT=50001

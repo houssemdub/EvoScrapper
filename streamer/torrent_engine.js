@@ -6,6 +6,7 @@
 
 import events from 'node:events';
 events.defaultMaxListeners = 100;
+import { Readable } from 'node:stream';
 import WebTorrent from 'webtorrent';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -14,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CACHE_DIR = path.resolve(__dirname, '../.stream_cache');
+const CACHE_DIR = path.resolve(process.env.EVO_STREAM_CACHE_DIR || path.resolve(__dirname, '../.stream_cache'));
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 const PEER_CACHE_FILE = path.join(CACHE_DIR, 'peers.json');
 
@@ -48,33 +49,117 @@ const DEFAULT_TRACKERS = [
 const TORRENT_PORT = parseInt(process.env.TORRENT_PORT || '50000', 10);
 const DHT_PORT = parseInt(process.env.DHT_PORT || '50001', 10);
 const MAX_ACTIVE_TORRENTS = parseInt(process.env.MAX_ACTIVE_TORRENTS || '3', 10);
+const OFFLINE_MODE = /^(1|true|yes)$/i.test(process.env.EVO_ENGINE_OFFLINE || '');
+
+const SLIDE_INTERVAL_MS = parseInt(process.env.EVO_SLIDE_INTERVAL_MS || '1000', 10);
+const RETENTION_PIECES = 10;
+const URGENT_SECONDS = 20;
+const BUFFER_SECONDS = 60;
+const URGENT_MIN_PIECES = 4;
+const URGENT_MAX_PIECES = 48;
+const BUFFER_MIN_PIECES = 8;
+const BUFFER_MAX_PIECES = 128;
+const LOOKAHEAD_SCAN_SECONDS = 120;
+const LOOKAHEAD_SCAN_PIECES_MIN = 64;
+const LOOKAHEAD_SCAN_PIECES_MAX = 4096;
+const STALL_RECOVERY_WINDOW_PIECES = 8;
+const STALL_RECOVERY_AFTER_MS = 8000;
+const STALL_RECOVERY_COOLDOWN_MS = 8000;
+const STALL_RECOVERY_MAX_CANCELS = 2;
+const STALL_RECOVERY_MIN_WIRE_SPEED_BPS = 1024;
+const PEER_CACHE_FLUSH_MS = Math.max(0, parseInt(process.env.EVO_PEER_CACHE_FLUSH_MS || '15000', 10));
+// Swarm pause hysteresis (stremio swarm_paused equivalent): stop requesting
+// lookahead pieces once the buffer is deep, resume when it drains.
+const SWARM_PAUSE_ABOVE_SECONDS = 90;
+const SWARM_RESUME_BELOW_SECONDS = 60;
+// Download shaping multipliers over measured playback rate (bytes/sec).
+const SHAPE_SOFT_MULT = 2.0;
+const SHAPE_HARD_MULT = 4.0;
+// Piece streams yield ~16 KB iterator chunks. Serving those straight into an
+// HTTP response costs a pipe iteration and socket write per chunk; merging
+// into large batches cuts that overhead by two orders of magnitude.
+const STREAM_MERGE_BYTES = Math.max(0, parseInt(process.env.EVO_STREAM_MERGE_BYTES || '1048576', 10));
+
+async function* _mergeChunks(source, targetBytes) {
+    try {
+        let pending = null;
+        let pendingLen = 0;
+        for await (const chunk of source) {
+            if (!chunk || chunk.length === 0) continue;
+            if (pending === null) {
+                pending = chunk;
+                pendingLen = chunk.length;
+            } else {
+                pending = Buffer.concat([pending, chunk]);
+                pendingLen += chunk.length;
+            }
+            if (pendingLen >= targetBytes) {
+                yield pending;
+                pending = null;
+                pendingLen = 0;
+            }
+        }
+        if (pending !== null) yield pending;
+    } finally {
+        if (source && typeof source.destroy === 'function' && !source.destroyed) {
+            source.destroy();
+        }
+    }
+}
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function positiveNumber(value, fallback) {
+    const num = Number(value);
+    return Number.isFinite(num) && num > 0 ? num : fallback;
+}
 
 class TorrentEngine {
-    constructor() {
-        this.client = new WebTorrent({
-            torrentPort: TORRENT_PORT,
-            dhtPort: DHT_PORT,
-            maxConns: 200,
-            dht: true,
-            tracker: true,
-            utp: true,
-            lsd: true,
-            natUpnp: true,
-            natPmp: true
-        });
+    constructor(options = {}) {
+        if (options.client !== undefined) {
+            this.client = options.client;
+        } else {
+            this.client = new WebTorrent(options.clientOptions || {
+                torrentPort: TORRENT_PORT,
+                dhtPort: DHT_PORT,
+                maxConns: OFFLINE_MODE ? 8 : 200,
+                dht: !OFFLINE_MODE,
+                tracker: !OFFLINE_MODE,
+                utp: !OFFLINE_MODE,
+                lsd: !OFFLINE_MODE,
+                natUpnp: !OFFLINE_MODE,
+                natPmp: !OFFLINE_MODE
+            });
+            this.client.on('error', (err) => {
+                console.error('[WebTorrent] Global client error:', err.message);
+            });
+        }
 
-        this.client.on('error', (err) => {
-            console.error('[WebTorrent] Global client error:', err.message);
-        });
-
-        // Map<hash, { torrent, lastActive: number, files: Array }>
+        // Map<hash, { torrent, lastActive: number, files: Array, readers: Map }>
         this.sessions = new Map();
 
         // In-flight metadata resolutions to prevent duplicate client.add race conditions
         this.inFlight = new Map();
 
-        // Background idle sweep every 60 seconds
-        setInterval(() => this.cleanupIdleSessions(), 60 * 1000).unref();
+        // Monotonic id source for read-stream readers
+        this._readerSeq = 0;
+
+        // Peer cache is kept in memory and flushed to disk on a debounce;
+        // per-wire-event synchronous writes would stall the streaming loop.
+        this._peerCache = null;
+        this._peerCacheDirty = false;
+        this._peerCacheFlushTimer = null;
+
+        // Background idle sweep every 60 seconds; peer re-injection runs on a
+        // slower cadence to re-contact known-good peers on live sessions.
+        if (options.idleSweep !== false) {
+            this._idleSweepTimer = setInterval(() => this.cleanupIdleSessions(), 60 * 1000);
+            this._idleSweepTimer.unref?.();
+            this._peerReinjectTimer = setInterval(() => this._reinjectCachedPeers(), 120 * 1000);
+            this._peerReinjectTimer.unref?.();
+        }
     }
 
     canonicalHash(magnetOrHash) {
@@ -125,29 +210,59 @@ class TorrentEngine {
         };
     }
 
-    loadCachedPeers(hash) {
+    _loadPeerCache() {
+        if (this._peerCache !== null) return this._peerCache;
+        let data = {};
         try {
             if (fs.existsSync(PEER_CACHE_FILE)) {
-                const data = JSON.parse(fs.readFileSync(PEER_CACHE_FILE, 'utf-8'));
-                return Array.isArray(data[hash]) ? data[hash] : [];
+                try { data = JSON.parse(fs.readFileSync(PEER_CACHE_FILE, 'utf-8')); } catch (_) {}
             }
         } catch (_) {}
-        return [];
+        if (!data || typeof data !== 'object' || Array.isArray(data)) data = {};
+        this._peerCache = data;
+        return this._peerCache;
+    }
+
+    loadCachedPeers(hash) {
+        const data = this._loadPeerCache();
+        return Array.isArray(data[hash]) ? data[hash] : [];
     }
 
     saveCachedPeers(hash, peers) {
         try {
-            let data = {};
-            if (fs.existsSync(PEER_CACHE_FILE)) {
-                try { data = JSON.parse(fs.readFileSync(PEER_CACHE_FILE, 'utf-8')); } catch (_) {}
-            }
+            const data = this._loadPeerCache();
             const existing = new Set(data[hash] || []);
             for (const p of peers) {
                 if (p && typeof p === 'string') existing.add(p);
             }
             data[hash] = Array.from(existing).slice(-100);
-            fs.writeFileSync(PEER_CACHE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+            this._peerCacheDirty = true;
+            this._schedulePeerCacheFlush();
         } catch (_) {}
+    }
+
+    _schedulePeerCacheFlush() {
+        if (this._peerCacheFlushTimer || !this._peerCacheDirty) return;
+        this._peerCacheFlushTimer = setTimeout(() => {
+            this._peerCacheFlushTimer = null;
+            this.flushPeerCache();
+        }, PEER_CACHE_FLUSH_MS);
+        this._peerCacheFlushTimer.unref?.();
+    }
+
+    flushPeerCache() {
+        if (this._peerCacheFlushTimer) {
+            clearTimeout(this._peerCacheFlushTimer);
+            this._peerCacheFlushTimer = null;
+        }
+        if (!this._peerCacheDirty || this._peerCache === null) return false;
+        try {
+            fs.writeFileSync(PEER_CACHE_FILE, JSON.stringify(this._peerCache, null, 2), 'utf-8');
+            this._peerCacheDirty = false;
+            return true;
+        } catch (_) {
+            return false;
+        }
     }
 
     enforceSessionCapacity() {
@@ -173,6 +288,7 @@ class TorrentEngine {
 
     async addTorrent(target, explicitMagnet = null) {
         const { hash, magnet } = this.buildMagnet(target, explicitMagnet);
+        const requestStartedAt = Date.now();
 
         // 1. Return cached ready session if available
         if (this.sessions.has(hash)) {
@@ -203,6 +319,8 @@ class TorrentEngine {
                 torrent: existing,
                 lastActive: Date.now(),
                 activeReaders: 0,
+                readers: new Map(),
+                metadataMs: existing.ready ? 0 : undefined,
                 files: (existing.files || []).map((f, i) => ({
                     idx: i,
                     name: f.name,
@@ -222,6 +340,7 @@ class TorrentEngine {
                 }, 25000);
                 existing.once('ready', () => {
                     clearTimeout(timer);
+                    entry.metadataMs = Date.now() - requestStartedAt;
                     entry.files = (existing.files || []).map((f, i) => ({
                         idx: i,
                         name: f.name,
@@ -299,6 +418,19 @@ class TorrentEngine {
                     if (wire.remoteAddress && wire.remotePort) {
                         this.saveCachedPeers(hash, [`${wire.remoteAddress}:${wire.remotePort}`]);
                     }
+                    // T0.6: per-source accounting (stremio Statistics.sources
+                    // equivalent) — how many peers each discovery surface yields.
+                    const entry = this.sessions.get(hash);
+                    if (entry) {
+                        if (!(entry.sourceStats instanceof Map)) entry.sourceStats = new Map();
+                        const key = wire.type === 'webSeed' ? 'webseed'
+                            : (wire.peerId && wire._tracker !== undefined) ? 'tracker'
+                                : 'dht';
+                        const stats = entry.sourceStats.get(key) || { found: 0, uniq: new Set() };
+                        stats.found += 1;
+                        if (wire.remoteAddress) stats.uniq.add(`${wire.remoteAddress}:${wire.remotePort}`);
+                        entry.sourceStats.set(key, stats);
+                    }
                 });
             } catch (err) {
                 clearTimeout(timerId);
@@ -322,6 +454,8 @@ class TorrentEngine {
                     torrent,
                     lastActive: Date.now(),
                     activeReaders: 0,
+                    readers: new Map(),
+                    metadataMs: Date.now() - requestStartedAt,
                     files: (torrent.files || []).map((f, i) => ({
                         idx: i,
                         name: f.name,
@@ -371,120 +505,378 @@ class TorrentEngine {
             hash: torrent.infoHash,
             name: file ? file.name : torrent.name,
             length: file ? file.length : torrent.length,
-            duration_seconds: 0,
-            avg_bitrate_bps: 8000000
+            duration_seconds: (sess && sess.duration_seconds) || 0,
+            avg_bitrate_bps: (sess && sess.avg_bitrate_bps) || 8000000
         };
 
         if (sess) {
             sess.fileInfo = info;
-            sess.avg_bitrate_bps = info.avg_bitrate_bps;
         }
         return info;
     }
 
-    applySlidingWindow(torrent, file, byteOffset = 0, opts = {}) {
-        if (!torrent || !torrent.pieces || !torrent.pieceLength || !file) return;
-        const pieceLength = torrent.pieceLength;
+    /**
+     * P1: stores crowd-sourced seek hotspots (seconds within the file) for a
+     * session. The scheduler pre-selects low-priority pieces around them so
+     * statistically-likely seeks land on already-buffered data.
+     */
+    setSeekHints(targetHash, targets) {
+        const hash = this.canonicalHash(targetHash);
+        if (!hash) return null;
+        const sess = this.sessions.get(hash);
+        if (!sess) return null;
+        const clean = Array.from(new Set(
+            (Array.isArray(targets) ? targets : [])
+                .map(t => Number(t))
+                .filter(t => Number.isFinite(t) && t > 0)
+        )).sort((a, b) => a - b).slice(0, 4);
+        sess.seekHints = clean;
+        return { seek_hints: sess.seekHints };
+    }
 
-        // Clear ONLY verified pieces, NEVER blanket-fill false (protects FileIterator critical pieces)
-        if (torrent._critical && Array.isArray(torrent._critical) && torrent.bitfield) {
-            for (let i = 0; i < torrent._critical.length; i++) {
-                if (torrent._critical[i] && torrent.bitfield.get(i)) {
-                    torrent._critical[i] = false;
-                }
-            }
+    /**
+     * Feeds measured media metadata (from ffprobe) into a live session so the
+     * sliding window, buffer-health watchdog, and lookahead scans are sized by
+     * the real bitrate instead of the 8 Mbps fallback.
+     * Explicit avgBitrateBps wins; otherwise bitrate derives from fileLength/duration.
+     */
+    setSessionMetadata(targetHash, metadata = {}) {
+        const hash = this.canonicalHash(targetHash);
+        if (!hash) return null;
+        const sess = this.sessions.get(hash);
+        if (!sess) return null;
+
+        const durationSeconds = Number(metadata.durationSeconds);
+        const explicitBitrate = Number(metadata.avgBitrateBps);
+        const fileLength = Number(metadata.fileLength);
+
+        let derivedBitrate = 0;
+        if (Number.isFinite(durationSeconds) && durationSeconds > 0 &&
+            Number.isFinite(fileLength) && fileLength > 0) {
+            derivedBitrate = Math.round((fileLength * 8) / durationSeconds);
         }
 
+        const effectiveBitrate = (Number.isFinite(explicitBitrate) && explicitBitrate > 0)
+            ? Math.round(explicitBitrate)
+            : derivedBitrate;
+
+        if (effectiveBitrate > 0) sess.avg_bitrate_bps = effectiveBitrate;
+        if (Number.isFinite(durationSeconds) && durationSeconds > 0) sess.duration_seconds = durationSeconds;
+
+        if (sess.fileInfo) {
+            if (sess.duration_seconds > 0) sess.fileInfo.duration_seconds = sess.duration_seconds;
+            if (sess.avg_bitrate_bps > 0) sess.fileInfo.avg_bitrate_bps = sess.avg_bitrate_bps;
+        }
+
+        return {
+            duration_seconds: sess.duration_seconds || 0,
+            avg_bitrate_bps: sess.avg_bitrate_bps || 8000000
+        };
+    }
+
+    _pieceBounds(file, pieceLength) {
+        const safePieceLength = positiveNumber(pieceLength, 256 * 1024);
+        const fileOffset = Math.max(0, Number(file?.offset) || 0);
+        const fileLength = positiveNumber(file?.length, 1);
+        const fileStartPiece = Math.floor(fileOffset / safePieceLength);
+        const fileEndPiece = Math.floor((fileOffset + fileLength - 1) / safePieceLength);
+        return {
+            fileStartPiece,
+            fileEndPiece,
+            totalPieces: Math.max(1, fileEndPiece - fileStartPiece + 1)
+        };
+    }
+
+    _buildReaderIntervals(fileStartPiece, fileEndPiece, cursorPiece, opts = {}, sess = null) {
+        const pieceLength = positiveNumber(opts.pieceLength, 256 * 1024);
+        const avgBitrateBps = positiveNumber(
+            opts.avgBitrateBps || (sess && sess.avg_bitrate_bps),
+            8000000
+        );
+        const bytesPerSec = avgBitrateBps / 8;
+        const bufferMultiplier = opts.bufferMb
+            ? clamp(Number(opts.bufferMb) / 200, 0.5, 4.0)
+            : 1.0;
+        const contraction = sess?.healthState === 'starved'
+            ? 0.35
+            : sess?.healthState === 'deficit'
+                ? 0.7
+                : 1.0;
+
+        const urgentPieces = clamp(
+            Math.ceil((URGENT_SECONDS * bytesPerSec) / pieceLength),
+            URGENT_MIN_PIECES,
+            URGENT_MAX_PIECES
+        );
+        // Deep staging (P6): a warm-up call may extend the urgent window to
+        // cover the opening seconds of the next episode with real bytes.
+        const stageSeconds = positiveNumber(opts.stageSeconds, 0);
+        const stagedUrgentPieces = stageSeconds > 0
+            ? clamp(Math.ceil((stageSeconds * bytesPerSec) / pieceLength), urgentPieces, URGENT_MAX_PIECES * 4)
+            : 0;
+        const effectiveUrgentPieces = Math.max(urgentPieces, stagedUrgentPieces);
+
+        // Swarm pause (T0.1) and download shaping (T0.5) suppress the
+        // lookahead tier entirely or halve it once the buffer is deep and the
+        // swarm is racing far ahead of playback rate.
+        let shapeDivisor = 1;
+        if (sess?.swarmPaused || sess?.shapeLevel === 2) {
+            shapeDivisor = Infinity;
+        } else if (sess?.shapeLevel === 1) {
+            shapeDivisor = 2;
+        }
+
+        const bufferPieces = shapeDivisor === Infinity
+            ? 0
+            : Math.ceil(clamp(
+                Math.ceil((BUFFER_SECONDS * bufferMultiplier * contraction * bytesPerSec) / pieceLength),
+                BUFFER_MIN_PIECES,
+                BUFFER_MAX_PIECES
+            ) / shapeDivisor);
+
+        const urgentEnd = Math.min(fileEndPiece, cursorPiece + effectiveUrgentPieces);
+        const intervals = [{ start: cursorPiece, end: urgentEnd, priority: 3 }];
+        const urgentRanges = [{ start: cursorPiece, end: urgentEnd }];
+
+        // Leave one unselected piece between tiers. Adjacent selections are
+        // concatenated by WebTorrent and inherit the highest priority, which
+        // would turn the entire lookahead into a priority-3 free-for-all.
+        // The one-piece gap remains covered by the FileIterator's priority-1
+        // stream selection and becomes urgent as the cursor advances.
+        const bufferStart = urgentEnd + 2;
+        if (bufferPieces > 0 && bufferStart <= fileEndPiece) {
+            intervals.push({
+                start: bufferStart,
+                end: Math.min(fileEndPiece, bufferStart + bufferPieces - 1),
+                priority: 2
+            });
+        }
+
+        const retentionEnd = cursorPiece - 2;
+        const retentionStart = Math.max(fileStartPiece, cursorPiece - RETENTION_PIECES);
+        if (retentionEnd >= retentionStart) {
+            intervals.push({ start: retentionStart, end: retentionEnd, priority: 1 });
+        }
+
+        return { intervals, urgentRanges };
+    }
+
+    _normalizeIntervals(intervals, fileStartPiece, fileEndPiece) {
+        const clipped = intervals
+            .map(item => ({
+                start: Math.max(fileStartPiece, Math.floor(item.start)),
+                end: Math.min(fileEndPiece, Math.floor(item.end)),
+                priority: item.priority
+            }))
+            .filter(item => item.start <= item.end)
+            .sort((a, b) => a.start - b.start || b.priority - a.priority);
+
+        const out = [];
+        for (const item of clipped) {
+            let current = item;
+            while (true) {
+                const last = out[out.length - 1];
+                if (!last) {
+                    out.push(current);
+                    break;
+                }
+                if (current.start <= last.end) {
+                    last.end = Math.max(last.end, current.end);
+                    last.priority = Math.max(last.priority, current.priority);
+                    break;
+                }
+                if (current.start !== last.end + 1) {
+                    out.push(current);
+                    break;
+                }
+                if (current.priority === last.priority) {
+                    last.end = current.end;
+                    break;
+                }
+                if (current.priority < last.priority) {
+                    // Trim the lower-priority tier's leading piece so the
+                    // selection stays separate. The stream selection still
+                    // covers it until the cursor advances.
+                    current = { ...current, start: current.start + 1 };
+                    if (current.start > current.end) break;
+                    continue;
+                }
+                last.end -= 1;
+                if (last.start > last.end) out.pop();
+            }
+        }
+        return out;
+    }
+
+    _collectSchedule(torrent, file, opts, readers) {
+        if (!torrent || !torrent.pieces || !torrent.pieceLength || !file) return null;
+
+        const bounds = this._pieceBounds(file, torrent.pieceLength);
+        const { fileStartPiece, fileEndPiece, totalPieces } = bounds;
         const hash = this.canonicalHash(torrent.infoHash);
         const sess = hash ? this.sessions.get(hash) : null;
-        const avgBitrateBps = (opts.avgBitrateBps || (sess && sess.avg_bitrate_bps) || 8000000);
-        const bufferMultiplier = opts.bufferMb ? Math.max(0.5, Math.min(4.0, opts.bufferMb / 200)) : 1.0;
+        const pieceLength = positiveNumber(torrent.pieceLength, 256 * 1024);
 
-        // Stremio-grade sequential engine: avoid file.select(1) on whole file
-        // which causes 185 peers to disperse bandwidth randomly across all 500+ pieces.
-        const fileStartPiece = Math.floor(file.offset / pieceLength);
-        const fileEndPiece = Math.floor((file.offset + file.length - 1) / pieceLength);
-        const totalPieces = Math.max(1, fileEndPiece - fileStartPiece + 1);
-
-        // 1. Critical initial container header / moov atom / EBML headers:
-        const criticalCount = Math.max(2, Math.min(4, Math.ceil(totalPieces * 0.02)));
-        const headerEnd = Math.min(fileStartPiece + criticalCount - 1, fileEndPiece);
-        torrent.select(fileStartPiece, headerEnd, 3);
-        if (typeof torrent.critical === 'function') {
-            try { torrent.critical(fileStartPiece, Math.min(fileStartPiece + 2, fileEndPiece)); } catch (_) {}
-        }
-
-        // 2. Container index / seek tables / cues: Last 2 pieces at priority 3
-        const indexPieceCount = Math.min(2, totalPieces);
-        const indexStart = Math.max(fileStartPiece, fileEndPiece - indexPieceCount + 1);
-        torrent.select(indexStart, fileEndPiece, 3);
-        if (typeof torrent.critical === 'function') {
-            try { torrent.critical(indexStart, fileEndPiece); } catch (_) {}
-        }
-
-        // 3. Time/Bitrate-Adaptive Sliding Window [Phase 2]
-        // Target windows in seconds:
-        // - criticalSec = 20s ahead at Priority 3 + critical()
-        // - bufferSec   = 90s * bufferMultiplier at Priority 2
-        // - horizonSec  = 240s * bufferMultiplier at Priority 1
-        const bytesPerSec = avgBitrateBps / 8;
-        const criticalPieces = Math.max(4, Math.min(64, Math.ceil((20 * bytesPerSec) / pieceLength)));
-        const bufferPieces = Math.max(8, Math.min(128, Math.ceil((90 * bufferMultiplier * bytesPerSec) / pieceLength)));
-        const horizonPieces = Math.max(16, Math.min(256, Math.ceil((240 * bufferMultiplier * bytesPerSec) / pieceLength)));
-
-        const currentPiece = Math.floor((file.offset + byteOffset) / pieceLength);
-        if (currentPiece <= fileEndPiece) {
-            const cursorPiece = Math.max(fileStartPiece, currentPiece);
-
-            // 2.5 [STRM-MED-05] Backward-seek starvation: maintain a retention tail of 10 pieces behind cursor
-            const deselectEnd = cursorPiece - 1 - 10;
-            if (deselectEnd >= fileStartPiece + criticalCount) {
-                try {
-                    torrent.deselect(fileStartPiece + criticalCount, deselectEnd, false);
-                } catch (_) {}
+        const headerPieces = clamp(Math.ceil(totalPieces * 0.02), 2, 8);
+        const indexPieces = Math.min(2, totalPieces);
+        const intervals = [
+            {
+                start: fileStartPiece,
+                end: Math.min(fileEndPiece, fileStartPiece + headerPieces - 1),
+                priority: 3
+            },
+            {
+                start: Math.max(fileStartPiece, fileEndPiece - indexPieces + 1),
+                end: fileEndPiece,
+                priority: 3
             }
+        ];
 
-            // Detect backwards seek: if new cursor is behind previous cursor, immediately re-select range
-            if (sess && sess.lastCursorPiece !== undefined && cursorPiece < sess.lastCursorPiece) {
-                const reselectStart = Math.max(fileStartPiece, cursorPiece - 2);
-                const reselectEnd = Math.min(fileEndPiece, cursorPiece + criticalCount);
-                torrent.select(reselectStart, reselectEnd, 3);
-                if (typeof torrent.critical === 'function') {
-                    try { torrent.critical(reselectStart, reselectEnd); } catch (_) {}
+        const urgentRanges = [];
+        const readerCursors = [];
+
+        // P1 collective seek forecasting: pre-select pieces around seek
+        // hotspots gossiped from the mesh, at low priority so real playback
+        // always wins the bandwidth race. Hints are in seconds of the file.
+        if (sess && Array.isArray(sess.seekHints) && sess.seekHints.length > 0) {
+            const hintBytesPerSec = positiveNumber(sess.avg_bitrate_bps, 8000000) / 8;
+            const spanPieces = clamp(
+                Math.ceil((120 * hintBytesPerSec) / pieceLength),
+                2,
+                64
+            );
+            for (const hintSeconds of sess.seekHints) {
+                const hintByte = Math.max(0, hintSeconds * hintBytesPerSec);
+                const hintPiece = clamp(
+                    fileStartPiece + Math.floor(hintByte / pieceLength),
+                    fileStartPiece,
+                    fileEndPiece
+                );
+                intervals.push({
+                    start: Math.max(fileStartPiece, hintPiece - spanPieces),
+                    end: Math.min(fileEndPiece, hintPiece + spanPieces),
+                    priority: 1
+                });
+            }
+        }
+
+        for (const reader of readers) {
+            const cursorByte = Math.max(0, Number(reader.cursorByte) || 0);
+            const cursorPiece = clamp(
+                Math.floor((file.offset + cursorByte) / pieceLength),
+                fileStartPiece,
+                fileEndPiece
+            );
+            if (!reader.transient) {
+                if (reader.lastCursorPiece !== undefined && cursorPiece < reader.lastCursorPiece) {
+                    reader.backwardSeeks = (reader.backwardSeeks || 0) + 1;
                 }
+                reader.lastCursorPiece = cursorPiece;
+                reader.cursorPiece = cursorPiece;
             }
-            if (sess) {
-                sess.lastCursorPiece = cursorPiece;
-            }
+            readerCursors.push(cursorPiece);
+            const readerSchedule = this._buildReaderIntervals(
+                fileStartPiece,
+                fileEndPiece,
+                cursorPiece,
+                { ...opts, pieceLength },
+                sess
+            );
+            intervals.push(...readerSchedule.intervals);
+            urgentRanges.push(...readerSchedule.urgentRanges);
+        }
 
-            // Tier 1: Immediate Start (Priority 3 + Critical)
-            const immediateWindow = criticalPieces;
-            const immediateEnd = Math.min(fileEndPiece, cursorPiece + immediateWindow);
-            torrent.select(cursorPiece, immediateEnd, 3);
+        return {
+            fileStartPiece,
+            fileEndPiece,
+            intervals: this._normalizeIntervals(intervals, fileStartPiece, fileEndPiece),
+            urgentRanges,
+            readerCursors,
+            readers,
+            sess
+        };
+    }
+
+    _clearStaleCritical(torrent, urgentRanges) {
+        if (!torrent._critical || !Array.isArray(torrent._critical)) return;
+        for (const key in torrent._critical) {
+            if (!torrent._critical[key]) continue;
+            const index = Number(key);
+            if (!Number.isInteger(index)) continue;
+            const isUrgent = urgentRanges.some(r => index >= r.start && index <= r.end);
+            const isVerified = torrent.bitfield && torrent.bitfield.get(index);
+            if (isVerified || !isUrgent) {
+                torrent._critical[index] = false;
+            }
+        }
+    }
+
+    applySlidingWindow(torrent, file, byteOffset = undefined, opts = {}, reader = null) {
+        const hasOffset = Number.isFinite(byteOffset) && byteOffset >= 0;
+        if (reader && hasOffset) reader.cursorByte = byteOffset;
+
+        const hash = this.canonicalHash(torrent?.infoHash);
+        const sess = hash ? this.sessions.get(hash) : null;
+        let readers;
+        if (reader) {
+            readers = sess && sess.readers instanceof Map && sess.readers.size > 0
+                ? Array.from(sess.readers.values())
+                : [reader];
+        } else if (hasOffset) {
+            // Legacy warm-up call: emphasis only, no reader registration.
+            readers = [{ cursorByte: byteOffset, transient: true }];
+        } else if (sess && sess.readers instanceof Map && sess.readers.size > 0) {
+            readers = Array.from(sess.readers.values());
+        } else {
+            readers = [{ cursorByte: 0, transient: true }];
+        }
+
+        const schedule = this._collectSchedule(torrent, file, opts, readers);
+        if (!schedule) return;
+
+        this._clearStaleCritical(torrent, schedule.urgentRanges);
+
+        // Drop every non-stream selection we own before re-adding the tiers.
+        // Stream selections created by FileIterator are untouched and keep
+        // covering the whole read range at priority 1.
+        try {
+            torrent.deselect(schedule.fileStartPiece, schedule.fileEndPiece);
+        } catch (_) {}
+        for (const interval of schedule.intervals) {
+            try {
+                torrent.select(interval.start, interval.end, interval.priority);
+            } catch (_) {}
+        }
+
+        // FileIterator flags the three pieces it is about to read as critical.
+        // Mirror that for the near edge of each reader's urgent window so
+        // request pipelining starts as soon as bytes become available.
+        for (const range of schedule.urgentRanges) {
             if (typeof torrent.critical === 'function') {
-                try { torrent.critical(cursorPiece, Math.min(fileEndPiece, cursorPiece + Math.min(8, criticalPieces))); } catch (_) {}
-            }
-
-            // Tier 2: Multi-Peer Horizon (Priority 2)
-            const multiPeerEnd = Math.min(fileEndPiece, immediateEnd + bufferPieces);
-            if (multiPeerEnd > immediateEnd) {
-                torrent.select(immediateEnd + 1, multiPeerEnd, 2);
-            }
-
-            // Tier 3: Lookahead Buffer Reservoir (Priority 1)
-            const reservoirEnd = Math.min(fileEndPiece, multiPeerEnd + horizonPieces);
-            if (reservoirEnd > multiPeerEnd) {
-                torrent.select(multiPeerEnd + 1, reservoirEnd, 1);
-            }
-
-            // Deselect distant unneeded pieces
-            if (reservoirEnd < fileEndPiece) {
                 try {
-                    torrent.deselect(reservoirEnd + 1, fileEndPiece, false);
+                    torrent.critical(range.start, Math.min(range.end, range.start + 7));
                 } catch (_) {}
             }
         }
-        this.checkBufferHealth(torrent, file, byteOffset);
+
+        // Container seek tables (MP4 moov, MKV cues) often live at the tail of
+        // the file. Keep the final index pieces critical so probing and seeking
+        // do not have to wait for the whole download to reach them.
+        const indexPieces = Math.min(2, schedule.fileEndPiece - schedule.fileStartPiece + 1);
+        if (indexPieces > 0 && typeof torrent.critical === 'function') {
+            try {
+                torrent.critical(schedule.fileEndPiece - indexPieces + 1, schedule.fileEndPiece);
+            } catch (_) {}
+        }
+
+        const pieceLength = positiveNumber(torrent.pieceLength, 256 * 1024);
+        const primaryPiece = reader && Number.isInteger(reader.cursorPiece)
+            ? reader.cursorPiece
+            : schedule.readerCursors[schedule.readerCursors.length - 1];
+        const cursorByte = Number.isInteger(primaryPiece)
+            ? Math.max(0, primaryPiece * pieceLength - (file.offset || 0))
+            : 0;
+        this.checkBufferHealth(torrent, file, cursorByte);
     }
 
     checkBufferHealth(torrent, file, byteOffset = 0) {
@@ -504,8 +896,13 @@ class TorrentEngine {
         const fileEndPiece = Math.floor((file.offset + file.length - 1) / pieceLength);
 
         let verifiedPiecesAhead = 0;
+        const scanPieces = clamp(
+            Math.ceil((LOOKAHEAD_SCAN_SECONDS * bytesPerSec) / pieceLength),
+            LOOKAHEAD_SCAN_PIECES_MIN,
+            LOOKAHEAD_SCAN_PIECES_MAX
+        );
         if (torrent.bitfield) {
-            const checkLimit = Math.min(fileEndPiece, cursorPiece + 64);
+            const checkLimit = Math.min(fileEndPiece, cursorPiece + scanPieces - 1);
             for (let i = cursorPiece; i <= checkLimit; i++) {
                 if (torrent.bitfield.get(i)) {
                     verifiedPiecesAhead++;
@@ -526,33 +923,53 @@ class TorrentEngine {
             healthState = 'deficit';
         }
 
+        // Swarm pause/resume hysteresis (T0.1, stremio `swarm_paused`): with a
+        // deep buffer the lookahead tier stops requesting entirely; it resumes
+        // only after the buffer drains past the lower threshold, so the state
+        // cannot flap at the boundary.
+        if (secondsAhead >= SWARM_PAUSE_ABOVE_SECONDS) {
+            sess.swarmPaused = true;
+        } else if (secondsAhead < SWARM_RESUME_BELOW_SECONDS) {
+            sess.swarmPaused = false;
+        }
+
+        // Download shaping (T0.5, stremio `swarm_cap`): when the swarm is
+        // racing far ahead of the consumption rate, halve the lookahead tier
+        // (level 1) or pause it (level 2 via hysteresis above). Never applied
+        // while starved/deficit — recovery always gets full bandwidth.
+        if (sess.emaSpeed > bytesPerSec * SHAPE_SOFT_MULT && secondsAhead > BUFFER_SECONDS) {
+            sess.shapeLevel = Math.max(sess.shapeLevel || 0, 1);
+        } else if (secondsAhead <= SWARM_RESUME_BELOW_SECONDS) {
+            sess.shapeLevel = 0;
+        }
+
         sess.healthState = healthState;
         sess.secondsAhead = Math.round(secondsAhead * 10) / 10;
         sess.deficitRatio = Math.round(deficitRatio * 100) / 100;
 
         if (healthState === 'deficit' || healthState === 'starved') {
             const criticalEnd = Math.min(fileEndPiece, cursorPiece + 3);
-            torrent.select(cursorPiece, criticalEnd, 3);
             if (typeof torrent.critical === 'function') {
                 try { torrent.critical(cursorPiece, criticalEnd); } catch (_) {}
             }
+        }
 
-            if (Array.isArray(torrent.wires)) {
-                const now = Date.now();
-                for (const wire of torrent.wires) {
-                    if (wire.downloaded === 0 && wire.connected && (now - (wire.lastActive || now)) > 3000) {
-                        try {
-                            if (typeof wire.choke === 'function') wire.choke();
-                        } catch (_) {}
-                    }
-                }
-            }
+        // Stalled swarm recovery: WebTorrent's hotswap only moves a block when
+        // a faster wire asks for the same piece. Nudge it by cancelling a
+        // small number of long-pending requests on genuinely slow wires, but
+        // only when another unchoked wire already has those pieces. `choke()`
+        // is upload-side back-pressure, not a download remedy, so it is never
+        // used here. The per-session cooldown keeps this bounded.
+        if (healthState === 'starved') {
+            this._recoverStalledRequests(torrent, sess, cursorPiece, fileEndPiece);
         }
 
         return {
             hash: torrent.infoHash,
             health_state: healthState,
             seconds_ahead: sess.secondsAhead,
+            verified_pieces_ahead: verifiedPiecesAhead,
+            scan_pieces: scanPieces,
             deficit_ratio: sess.deficitRatio,
             speed_bps: Math.round(sess.emaSpeed * 8),
             num_peers: torrent.numPeers || 0,
@@ -560,47 +977,159 @@ class TorrentEngine {
         };
     }
 
-    createReadStream(torrent, file, opts = {}) {
-        const start = opts.start || 0;
-        this.applySlidingWindow(torrent, file, start, opts);
-        const stream = file.createReadStream(opts);
-        const hash = this.canonicalHash(torrent.infoHash);
-        let currentOffset = start;
+    _recoverStalledRequests(torrent, sess, cursorPiece, fileEndPiece) {
+        if (!Array.isArray(torrent.wires) || torrent.wires.length < 2) return 0;
+        if (!(sess.stalledRequests instanceof Map)) sess.stalledRequests = new Map();
 
-        if (hash) {
-            const sess = this.sessions.get(hash);
-            if (sess) {
-                sess.lastActive = Date.now();
-                sess.activeReaders = (sess.activeReaders || 0) + 1;
+        const now = Date.now();
+        if (now - (sess.lastStallRecoveryAt || 0) < STALL_RECOVERY_COOLDOWN_MS) return 0;
 
-                // 2.3 1-second interval sliding window trigger
-                const slideTimer = setInterval(() => {
-                    this.applySlidingWindow(torrent, file, currentOffset, opts);
-                }, 1000);
-
-                // Immediate slide on peer connection/unchoke
-                const wireListener = () => {
-                    this.applySlidingWindow(torrent, file, currentOffset, opts);
-                };
-                torrent.on('wire', wireListener);
-
-                const releaseReader = () => {
-                    clearInterval(slideTimer);
-                    torrent.removeListener('wire', wireListener);
-                    if (sess.activeReaders > 0) sess.activeReaders--;
-                    sess.lastActive = Date.now();
-                };
-                stream.once('close', releaseReader);
-                stream.once('end', releaseReader);
-                stream.once('error', releaseReader);
-
-                stream.on('data', (chunk) => {
-                    sess.lastActive = Date.now();
-                    const len = chunk ? chunk.length : 0;
-                    currentOffset += len;
-                });
-            }
+        const presentWires = new Set(torrent.wires);
+        for (const [wire, tracked] of sess.stalledRequests) {
+            if (!presentWires.has(wire) || wire.destroyed) sess.stalledRequests.delete(wire);
         }
+
+        const urgentStart = cursorPiece;
+        const urgentEnd = Math.min(fileEndPiece, cursorPiece + STALL_RECOVERY_WINDOW_PIECES - 1);
+        let cancels = 0;
+
+        for (const wire of torrent.wires) {
+            if (cancels >= STALL_RECOVERY_MAX_CANCELS) break;
+            if (!wire || wire.destroyed || wire.peerChoking || wire.type === 'webSeed') continue;
+            if (!Array.isArray(wire.requests) || wire.requests.length === 0) continue;
+            if (typeof wire.downloadSpeed !== 'function' || typeof wire.cancel !== 'function') continue;
+            if (wire.downloadSpeed() >= STALL_RECOVERY_MIN_WIRE_SPEED_BPS) continue;
+
+            let tracked = sess.stalledRequests.get(wire);
+            if (!tracked) {
+                tracked = new Map();
+                sess.stalledRequests.set(wire, tracked);
+            }
+
+            const presentKeys = new Set();
+            for (const request of wire.requests) {
+                if (cancels >= STALL_RECOVERY_MAX_CANCELS) break;
+                const index = request && request.piece;
+                if (!Number.isInteger(index) || index < urgentStart || index > urgentEnd) continue;
+
+                const key = `${index}:${request.offset}:${request.length}`;
+                presentKeys.add(key);
+
+                const firstSeen = tracked.get(key);
+                if (firstSeen === undefined) {
+                    tracked.set(key, now);
+                    continue;
+                }
+                if (now - firstSeen < STALL_RECOVERY_AFTER_MS) continue;
+
+                const hasAlternative = torrent.wires.some(other => {
+                    if (!other || other === wire || other.destroyed || other.peerChoking) return false;
+                    if (!other.peerPieces || typeof other.peerPieces.get !== 'function') return false;
+                    if (!other.peerPieces.get(index)) return false;
+                    if (typeof other.downloadSpeed !== 'function') return true;
+                    return other.downloadSpeed() >= STALL_RECOVERY_MIN_WIRE_SPEED_BPS ||
+                        !Array.isArray(other.requests) || other.requests.length === 0;
+                });
+                if (!hasAlternative) continue;
+
+                try {
+                    wire.cancel(index, request.offset, request.length);
+                    cancels += 1;
+                } catch (_) {}
+                tracked.delete(key);
+            }
+
+            for (const key of tracked.keys()) {
+                if (!presentKeys.has(key)) tracked.delete(key);
+            }
+            if (tracked.size === 0) sess.stalledRequests.delete(wire);
+        }
+
+        if (cancels > 0) sess.lastStallRecoveryAt = now;
+        return cancels;
+    }
+
+    createReadStream(torrent, file, opts = {}) {
+        const start = Math.max(0, Number(opts.start) || 0);
+        const hash = this.canonicalHash(torrent?.infoHash);
+        const sess = hash ? this.sessions.get(hash) : null;
+        const reader = {
+            id: `${Date.now().toString(36)}-${(++this._readerSeq).toString(36)}`,
+            cursorByte: start,
+            lastCursorPiece: undefined,
+            released: false,
+            slideTimer: null,
+            wireListener: null
+        };
+
+        if (sess) {
+            if (!(sess.readers instanceof Map)) sess.readers = new Map();
+            sess.readers.set(reader.id, reader);
+            sess.activeReaders = sess.readers.size;
+            sess.lastActive = Date.now();
+            if (sess.streamStartedAt === undefined) sess.streamStartedAt = Date.now();
+        }
+
+        this.applySlidingWindow(torrent, file, start, opts, reader);
+
+        let stream = file.createReadStream(opts);
+        if (STREAM_MERGE_BYTES > 0 && opts.mergeChunks !== false) {
+            stream = Readable.from(_mergeChunks(stream, STREAM_MERGE_BYTES), { highWaterMark: 4 });
+        }
+
+        if (sess) {
+            reader.slideTimer = setInterval(() => {
+                this.applySlidingWindow(torrent, file, undefined, opts, reader);
+            }, SLIDE_INTERVAL_MS);
+            reader.slideTimer.unref?.();
+
+            reader.wireListener = () => {
+                this.applySlidingWindow(torrent, file, undefined, opts, reader);
+            };
+            torrent.on('wire', reader.wireListener);
+
+            const releaseReader = () => {
+                if (reader.released) return;
+                reader.released = true;
+
+                clearInterval(reader.slideTimer);
+                reader.slideTimer = null;
+                if (reader.wireListener) {
+                    torrent.removeListener('wire', reader.wireListener);
+                    reader.wireListener = null;
+                }
+
+                if (sess.readers instanceof Map) {
+                    sess.readers.delete(reader.id);
+                    sess.activeReaders = sess.readers.size;
+                } else if (sess.activeReaders > 0) {
+                    sess.activeReaders -= 1;
+                }
+                sess.lastActive = Date.now();
+
+                // Rebuild the selection set for the readers that remain so a
+                // finished range request cannot leave another reader stranded.
+                if (sess.readers instanceof Map && sess.readers.size > 0) {
+                    this.applySlidingWindow(torrent, file, undefined, opts);
+                }
+            };
+            stream.once('close', releaseReader);
+            stream.once('end', releaseReader);
+            stream.once('error', releaseReader);
+
+            stream.on('data', (chunk) => {
+                sess.lastActive = Date.now();
+                reader.cursorByte += chunk ? chunk.length : 0;
+                if (sess.firstByteAt === undefined) {
+                    sess.firstByteAt = Date.now();
+                    if (sess.streamStartedAt !== undefined) {
+                        sess.firstByteMs = sess.firstByteAt - sess.streamStartedAt;
+                    }
+                }
+                sess.bytesServed = (sess.bytesServed || 0) + (chunk ? chunk.length : 0);
+            });
+        }
+
         return stream;
     }
 
@@ -619,6 +1148,26 @@ class TorrentEngine {
 
     cleanupOtherSessions(activeHash) {
         // Deprecated: No longer called on request path to protect concurrent playback
+    }
+
+    /**
+     * T0.6: periodically re-add known-good cached peers to live sessions whose
+     * swarm is thinning, so discovery does not depend solely on fresh announce
+     * rounds (stremio peer_search re-queries its sources on a cadence).
+     */
+    _reinjectCachedPeers(minPeers = 4) {
+        for (const [hash, sess] of this.sessions.entries()) {
+            const torrent = sess.torrent;
+            if (!torrent || typeof torrent.addPeer !== 'function') continue;
+            if ((torrent.numPeers || 0) >= minPeers) continue;
+            const connected = new Set((torrent.wires || [])
+                .filter(w => w.remoteAddress && w.remotePort)
+                .map(w => `${w.remoteAddress}:${w.remotePort}`));
+            for (const peer of this.loadCachedPeers(hash)) {
+                if (connected.has(peer)) continue;
+                try { torrent.addPeer(peer); } catch (_) {}
+            }
+        }
     }
 
     cleanupIdleSessions(idleTimeoutMs = 5 * 60 * 1000) {
@@ -666,6 +1215,13 @@ class TorrentEngine {
                 };
             });
 
+            const source_stats = {};
+            if (sess.sourceStats instanceof Map) {
+                for (const [key, stats] of sess.sourceStats.entries()) {
+                    source_stats[key] = { found: stats.found, uniq: stats.uniq.size };
+                }
+            }
+
             active.push({
                 info_hash: hash,
                 name: t.name,
@@ -686,6 +1242,14 @@ class TorrentEngine {
                 health_state: sess.healthState || 'healthy',
                 seconds_ahead: sess.secondsAhead || 0,
                 deficit_ratio: sess.deficitRatio || 0,
+                swarm_paused: Boolean(sess.swarmPaused),
+                source_stats: source_stats,
+                duration_seconds: sess.duration_seconds || null,
+                avg_bitrate_bps: sess.avg_bitrate_bps || null,
+                readers: sess.readers instanceof Map ? sess.readers.size : (sess.activeReaders || 0),
+                metadata_ms: sess.metadataMs ?? null,
+                first_byte_ms: sess.firstByteMs ?? null,
+                bytes_served: sess.bytesServed || 0,
                 lastActiveSecAgo: Math.round((Date.now() - sess.lastActive) / 1000)
             });
         }
@@ -700,4 +1264,5 @@ class TorrentEngine {
     }
 }
 
-export default new TorrentEngine();
+export { TorrentEngine };
+export default process.env.EVO_ENGINE_NO_DEFAULT === '1' ? null : new TorrentEngine();

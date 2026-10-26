@@ -4,7 +4,9 @@ import time
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
-from core.aggregator import deduplicate_torrents, filter_torrents
+from config import settings
+from core.torrent_streamer import get_torrent_files
+from core.aggregator import deduplicate_torrents, filter_torrents, gate_by_swarm_health
 from core.cache import cache
 from core.security import verify_api_key
 from models.torrent import TorrentItem, TorrentSearchResponse
@@ -12,6 +14,47 @@ from providers.torrents import TORRENT_PROVIDERS
 from core.logger import scrapers_logger
 
 router = APIRouter(prefix="/api/v1/torrents", tags=["Torrents"], dependencies=[Depends(verify_api_key)])
+
+_prewarm_tasks: set = set()
+
+# T0.4: empty results are cached briefly (negative-result TTL) so a newly
+# seeded torrent is discoverable quickly, while full results keep the long TTL.
+FULL_RESULT_TTL = 900
+EMPTY_RESULT_TTL = 120
+
+
+def search_result_ttl(items: List[TorrentItem]) -> int:
+    return FULL_RESULT_TTL if items else EMPTY_RESULT_TTL
+
+
+def _prewarm_top_swarms(items: List[TorrentItem]) -> None:
+    """
+    Opt-in (PREWARM_SWARMS): resolve the top results' metadata and peer
+    connections in the background right after a search so click-to-play skips
+    the metadata wait. The daemon deselects every piece, so nothing downloads
+    until a reader actually appears.
+    """
+    if not settings.PREWARM_SWARMS:
+        return
+
+    candidates = []
+    for item in items:
+        info_hash = (item.info_hash or "").strip().lower()
+        if info_hash and not info_hash.startswith("cdn_"):
+            candidates.append((info_hash, item.magnet_uri or None))
+        if len(candidates) >= 2:
+            break
+
+    async def _warm(info_hash: str, magnet: Optional[str]) -> None:
+        try:
+            await get_torrent_files(info_hash, magnet)
+        except Exception:
+            pass
+
+    for info_hash, magnet in candidates:
+        task = asyncio.create_task(_warm(info_hash, magnet))
+        _prewarm_tasks.add(task)
+        task.add_done_callback(_prewarm_tasks.discard)
 
 
 @router.get("/search", response_model=TorrentSearchResponse)
@@ -87,7 +130,16 @@ async def search_torrents(
         deduped, resolution=resolution, min_seeders=min_seeders, category=category, query=query_str
     )[:limit]
 
+    # T0.2: hide dead torrents behind a healthy swarm (skipped with debrid).
+    try:
+        from core.debrid.manager import get_debrid_manager
+        debrid_configured = bool(get_debrid_manager().active_providers)
+    except Exception:
+        debrid_configured = False
+    final_items = gate_by_swarm_health(final_items, debrid_configured=debrid_configured)
+
     elapsed = round(time.time() - start, 3)
+    _prewarm_top_swarms(final_items)
     response = TorrentSearchResponse(
         query=query_str,
         provider=provider,
@@ -95,7 +147,7 @@ async def search_torrents(
         time_taken=elapsed,
         data=final_items,
     )
-    await cache.set(cache_key, response, ttl=900)
+    await cache.set(cache_key, response, ttl=search_result_ttl(final_items))
     return response
 
 

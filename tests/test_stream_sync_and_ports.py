@@ -36,7 +36,8 @@ def test_buffering_engine_sliding_window_and_critical():
         engine_code = f.read()
 
     assert "torrent._critical" in engine_code or "critical(" in engine_code, "torrent_engine.js must manage critical pieces"
-    assert "immediateWindow" in engine_code and "bufferPieces" in engine_code, "torrent_engine.js must prioritize playback cursor pieces"
+    assert "urgentPieces" in engine_code and "bufferPieces" in engine_code, "torrent_engine.js must prioritize playback cursor pieces"
+    assert "bufferStart = urgentEnd + 2" in engine_code, "priority tiers must stay separated so WebTorrent cannot collapse them"
     assert "applySlidingWindow" in engine_code, "torrent_engine.js must implement applySlidingWindow"
 
 

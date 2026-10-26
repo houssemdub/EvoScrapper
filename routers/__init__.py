@@ -7,6 +7,7 @@ from .stream import router as stream_router
 from .stremio import router as stremio_router
 from .library import router as library_router
 from .cometnet import router as cometnet_router
+from .auth import router as auth_router
 
 __all__ = [
     "torrents_router",
@@ -18,4 +19,5 @@ __all__ = [
     "stremio_router",
     "library_router",
     "cometnet_router",
+    "auth_router",
 ]

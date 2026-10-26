@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-tests:
+    name: Python test suite
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run pytest
+        run: python -m pytest -q
+
+  node-engine-tests:
+    name: Node streaming engine tests
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: streamer/package-lock.json
+
+      - name: Install streamer dependencies
+        run: npm ci
+        working-directory: streamer
+
+      - name: Engine scheduler harness
+        run: node tests/node/engine_harness.mjs
+
+      - name: Deterministic seed/reader measurement
+        run: |
+          MEASURE_DIR=$(mktemp -d)
+          EVO_STREAM_CACHE_DIR="$MEASURE_DIR" node tests/node/seed_reader_measure.mjs

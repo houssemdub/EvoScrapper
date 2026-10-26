@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import StreamingResponse
 from core.cache import cache
 from core.client import http_client
-from core.security import validate_outbound_proxy_url, verify_api_key
+from core.security import fetch_public_url, verify_api_key
 from models.subtitle import SubtitleItem, SubtitleSearchResponse
 from providers.subtitles import SUBTITLE_PROVIDERS
 from core.logger import subtitles_logger
@@ -275,8 +275,7 @@ async def proxy_download(request: Request, url: str = Query(..., description="Up
         if target_url.startswith("/"):
             base_url = str(request.base_url).rstrip("/")
             target_url = f"{base_url}{target_url}"
-        validate_outbound_proxy_url(target_url)
-        resp = await client.get(target_url, headers=headers)
+        resp = await fetch_public_url(client, target_url, headers=headers)
         if resp.status_code >= 400 and len(resp.content) < 50:
             resp.raise_for_status()
 
@@ -288,8 +287,6 @@ async def proxy_download(request: Request, url: str = Query(..., description="Up
             media_type=content_type,
             headers={"Content-Disposition": content_disposition},
         )
-    except HTTPException:
-        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -461,8 +458,7 @@ async def proxy_subtitle_vtt(
         if target_url.startswith("/"):
             base_url = str(request.base_url).rstrip("/")
             target_url = f"{base_url}{target_url}"
-        validate_outbound_proxy_url(target_url)
-        resp = await client.get(target_url, headers=headers)
+        resp = await fetch_public_url(client, target_url, headers=headers)
         if resp.status_code >= 400 and len(resp.content) < 50:
             resp.raise_for_status()
         raw = resp.content

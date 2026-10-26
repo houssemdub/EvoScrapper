@@ -28,7 +28,10 @@ def test_multi_tier_buffering_in_engine():
     with open(ENGINE_PATH, "r", encoding="utf-8") as f:
         code = f.read()
 
-    # Multi-tier window verification
-    assert "immediateWindow" in code or "immediatePieces" in code, "Missing immediate window definition"
-    assert "multiPeerHorizon" in code or "bufferPieces" in code, "Missing multi-peer horizon definition"
-    assert "reservoir" in code or "deepBufferPieces" in code or "backgroundHorizon" in code, "Missing deep background reservoir definition"
+    # The scheduler builds one urgent (priority 3), one horizon (priority 2),
+    # and one retention (priority 1) range per reader. Execution-level coverage
+    # lives in tests/test_engine_scheduler.py.
+    assert "_buildReaderIntervals" in code, "Missing tiered reader scheduler"
+    assert "urgentPieces" in code and "priority: 3" in code, "Missing immediate window definition"
+    assert "bufferPieces" in code and "priority: 2" in code, "Missing multi-peer horizon definition"
+    assert "RETENTION_PIECES" in code and "priority: 1" in code, "Missing deep background reservoir definition"

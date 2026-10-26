@@ -7,6 +7,7 @@ and queries stream endpoints.
 from typing import Any, Dict, List, Optional
 import urllib.parse
 import aiohttp
+from fastapi import HTTPException
 from core.client import http_client
 
 
@@ -38,12 +39,14 @@ async def fetch_addon_manifest(addon_url: str) -> Dict[str, Any]:
     manifest_url = f"{base_url}/manifest.json"
 
     try:
-        data = await http_client.get_json(manifest_url, timeout=10.0)
+        data = await http_client.get_public_json(manifest_url, timeout=10.0)
         if isinstance(data, dict) and "id" in data and "name" in data:
             data["_base_url"] = base_url
             data["_manifest_url"] = manifest_url
             return data
         raise ValueError("Invalid Stremio manifest format (missing id or name)")
+    except HTTPException:
+        raise
     except Exception as e:
         raise ValueError(f"Failed to fetch Stremio manifest from {manifest_url}: {e}")
 
@@ -73,7 +76,7 @@ async def fetch_addon_streams(
     stream_endpoint = f"{base_url}/stream/{media_type}/{target_id}.json"
 
     try:
-        data = await http_client.get_json(stream_endpoint, timeout=12.0)
+        data = await http_client.get_public_json(stream_endpoint, timeout=12.0)
         if not isinstance(data, dict):
             return []
 
@@ -102,6 +105,8 @@ async def fetch_addon_streams(
                 "behaviorHints": s.get("behaviorHints", {}),
             })
         return results
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[StremioEngine] Addon stream fetch error from {stream_endpoint}: {e}")
         return []

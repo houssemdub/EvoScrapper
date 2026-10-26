@@ -5,14 +5,98 @@
  */
 
 import http from 'node:http';
-import { URL } from 'node:url';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import net from 'node:net';
+import { URL, fileURLToPath } from 'node:url';
 import path from 'node:path';
 import events from 'node:events';
 import engine from './torrent_engine.js';
 
 events.defaultMaxListeners = 100;
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const PORT = parseInt(process.env.PORT || process.env.STREAM_PORT || '8889', 10);
+const BIND_HOST = process.env.EVO_STREAM_BIND_HOST || process.env.STREAM_BIND_HOST || '127.0.0.1';
+const CACHE_DIR = path.resolve(process.env.EVO_STREAM_CACHE_DIR || path.resolve(__dirname, '../.stream_cache'));
+const ALLOW_ANONYMOUS = /^(1|true|yes)$/i.test(process.env.EVO_STREAMER_ALLOW_ANONYMOUS || '');
+const TOKEN_HEADER = 'x-evo-streamer-token';
+const MAX_SIGNED_URL_TTL_SECONDS = 24 * 60 * 60;
+
+function readStreamerToken() {
+    const envToken = process.env.EVO_STREAMER_TOKEN || process.env.STREAMER_TOKEN;
+    if (envToken && envToken.trim()) return envToken.trim();
+    try {
+        const tokenPath = path.join(CACHE_DIR, 'streamer.token');
+        if (fs.existsSync(tokenPath)) {
+            const token = fs.readFileSync(tokenPath, 'utf-8').trim();
+            if (token) return token;
+        }
+    } catch (_) {}
+    return '';
+}
+
+const STREAMER_TOKEN = readStreamerToken();
+if (!STREAMER_TOKEN && !ALLOW_ANONYMOUS) {
+    console.error(
+        '[StreamServer] Refusing to start without EVO_STREAMER_TOKEN or .stream_cache/streamer.token. ' +
+        'Set EVO_STREAMER_ALLOW_ANONYMOUS=1 only for isolated local development.'
+    );
+    process.exit(1);
+}
+
+function timingSafeEqualText(left, right) {
+    const leftBuf = Buffer.from(String(left || ''), 'utf-8');
+    const rightBuf = Buffer.from(String(right || ''), 'utf-8');
+    if (leftBuf.length !== rightBuf.length) return false;
+    return crypto.timingSafeEqual(leftBuf, rightBuf);
+}
+
+function hasValidToken(req) {
+    if (ALLOW_ANONYMOUS) return true;
+    const supplied = req.headers[TOKEN_HEADER];
+    return typeof supplied === 'string' && timingSafeEqualText(supplied, STREAMER_TOKEN);
+}
+
+function hasValidStreamSignature(query, nowMs = Date.now()) {
+    if (!STREAMER_TOKEN) return ALLOW_ANONYMOUS;
+    const expires = parseInt(query.get('expires') || '', 10);
+    const supplied = query.get('sig') || '';
+    if (!Number.isFinite(expires) || expires <= 0) return false;
+    const expiresMs = expires * 1000;
+    if (expiresMs < nowMs || expiresMs > nowMs + MAX_SIGNED_URL_TTL_SECONDS * 1000) return false;
+    const expected = crypto.createHmac('sha256', STREAMER_TOKEN).update(String(expires)).digest('hex');
+    return timingSafeEqualText(supplied, expected);
+}
+
+function hostnameFromHostHeader(value) {
+    let hostname = String(value || '').trim().toLowerCase();
+    if (!hostname) return '';
+    if (hostname.startsWith('[')) {
+        const end = hostname.indexOf(']');
+        return end > 0 ? hostname.slice(1, end) : hostname;
+    }
+    const colon = hostname.lastIndexOf(':');
+    if (colon > -1) hostname = hostname.slice(0, colon);
+    return hostname;
+}
+
+function requestHostAllowed(req) {
+    const hostname = hostnameFromHostHeader(req.headers.host);
+    if (!hostname) return false;
+    if (hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1') return true;
+    if (BIND_HOST && BIND_HOST !== '0.0.0.0' && BIND_HOST !== '::' && hostname === BIND_HOST.toLowerCase()) {
+        return true;
+    }
+    // An explicit wildcard bind may be reached through any local interface
+    // address, but never through an arbitrary DNS name (rebinding defense).
+    if ((BIND_HOST === '0.0.0.0' || BIND_HOST === '::') && net.isIP(hostname) !== 0) {
+        return true;
+    }
+    return false;
+}
 
 function getMime(filename) {
     const ext = path.extname(filename || '').toLowerCase();
@@ -228,25 +312,54 @@ function readJsonBody(req) {
 }
 
 const server = http.createServer(async (req, res) => {
-    // Enable CORS for web UI access
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization');
-
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
-        return;
-    }
-
     const parsedUrl = new URL(req.url, `http://localhost:${PORT}`);
     const pathname = parsedUrl.pathname;
     const query = parsedUrl.searchParams;
 
+    // The daemon is an internal control plane, not a browser-facing API. No
+    // CORS headers are emitted, and DNS-rebinding hostnames are rejected.
+    if (!requestHostAllowed(req)) {
+        res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ error: 'Forbidden host' }));
+        return;
+    }
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(405, { Allow: 'GET, HEAD, POST' });
+        res.end();
+        return;
+    }
+
     // ── Health Check ───────────────────────────────────────────────────────────
     if (pathname === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', engine: 'webtorrent-v3', port: PORT }));
+        if (req.headers[TOKEN_HEADER] && !hasValidToken(req)) {
+            res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({
+            status: 'ok',
+            engine: 'webtorrent-v3',
+            port: PORT,
+            pid: process.pid,
+            bind_host: BIND_HOST,
+            auth_required: !ALLOW_ANONYMOUS,
+            signed_streams: true
+        }));
+        return;
+    }
+
+    // All remaining routes are authenticated. `/stream` additionally accepts a
+    // short-lived HMAC query so FFmpeg/ffprobe and the optional direct-range
+    // redirect can fetch media without placing a long-lived secret in a URL.
+    if (!hasValidToken(req) && !(pathname === '/stream' && hasValidStreamSignature(query))) {
+        res.writeHead(401, {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store',
+            'WWW-Authenticate': 'EvoStreamer'
+        });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;
     }
 
@@ -298,6 +411,12 @@ const server = http.createServer(async (req, res) => {
         const startTime = data.startTime !== undefined ? data.startTime : (query.has('start_time') ? parseFloat(query.get('start_time')) : null);
         const duration = data.duration !== undefined ? data.duration : (query.has('duration') ? parseFloat(query.get('duration')) : null);
         const bufferMb = data.bufferMb !== undefined ? data.bufferMb : (query.has('buffer_mb') ? parseInt(query.get('buffer_mb'), 10) : null);
+        const metadataOnly = data.metadataOnly === true || query.get('metadata_only') === '1';
+        const stageSeconds = data.stageSeconds !== undefined ? data.stageSeconds
+            : (query.has('stage_seconds') ? parseFloat(query.get('stage_seconds')) : null);
+        const rawBitrate = data.avgBitrateBps !== undefined ? data.avgBitrateBps
+            : (data.avg_bitrate_bps !== undefined ? data.avg_bitrate_bps
+                : (query.has('bitrate_bps') ? parseInt(query.get('bitrate_bps'), 10) : null));
 
         if (!infoHash) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -308,15 +427,39 @@ const server = http.createServer(async (req, res) => {
         try {
             const torrent = await engine.addTorrent(infoHash);
             const file = torrent.files[fileIdx] || torrent.files[0];
-            let effectiveOffset = byteOffset;
-            if (startTime > 0 && duration > 0 && file && file.length > 0) {
-                effectiveOffset = Math.max(0, Math.min(file.length - 1, Math.floor((startTime / duration) * file.length)));
+
+            let metadata = null;
+            const hasDuration = Number.isFinite(duration) && duration > 0;
+            const hasBitrate = Number.isFinite(rawBitrate) && rawBitrate > 0;
+            if (file && (hasDuration || hasBitrate)) {
+                metadata = engine.setSessionMetadata(infoHash, {
+                    durationSeconds: hasDuration ? duration : undefined,
+                    avgBitrateBps: hasBitrate ? rawBitrate : undefined,
+                    fileLength: file.length
+                });
             }
-            if (file) {
-                engine.applySlidingWindow(torrent, file, effectiveOffset, { bufferMb });
+
+            let effectiveOffset = byteOffset;
+            if (!metadataOnly) {
+                if (startTime > 0 && duration > 0 && file && file.length > 0) {
+                    effectiveOffset = Math.max(0, Math.min(file.length - 1, Math.floor((startTime / duration) * file.length)));
+                }
+                if (file) {
+                    engine.applySlidingWindow(torrent, file, effectiveOffset, {
+                        bufferMb,
+                        stageSeconds: Number.isFinite(stageSeconds) && stageSeconds > 0 ? stageSeconds : undefined
+                    });
+                }
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, info_hash: infoHash, file_idx: fileIdx, byte_offset: effectiveOffset }));
+            res.end(JSON.stringify({
+                success: true,
+                info_hash: infoHash,
+                file_idx: fileIdx,
+                byte_offset: effectiveOffset,
+                duration_seconds: metadata ? metadata.duration_seconds : undefined,
+                avg_bitrate_bps: metadata ? metadata.avg_bitrate_bps : undefined
+            }));
         } catch (err) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message }));
@@ -366,6 +509,15 @@ const server = http.createServer(async (req, res) => {
         const season = query.has('season') ? parseInt(query.get('season'), 10) : null;
         const episode = query.has('episode') ? parseInt(query.get('episode'), 10) : null;
         const bufferMb = query.has('buffer_mb') ? parseInt(query.get('buffer_mb'), 10) : undefined;
+        const stageSeconds = query.has('stage_seconds') ? parseFloat(query.get('stage_seconds')) : null;
+        const hasWarmDuration = query.has('duration') || query.has('duration_seconds');
+        const warmDuration = hasWarmDuration
+            ? parseFloat(query.get('duration') ?? query.get('duration_seconds'))
+            : null;
+        const hasWarmBitrate = query.has('bitrate_bps') || query.has('avg_bitrate_bps');
+        const warmBitrate = hasWarmBitrate
+            ? parseInt(query.get('bitrate_bps') ?? query.get('avg_bitrate_bps'), 10)
+            : null;
 
         if (!infoHash && !magnet) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -382,8 +534,21 @@ const server = http.createServer(async (req, res) => {
         try {
             const torrent = await engine.addTorrent(infoHash, magnet);
             const targetFile = pickVideoFile(torrent.files, requestedIdx, season, episode);
+            let metadata = null;
+            const durOk = Number.isFinite(warmDuration) && warmDuration > 0;
+            const brOk = Number.isFinite(warmBitrate) && warmBitrate > 0;
+            if (targetFile && (durOk || brOk)) {
+                metadata = engine.setSessionMetadata(torrent.infoHash, {
+                    durationSeconds: durOk ? warmDuration : undefined,
+                    avgBitrateBps: brOk ? warmBitrate : undefined,
+                    fileLength: targetFile.length
+                });
+            }
             if (targetFile) {
-                engine.applySlidingWindow(torrent, targetFile, 0, { bufferMb });
+                engine.applySlidingWindow(torrent, targetFile, 0, {
+                    bufferMb,
+                    stageSeconds: Number.isFinite(stageSeconds) && stageSeconds > 0 ? stageSeconds : undefined
+                });
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
@@ -392,7 +557,9 @@ const server = http.createServer(async (req, res) => {
                 file: targetFile ? targetFile.name : null,
                 file_idx: targetFile ? torrent.files.indexOf(targetFile) : null,
                 file_path: targetFile ? targetFile.path : null,
-                peers: torrent.numPeers
+                peers: torrent.numPeers,
+                duration_seconds: metadata ? metadata.duration_seconds : undefined,
+                avg_bitrate_bps: metadata ? metadata.avg_bitrate_bps : undefined
             }));
         } catch (err) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -420,7 +587,7 @@ const server = http.createServer(async (req, res) => {
             num_peers: sess.torrent.numPeers || 0,
             unchoked_peers: 0
         };
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(health));
         return;
     }
@@ -555,6 +722,31 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // ── Collective Seek Hints [P1] ─────────────────────────────────────────────
+    if (pathname === '/seek-hints') {
+        let body = {};
+        if (req.method === 'POST') {
+            body = await readJsonBody(req);
+        }
+        const infoHash = body.hash || body.info_hash || query.get('hash') || query.get('info_hash');
+        const targets = body.targets !== undefined ? body.targets
+            : (query.has('targets') ? query.get('targets').split(',').map(parseFloat) : null);
+        if (!infoHash) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing hash' }));
+            return;
+        }
+        const result = engine.setSeekHints(infoHash, targets || []);
+        if (!result) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Session not found' }));
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, info_hash: engine.canonicalHash(infoHash), ...result }));
+        return;
+    }
+
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('Not Found');
 });
@@ -581,6 +773,7 @@ process.on('unhandledRejection', (reason) => {
     console.error('[StreamServer] Process unhandled rejection:', reason);
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[StreamServer] WebTorrent micro-daemon listening on http://127.0.0.1:${PORT}`);
+server.listen(PORT, BIND_HOST, () => {
+    const authMode = ALLOW_ANONYMOUS ? 'anonymous (development override)' : 'shared-secret';
+    console.log(`[StreamServer] WebTorrent micro-daemon listening on http://${BIND_HOST}:${PORT} (${authMode})`);
 });

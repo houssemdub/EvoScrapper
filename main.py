@@ -19,6 +19,7 @@ from routers import (
     subtitles_router,
     torrents_router,
     cometnet_router,
+    auth_router,
 )
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -41,11 +42,11 @@ async def lifespan(app: FastAPI):
 
     # Start Node.js WebTorrent streaming micro-daemon
     try:
-        from core.torrent_streamer import ensure_streaming_daemon
+        from core.torrent_streamer import ensure_streaming_daemon, DAEMON_URL
         daemon_ok = await ensure_streaming_daemon()
         if daemon_ok:
-            app_logger.info("WebTorrent streaming daemon online at http://127.0.0.1:8889")
-            print("[+] WebTorrent streaming daemon online at http://127.0.0.1:8889", flush=True)
+            app_logger.info(f"WebTorrent streaming daemon online at {DAEMON_URL}")
+            print(f"[+] WebTorrent streaming daemon online at {DAEMON_URL}", flush=True)
         else:
             app_logger.warning("Streaming daemon not responding at startup")
             print("[!] Warning: Streaming daemon not responding at startup", flush=True)
@@ -137,6 +138,7 @@ app.include_router(stream_router)
 app.include_router(stremio_router)
 app.include_router(library_router)
 app.include_router(cometnet_router)
+app.include_router(auth_router)
 
 
 @app.get("/", tags=["Web UI"])

@@ -54,6 +54,82 @@ def parse_size_to_bytes(size_str: str) -> int:
     return int(val * multipliers.get(unit, 1))
 
 
+# P9: language-aware ranking. Release titles carry audio-language tags;
+# matching the viewer's preferred language beats raw seed count.
+LANGUAGE_TOKENS: Dict[str, set] = {
+    "multi": {"multi", "multi-audio", "dual-audio", "dual", "m subs"},
+    "eng": {"english", "eng"},
+    "fre": {"french", "fre", "vf", "vff", "vfq", "vfi", "francais"},
+    "ger": {"german", "ger", "deutsch"},
+    "spa": {"spanish", "spa", "espanol", "castellano", "latino"},
+    "ita": {"italian", "ita", "italiano"},
+    "jpn": {"japanese", "jpn"},
+    "rus": {"russian", "rus"},
+    "por": {"portuguese", "por", "brazilian"},
+    "kor": {"korean", "kor"},
+    "chi": {"chinese", "chi", "mandarin", "cantonese"},
+    "ara": {"arabic", "ara"},
+    "hin": {"hindi", "hin"},
+    "tur": {"turkish", "tur"},
+}
+LANGUAGE_ALIASES = {
+    "english": "eng", "en": "eng",
+    "french": "fre", "fr": "fre", "vf": "fre",
+    "german": "ger", "de": "ger",
+    "spanish": "spa", "es": "spa",
+    "italian": "ita", "it": "ita",
+    "japanese": "jpn", "ja": "jpn",
+    "russian": "rus", "ru": "rus",
+    "portuguese": "por", "pt": "por",
+    "korean": "kor", "ko": "kor",
+    "chinese": "chi", "zh": "chi",
+    "arabic": "ara", "ar": "ara",
+    "hindi": "hin", "hi": "hin",
+    "turkish": "tur", "tr": "tur",
+    "multi": "multi",
+}
+LANGUAGE_BOOST = 25.0
+LANGUAGE_PENALTY = 30.0
+
+
+def detect_title_languages(title: str) -> set:
+    """Returns the canonical language codes tagged in a release title."""
+    if not title:
+        return set()
+    clean = re.sub(r"[^a-zA-Z0-9]+", " ", title).lower()
+    found = set()
+    for code, tokens in LANGUAGE_TOKENS.items():
+        for token in tokens:
+            if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", clean):
+                found.add(code)
+                break
+    return found
+
+
+def apply_language_preference(streams: List["StreamItem"], preferred_lang: Optional[str]) -> List["StreamItem"]:
+    """
+    P9: torrentio-style language partitioning. Releases tagged with the
+    viewer's preferred audio language — or MULTI/dual-audio — rank ahead of
+    single-language foreign releases, preserving score order within each
+    group. Untagged releases stay in the preferred group: absence of signal
+    is not treated as a foreign language.
+    """
+    if not preferred_lang or not streams:
+        return streams
+    pref = LANGUAGE_ALIASES.get(preferred_lang.strip().lower())
+    if not pref:
+        return streams
+    compatible = []
+    foreign = []
+    for stream in streams:
+        tags = detect_title_languages(stream.title or stream.name or "")
+        if "multi" in tags or pref in tags or not tags:
+            compatible.append(stream)
+        else:
+            foreign.append(stream)
+    return compatible + foreign
+
+
 def compute_stream_score(item: TorrentItem, is_exact_ep: bool = False) -> float:
     """
     Computes a Torrentio-style quality and health score for ranking streams.
@@ -413,6 +489,7 @@ async def resolve_streams(
     episode: Optional[int] = None,
     media_type: str = "movie",
     include_cdn: bool = False,
+    preferred_lang: Optional[str] = None,
 ) -> StreamResolveResponse:
     """
     Torrentio-grade multi-tracker stream resolver.
@@ -660,6 +737,7 @@ async def resolve_streams(
             print(f"[StreamResolver] Web CDN stream warning: {e}")
 
     # 5. Sort streams by quality score descending
+    scored_streams = apply_language_preference(scored_streams, preferred_lang)
     scored_streams.sort(key=lambda s: (s.score, s.seeds), reverse=True)
 
     elapsed_ms = round((time.time() - start_time) * 1000, 1)

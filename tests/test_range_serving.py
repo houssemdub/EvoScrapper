@@ -24,6 +24,49 @@ def test_localhost_direct_range_emits_307(monkeypatch, client):
         assert "/stream?info_hash=" in res.headers["location"]
 
 
+def test_localhost_direct_range_redirects_by_default(monkeypatch, client):
+    """Localhost clients skip the Python proxy hop unless EVO_DIRECT_RANGE is explicitly disabled."""
+    monkeypatch.delenv("EVO_DIRECT_RANGE", raising=False)
+    with patch("routers.stream.ensure_streaming_daemon", new=AsyncMock(return_value=True)):
+        res = client.get(
+            "/api/v1/stream/play?info_hash=1111111111111111111111111111111111111111&file_idx=0",
+            follow_redirects=False,
+            headers={"host": "127.0.0.1:8888"},
+        )
+        assert res.status_code == 307
+        assert "/stream?info_hash=" in res.headers["location"]
+        assert "sig=" in res.headers["location"]
+        assert "expires=" in res.headers["location"]
+
+
+def test_opt_out_restores_proxy_path_for_localhost(monkeypatch, client):
+    """EVO_DIRECT_RANGE=false must restore the Python proxy loopback hop."""
+    monkeypatch.setenv("EVO_DIRECT_RANGE", "false")
+
+    class MockContent:
+        async def iter_chunked(self, size):
+            yield b"proxied"
+
+    mock_resp = MagicMock()
+    mock_resp.status = 206
+    mock_resp.headers = {"Content-Type": "video/mp4", "Content-Range": "bytes 0-6/7", "Content-Length": "7"}
+    mock_resp.content = MockContent()
+    mock_resp.close = MagicMock()
+
+    mock_session = MagicMock()
+    mock_session.get = AsyncMock(return_value=mock_resp)
+
+    with patch("routers.stream.ensure_streaming_daemon", new=AsyncMock(return_value=True)), \
+         patch("routers.stream.get_http_session", new=AsyncMock(return_value=mock_session)):
+        res = client.get(
+            "/api/v1/stream/play?info_hash=1111111111111111111111111111111111111111&file_idx=0",
+            follow_redirects=False,
+            headers={"host": "127.0.0.1:8888"},
+        )
+        assert res.status_code == 206
+        assert res.content == b"proxied"
+
+
 def test_remote_client_retains_proxy_path(monkeypatch):
     """Verifies that non-localhost clients use the safe HTTP proxy path even when EVO_DIRECT_RANGE=true."""
     import aiohttp

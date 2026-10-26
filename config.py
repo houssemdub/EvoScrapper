@@ -1,5 +1,22 @@
-from typing import Optional
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from typing import Annotated, Optional
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+def _parse_string_list(value):
+    """Accept JSON arrays, comma-separated strings, or a blank value for list settings."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("["):
+            parsed = json.loads(stripped)
+            if not isinstance(parsed, list):
+                raise ValueError("Expected a JSON array for list setting")
+            return parsed
+        return [item.strip() for item in stripped.split(",") if item.strip()]
+    return value
 
 
 class Settings(BaseSettings):
@@ -14,7 +31,7 @@ class Settings(BaseSettings):
     PORT: int = 8009
     DEBUG: bool = False
     API_KEY: Optional[str] = None
-    ALLOWED_ORIGINS: list[str] = ["*"]
+    ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = ["*"]
 
     # Proxy settings
     HTTP_PROXY: Optional[str] = None
@@ -45,11 +62,27 @@ class Settings(BaseSettings):
     CACHE_TTL_SEARCH: int = 900  # 15 minutes
     CACHE_TTL_TRENDING: int = 3600  # 1 hour
 
+    # Swarm pre-warm: resolve top search results' metadata + peer connections
+    # in the background so click-to-play skips the metadata wait.
+    PREWARM_SWARMS: bool = False
+
+    # P5 cross-torrent quality ladder: offer lower-bitrate releases of the
+    # same episode on sustained starvation (opt-in).
+    QUALITY_LADDER: bool = False
+
+    # T4.5: local Jackett / Prowlarr Torznab passthrough. When both are set,
+    # a "jackett" provider joins the search pool.
+    JACKETT_URL: Optional[str] = None
+    JACKETT_API_KEY: Optional[str] = None
+
     # Streaming & Transmuxing Settings
     STREAM_CACHE_DIR: str = ".stream_cache"
     MAX_DISK_CACHE_GB: float = 15.0
     MAX_CONCURRENT_FFMPEG: int = 4
     STREAM_PORT: int = 8889
+    STREAM_BIND_HOST: str = "127.0.0.1"
+    STREAMER_TOKEN: Optional[str] = None
+    STREAM_URL_TTL_SECONDS: int = 1800
     TORRENT_PORT: int = 50000
     DHT_PORT: int = 50001
 
@@ -60,7 +93,12 @@ class Settings(BaseSettings):
     # CometNet P2P Metadata Gossip
     COMETNET_ENABLED: bool = True
     COMETNET_PORT: int = 8010
-    COMETNET_RELAYS: list[str] = ["wss://relay.comet.cache", "wss://cometnet.peer.evo"]
+    COMETNET_RELAYS: Annotated[list[str], NoDecode] = ["wss://relay.comet.cache", "wss://cometnet.peer.evo"]
+
+    @field_validator("ALLOWED_ORIGINS", "COMETNET_RELAYS", mode="before")
+    @classmethod
+    def _parse_env_lists(cls, value):
+        return _parse_string_list(value)
 
 
 settings = Settings()

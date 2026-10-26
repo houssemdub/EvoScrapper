@@ -1,5 +1,7 @@
 import os
+import shutil
 import subprocess
+import textwrap
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
@@ -150,9 +152,34 @@ def test_keyframe_snapping_does_not_snap_to_zero_when_sparse():
 
 
 def test_engine_sliding_window_critical_index_pieces():
-    """Verifies that applySlidingWindow calls critical() on container index pieces at file end."""
-    engine_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "torrent_engine.js"))
-    with open(engine_path, "r", encoding="utf-8") as f:
-        content = f.read()
+    """Verifies that applySlidingWindow marks container index pieces at file end as critical."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js binary not found on system")
 
-    assert "torrent.critical(indexStart, fileEndPiece)" in content
+    script = textwrap.dedent(
+        """
+        import { makeEngine, makeTorrent, makeFile, installSession, check } from './tests/node/engine_harness.mjs';
+
+        const engine = makeEngine();
+        const { torrent, calls } = makeTorrent();
+        const file = makeFile();
+        installSession(engine, torrent);
+
+        engine.applySlidingWindow(torrent, file, 0, { avgBitrateBps: 8000000 });
+
+        const tail = calls.critical.find(call => call.end === 4095);
+        check(tail, `missing critical tail range: ${JSON.stringify(calls.critical)}`);
+        check(tail.start === 4094, `expected last two pieces critical: ${JSON.stringify(tail)}`);
+        process.exit(0);
+        """
+    )
+    result = subprocess.run(
+        [node, "--input-type=module"],
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

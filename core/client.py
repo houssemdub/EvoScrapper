@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 import httpx
 from curl_cffi.requests import AsyncSession as CurlAsyncSession
 from config import settings
+from core.security import fetch_public_url
 
 
 DEFAULT_HEADERS = {
@@ -122,6 +123,21 @@ class HttpClient:
 
         client = await self.get_httpx_client()
         resp = await client.get(url, params=params, headers=req_headers, timeout=t)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_public_json(
+        self,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> Any:
+        """Fetch untrusted addon JSON with validated public-only redirects."""
+        client = await self.get_httpx_client()
+        resp = await fetch_public_url(
+            client, url, headers={**JSON_HEADERS, **(headers or {})},
+            timeout=timeout if timeout is not None else settings.DEFAULT_TIMEOUT,
+        )
         resp.raise_for_status()
         return resp.json()
 

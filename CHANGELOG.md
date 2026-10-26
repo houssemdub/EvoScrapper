@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.0] - 2026-10-26
+
+### Beyond Stremio — Swarm Intelligence Layer & Playback Pipeline
+
+Full plan: `docs/BEYOND_STREMIO_PLAN.md`. Comparison baseline: `stremio-core` and `torrentio-scraper`.
+
+#### Added
+- **Swarm Pause/Resume Hysteresis (T0.1)**: with >90s of verified buffer the lookahead tier stops requesting entirely and resumes below 60s — stremio `swarm_paused` semantics with anti-flap hysteresis (`streamer/torrent_engine.js`).
+- **Download Shaping (T0.5)**: when the swarm runs >2x playback rate with a deep buffer, the lookahead tier halves (level 1) or pauses (via hysteresis); starvation always restores full bandwidth.
+- **Deep Next-Episode Staging (P6)**: binge pre-warm now fetches the next episode's opening ~60 seconds of media bytes, not just metadata (`stage_seconds` end-to-end: UI → /warm → daemon).
+- **Collective Seek Forecasting (P1)** [NOVEL]: anonymous 30s-bucket seek events gossiped over CometNet (`SEEK_ANNOUNCE`, Ed25519-signed); per-hash seek heatmap with 72h half-life decay (`core/swarm_intelligence.py`); the daemon scheduler pre-selects low-priority pieces around crowd hotspots (`/seek-hints`); seeks captured server-side on /transmux and client-side on direct playback.
+- **Distributed Debrid Coverage Index (P2)** [NOVEL]: gossip cache announcements feed a persistent hash→provider index with recency×corroboration confidence; `resolve_stream` uses mesh hints to order provider attempts before the live probe confirms.
+- **Crowd Scene Boundaries (P3)** [NOVEL]: behavioral intro/credits/scene hotspots derived from the seek heatmap (`GET /api/v1/cometnet/scenes`) — zero-ML skip support that improves as more people watch.
+- **Dual-Source Racing (P4)** [NOVEL]: `POST /api/v1/stream/race` probes the P2P swarm and the best Debrid CDN in parallel for the first 256KB; winner serves, loser reported as a warm backup (`core/source_racer.py`).
+- **Cross-Torrent Quality Ladder (P5)** [NOVEL, opt-in `QUALITY_LADDER=true`]: `POST /api/v1/stream/ladder` returns lower-bitrate releases of the same episode, largest-first, for keyframe-aligned hot-swap instead of a spinner.
+- **Watch-Together Rooms (P8)**: short-code rooms with sequenced play/pause/seek events, fanned out across instances as signed `PARTY_EVENT` gossip (`/api/v1/cometnet/party/*`, `core/watch_party.py`).
+- **Language-Aware Stream Ranking (P9)**: torrentio-style partitioning by release-language tags against a preferred language (`/resolve?lang=...`).
+- **"Why This Stream?" (P10)**: `GET /api/v1/stream/explain` — debrid coverage hints, configured providers, live swarm telemetry, keyframe inventory, and an honest first-frame prediction.
+- **Trick-Play Sprites (P7)**: `GET /api/v1/stream/sprites` generates a cached tiled thumbnail contact sheet (v1 covers the opening 15 minutes; bounded to avoid full-file P2P scans); the player prefetches it on metadata load.
+- **Swarm-Health Result Gate (T0.2)**: torrentio's healthy-seeders heuristic in the aggregator — strong swarms suppress dead torrents, weak swarms cap at 5 candidates, skipped when Debrid is configured.
+- **Split Debrid Circuit Breakers (T0.3)**: independent availability vs resolve breakers per provider — a broken resolve endpoint no longer disables cache checks.
+- **Negative-Result TTLs (T0.4)**: empty search results cached 120s vs 900s for full results, so newly-seeded torrents surface quickly.
+- **Peer-Source Accounting & Re-Injection (T0.6)**: per-session tracker/DHT/webseed discovery stats in daemon status; known-good cached peers re-injected into thinning swarms every 2 minutes.
+- **Jackett/Prowlarr Passthrough (T4.5)**: Torznab aggregate provider joins the search pool when `JACKETT_URL`/`JACKETT_API_KEY` are set.
+- **Stremio Subtitles Resource (T4.6)**: `/subtitles/{type}/{id}.json` serves the aggregated subtitle providers to official Stremio apps; manifest now advertises `stream` + `subtitles`.
+
+## [2.2.2] - 2026-10-26
+
+### Security Hardening, Measured-Bitrate Scheduling & Streaming Throughput
+
+#### Security
+- **Outbound Request Guard** (`core/security.py`): public-IP DNS validation for every external HTTP(S) target and redirect hop, applied to external addons, subtitle downloads, and Debrid range streaming.
+- **Browser Session Auth** (`routers/auth.py`): `POST /api/v1/auth/session` exchanges the API key for an HttpOnly, SameSite=Lax cookie (12h TTL) so fetch, EventSource, `<video>`, and HLS requests authenticate without the long-lived key in playback URLs; the UI bootstraps the session before loading data.
+- **Daemon Control Plane**: Node streaming daemon binds loopback, validates `Host` headers, emits no wildcard CORS, requires a shared secret on all routes except authenticated health probing, and accepts short-lived HMAC query signatures on `/stream` for media tools.
+- **Packaging**: `.dockerignore` excludes secrets, local `node_modules`, tests, logs, and runtime caches; Docker no longer publishes the internal daemon port.
+
+#### Performance
+- **Measured-Bitrate Piece Scheduling**: ffprobe-derived duration/bitrate now flows from `/probe` and `/warm` into the daemon session (`setSessionMetadata`), so the sliding window, buffer-health watchdog, and lookahead scans are sized by the real bitrate instead of a hardcoded 8 Mbps — piece windows on 4K/HEVC content were up to 6x undersized before.
+- **Direct-Daemon Range Redirect by Default**: `EVO_DIRECT_RANGE` now defaults to `true`; localhost clients receive a 307 to the signed daemon URL instead of proxying every range request through Python (set it to `false` to restore the proxy hop).
+- **Write-Behind Peer Cache**: `peers.json` persistence is debounced (`EVO_PEER_CACHE_FLUSH_MS`, 15s default) instead of a synchronous full-file read/modify/write on every peer connection.
+- **Chunk-Merge Stream Serving**: daemon range responses merge ~16 KB piece-iterator chunks into ~1 MB writes (`EVO_STREAM_MERGE_BYTES`), cutting pipe/socket round-trips per byte by two orders of magnitude.
+- **Parallel HLS Lookahead Prefetch**: the next 1-3 virtual HLS segments now mux concurrently (bounded by the existing semaphore) with in-flight deduplication, refilling post-seek buffers in a fraction of the sequential time.
+- **Cache-Aware Debrid Resolution**: `DebridManager.resolve_stream` probes cache availability first and resolves from a provider that already holds the torrent (instant playback) before trying uncached providers; user preference still wins among cached ties, and a failed probe falls back cleanly.
+
+#### Added
+- **Opt-In Swarm Pre-Warm** (`PREWARM_SWARMS=true`): search results pre-resolve the top candidates' metadata and peer connections in the background so click-to-play skips the metadata wait; nothing downloads until a reader appears.
+- **Continuous Integration** (`.github/workflows/ci.yml`): the full pytest suite and both deterministic Node engine harnesses (scheduler harness + loopback seed/reader measurement) run on every push and pull request.
+
+#### Fixed
+- Test isolation: the Debrid proxy streaming test no longer leaks a mocked HTTP client into the module-level singleton consumed by other suites.
+
+---
+
 ## [2.2.1] - 2026-10-26
 
 ### Audio/Video & Subtitle Seek Synchronization Fix

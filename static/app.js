@@ -97,8 +97,44 @@ const state = {
   },
 };
 
+// ── Browser Session Authentication ──────────────────────────────────────────
+// Media elements and EventSource cannot send custom headers. Exchange the API
+// key once for an HttpOnly cookie so every same-origin request authenticates.
+async function ensureAuthSession() {
+  try {
+    const res = await fetch('/api/v1/auth/status', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.auth_required || data.authenticated) return;
+
+    const key = window.prompt(
+      'EvoScrapper is protected by an API key. Enter it to start a browser session:'
+    );
+    if (!key || !key.trim()) return;
+
+    const login = await fetch('/api/v1/auth/session', {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: key.trim() }),
+    });
+    if (!login.ok) {
+      window.alert('Invalid API key. Reload the page to try again.');
+      return;
+    }
+    window.location.reload();
+  } catch (_) {
+    // Leave open-mode/offline behavior untouched.
+  }
+}
+
 // ── Lifecycle Initialization ─────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  await ensureAuthSession();
   initGuiScale();
   initTheme();
   loadSubtitleStyles();
@@ -2875,10 +2911,11 @@ function filterStreamCards() {
 }
 
 // Pre-warm stream on hover
-function warmHoveredStream(infoHash, fileIdx, magnet) {
+function warmHoveredStream(infoHash, fileIdx, magnet, stageSeconds = 0) {
   if (!infoHash) return;
   const epParam = state.discover.activeSeason && state.discover.activeEpisode ? `&season=${state.discover.activeSeason}&episode=${state.discover.activeEpisode}` : '';
-  const url = `/api/v1/stream/warm?info_hash=${encodeURIComponent(infoHash)}&file_idx=${fileIdx}${epParam}` +
+  const stageParam = stageSeconds > 0 ? `&stage_seconds=${stageSeconds}` : '';
+  const url = `/api/v1/stream/warm?info_hash=${encodeURIComponent(infoHash)}&file_idx=${fileIdx}${epParam}${stageParam}` +
     (magnet ? `&magnet=${encodeURIComponent(magnet)}` : '');
   fetch(url).catch(() => {});
 }
@@ -5266,6 +5303,16 @@ function initPlayerTimelineControls() {
     video.addEventListener('seeked', () => {
       updatePlayerTimeline();
       updateSubtitleOverlay();
+      // P1: report direct-mode seeks to the collective heatmap (transmux
+      // seeks are captured server-side; this covers native playback).
+      const active = state.discover.activeStream;
+      if (active && active.infoHash && !active.useTransmux && video.currentTime > 5) {
+        fetch(`/api/v1/cometnet/seek`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ info_hash: active.infoHash, position: video.currentTime })
+        }).catch(() => {});
+      }
     });
     video.addEventListener('play', () => {
       updatePlayPauseIcon(true);
@@ -6459,7 +6506,9 @@ function prewarmNextEpisode(nextEp) {
     .then((data) => {
       if (data && data.streams && data.streams.length > 0) {
         const top = data.streams[0];
-        warmHoveredStream(top.info_hash, top.file_idx, top.magnet);
+        // P6 deep staging: fetch the next episode's opening ~60s of media bytes,
+        // not just metadata, so binge playback starts instantly.
+        warmHoveredStream(top.info_hash, top.file_idx, top.magnet, 60);
       }
     })
     .catch((err) => console.warn('[EvoPlayer] Prewarm notice:', err.message));
@@ -7972,6 +8021,20 @@ function seekPlayer(targetSeconds, immediate = false) {
   }
 }
 
+// P7: prefetch the trick-play contact sheet for scrubber hover previews.
+function loadSpriteSheet(infoHash, fileIdx, duration) {
+  if (!infoHash || !duration || duration <= 0) return;
+  fetch(`/api/v1/stream/sprites?info_hash=${encodeURIComponent(infoHash)}&file_idx=${fileIdx}&duration=${duration}`)
+    .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('image') ? r.url : null))
+    .then((url) => {
+      if (!url) return;
+      state.discover.spriteSheetUrl = url;
+      const timeline = document.getElementById('player-timeline-container');
+      if (timeline) timeline.style.setProperty('--evo-sprite-sheet', `url("${url}")`);
+    })
+    .catch(() => {});
+}
+
 function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet = '', seasonOverride = null, episodeOverride = null, forceDirectIdx = false) {
   initPlayerTimelineControls();
   const discSuggestions = document.getElementById('discover-search-suggestions');
@@ -8717,6 +8780,7 @@ async function playDebridStream(infoHash, fileIdx, title, magnet = '', provider 
       const active = state.discover.activeStream;
       if (active && !active.useTransmux && video.duration && isFinite(video.duration) && video.duration > 30) {
         active.totalDuration = video.duration;
+        loadSpriteSheet(active.infoHash, active.fileIdx || 0, video.duration);
       }
       const totalEl = document.getElementById('player-total-time');
       const displayDur = (active && active.totalDuration > 0) ? active.totalDuration : (video.duration > 0 && isFinite(video.duration) ? video.duration : 0);

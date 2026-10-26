@@ -7,6 +7,16 @@ from core.debrid.proxy import DebridStreamProxy, get_debrid_proxy
 def proxy():
     return DebridStreamProxy(secret_key="test-secret-key-12345")
 
+@pytest.fixture
+def restore_shared_client():
+    """Patching httpx.AsyncClient makes get_debrid_proxy_client() cache a mock
+    into the module singleton; restore the previous value afterwards so later
+    test files do not inherit it."""
+    import core.debrid.proxy as proxy_module
+    original = proxy_module._shared_client
+    yield
+    proxy_module._shared_client = original
+
 def test_token_generation_and_verification(proxy):
     upstream_url = "https://cdn.real-debrid.com/d/ABCD/sample_movie.mp4"
     token = proxy.generate_token(upstream_url, filename="sample_movie.mp4", expires_in=3600)
@@ -40,8 +50,8 @@ def test_proxy_url_generation(proxy):
     assert "&filename=test.mkv" in proxy_url or "test.mkv" in proxy_url
 
 @pytest.mark.asyncio
-async def test_proxy_stream_headers_and_status(proxy):
-    upstream_url = "https://cdn.real-debrid.com/stream/video.mp4"
+async def test_proxy_stream_headers_and_status(proxy, restore_shared_client):
+    upstream_url = "https://8.8.8.8/stream/video.mp4"
     
     mock_response = MagicMock()
     mock_response.status_code = 206
@@ -66,7 +76,7 @@ async def test_proxy_stream_headers_and_status(proxy):
             return self
         async def __aexit__(self, *args):
             pass
-        async def send(self, req, stream=True):
+        async def send(self, req, **kwargs):
             return mock_response
         def build_request(self, method, url, headers=None):
             return MagicMock()

@@ -61,6 +61,8 @@ data/library.json
 !data/.gitkeep
 data/keyframes/
 data/hls_cache/
+data/sprites/
+data/cometnet/
 
 # Scratch files
 scratch/
@@ -77,3 +79,4 @@ desktop.ini
 *.swo
 
 .hallmark/
+.aider*

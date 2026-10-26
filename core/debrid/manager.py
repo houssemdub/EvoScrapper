@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import Any, Dict, List, Optional
 
 from core.debrid.base import DebridClient, DebridStreamResult
@@ -9,6 +10,31 @@ from core.debrid.debridlink import DebridLinkClient
 from core.debrid.premiumize import PremiumizeClient
 from core.debrid.pikpak import PikPakClient
 from core.logger import debrid_logger
+
+
+class _SplitBreaker:
+    """
+    T0.3: independent circuit breakers per operation kind (availability probe
+    vs stream resolve), torrentio-style. A broken resolve endpoint must not
+    disable cache checks on the same provider, and vice versa.
+    """
+
+    def __init__(self, threshold: int = 3, cooldown: float = 90.0):
+        self.failures = 0
+        self.opened_at = 0.0
+        self.threshold = threshold
+        self.cooldown = cooldown
+
+    def is_open(self) -> bool:
+        return self.failures >= self.threshold and (time.time() - self.opened_at) < self.cooldown
+
+    def record_success(self) -> None:
+        self.failures = 0
+
+    def record_failure(self) -> None:
+        self.failures += 1
+        if self.failures >= self.threshold:
+            self.opened_at = time.time()
 
 
 class DebridManager:
@@ -28,6 +54,24 @@ class DebridManager:
             "premiumize": PremiumizeClient(),
             "pikpak": PikPakClient(),
         }
+        self._availability_breakers: Dict[str, _SplitBreaker] = {}
+        self._resolve_breakers: Dict[str, _SplitBreaker] = {}
+
+    def _breaker(self, kind: str, provider_name: str) -> _SplitBreaker:
+        registry = self._availability_breakers if kind == "availability" else self._resolve_breakers
+        key = provider_name.lower()
+        if key not in registry:
+            registry[key] = _SplitBreaker()
+        return registry[key]
+
+    def _availability_breaker_open(self, provider_name: str) -> bool:
+        return provider_name.lower() in self._availability_breakers and self._availability_breakers[provider_name.lower()].is_open()
+
+    def _resolve_breaker_open(self, provider_name: str) -> bool:
+        return provider_name.lower() in self._resolve_breakers and self._resolve_breakers[provider_name.lower()].is_open()
+
+    def _record_resolve_success(self, provider_name: str) -> None:
+        self._breaker("resolve", provider_name).record_success()
 
     def set_key(self, provider_name: str, key: str):
         p = provider_name.lower()
@@ -42,8 +86,9 @@ class DebridManager:
         """
         Queries all configured debrid providers concurrently.
         Returns a dict mapping provider_name -> { hash: is_cached }.
+        Providers whose availability breaker is open are skipped.
         """
-        active = self.active_providers
+        active = [p for p in self.active_providers if not self._availability_breaker_open(p.provider_name)]
         if not active or not info_hashes:
             return {}
 
@@ -52,8 +97,9 @@ class DebridManager:
 
         cached_map: Dict[str, Dict[str, bool]] = {}
         for p, res in zip(active, results):
+            prov = p.provider_name.lower()
             if isinstance(res, dict):
-                prov = p.provider_name.lower()
+                self._breaker("availability", prov).record_success()
                 cached_map[prov] = res
                 # Broadcast positive cache hits to CometNet gossip
                 try:
@@ -64,6 +110,9 @@ class DebridManager:
                             node.announce_cache(h, prov, True)
                 except Exception:
                     pass
+            else:
+                self._breaker("availability", prov).record_failure()
+                debrid_logger.warning(f"[DebridManager] Availability probe failed for {prov}: {res}")
 
         return cached_map
 
@@ -100,23 +149,49 @@ class DebridManager:
     ) -> Optional[DebridStreamResult]:
         """
         Attempts to resolve an unthrottled direct HTTPS stream from the preferred
-        or any available active Debrid provider.
+        or any available active Debrid provider. Providers that already have the
+        torrent cached are tried first: resolving from an uncached provider
+        would trigger a server-side download instead of instant playback.
         """
-        active = self.active_providers
+        active = [p for p in self.active_providers if not self._resolve_breaker_open(p.provider_name)]
         if not active:
             return None
 
-        # Sort with preferred provider first
-        if preferred_provider:
-            pref = preferred_provider.lower()
-            active = sorted(active, key=lambda p: 0 if p.provider_name.lower() == pref else 1)
+        clean_hash = info_hash.strip().lower()
+        cached_map: Dict[str, bool] = {}
+        try:
+            # P2: mesh-fed coverage hints order the attempts before any live
+            # probe; the live probe below still confirms before streaming.
+            from core.swarm_intelligence import get_coverage_index
+            for hint in get_coverage_index().providers_for(clean_hash):
+                cached_map.setdefault(hint["provider"], True)
+        except Exception:
+            pass
+        try:
+            cache_probe = await self.check_cache([clean_hash])
+            for prov_name, hash_dict in cache_probe.items():
+                if hash_dict.get(clean_hash):
+                    cached_map[prov_name] = True
+        except Exception:
+            cached_map = {}
+
+        pref = (preferred_provider or "").lower()
+
+        def _order(p: DebridClient) -> tuple:
+            name = p.provider_name.lower()
+            return (0 if cached_map.get(name) else 1, 0 if name == pref else 1)
+
+        active = sorted(active, key=_order)
 
         for provider in active:
             try:
                 res = await provider.resolve_stream(info_hash, file_idx=file_idx, magnet=magnet, season=season, episode=episode)
                 if res and res.url:
+                    self._record_resolve_success(provider.provider_name)
                     return res
+                self._breaker("resolve", provider.provider_name).record_failure()
             except Exception as e:
+                self._breaker("resolve", provider.provider_name).record_failure()
                 print(f"[DebridManager] Provider {provider.provider_name} resolve failed: {e}")
 
         return None

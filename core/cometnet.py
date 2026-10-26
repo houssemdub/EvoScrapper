@@ -19,6 +19,8 @@ logger = cometnet_logger
 class CometMessageType(str, Enum):
     TORRENT_ANNOUNCE = "torrent_announce"
     CACHE_ANNOUNCE = "cache_announce"
+    SEEK_ANNOUNCE = "seek_announce"
+    PARTY_EVENT = "party_event"
     PING = "ping"
     PONG = "pong"
     QUERY = "query"
@@ -174,6 +176,44 @@ class CometNetNode:
                     self.debrid_cache[info_hash].add(provider)
                 else:
                     self.debrid_cache[info_hash].discard(provider)
+                # P2: feed the persistent coverage index with corroboration.
+                try:
+                    from core.swarm_intelligence import get_coverage_index
+                    get_coverage_index().record(
+                        info_hash, provider,
+                        observed_at=msg.get("timestamp"),
+                        corroborated=True,
+                    )
+                except Exception:
+                    pass
+
+        elif msg_type == CometMessageType.SEEK_ANNOUNCE.value:
+            # P1: anonymous quantized seek landing from the mesh.
+            info_hash = payload.get("info_hash", "").strip().lower()
+            try:
+                position = float(payload.get("position", -1))
+            except (TypeError, ValueError):
+                position = -1.0
+            if info_hash and position >= 0:
+                try:
+                    from core.swarm_intelligence import get_seek_heatmap
+                    get_seek_heatmap().record(info_hash, position, recorded_at=msg.get("timestamp"))
+                except Exception:
+                    pass
+
+        elif msg_type == CometMessageType.PARTY_EVENT.value:
+            # P8: watch-together transport event from a remote instance.
+            try:
+                from core.watch_party import get_watch_party_manager
+                get_watch_party_manager().apply_gossip_event(
+                    code=str(payload.get("code", "")),
+                    peer_id=str(payload.get("peer_id", "")),
+                    action=str(payload.get("action", "")),
+                    position=float(payload.get("position", 0.0)),
+                    ts=float(msg.get("timestamp", 0.0)),
+                )
+            except Exception:
+                pass
 
         return True
 
@@ -210,6 +250,37 @@ class CometNetNode:
                 "info_hash": info_hash.strip().lower(),
                 "provider": provider.strip().lower(),
                 "cached": cached,
+            },
+        )
+        self.ingest_message(msg)
+        self._trigger_async_broadcast(msg)
+        return msg
+
+    def announce_seek(self, info_hash: str, position_seconds: float) -> Dict[str, Any]:
+        """
+        P1: broadcasts an anonymous quantized seek event to the mesh. Only the
+        info hash and a 30-second bucket position ever leave the machine.
+        """
+        msg = self.create_signed_message(
+            msg_type=CometMessageType.SEEK_ANNOUNCE,
+            payload={
+                "info_hash": info_hash.strip().lower(),
+                "position": float(position_seconds),
+            },
+        )
+        self.ingest_message(msg)
+        self._trigger_async_broadcast(msg)
+        return msg
+
+    def announce_party_event(self, code: str, peer_id: str, action: str, position: float) -> Dict[str, Any]:
+        """P8: broadcasts a watch-together transport event to the mesh."""
+        msg = self.create_signed_message(
+            msg_type=CometMessageType.PARTY_EVENT,
+            payload={
+                "code": code,
+                "peer_id": peer_id,
+                "action": action,
+                "position": float(position),
             },
         )
         self.ingest_message(msg)

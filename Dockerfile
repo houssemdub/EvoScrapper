@@ -41,8 +41,9 @@ COPY . .
 # Ensure storage directories exist
 RUN mkdir -p data .stream_cache
 
-# Expose primary API, Web UI, and BitTorrent P2P/DHT ports
-EXPOSE 8009 8889 50000/tcp 50000/udp 50001/udp
+# Expose the primary API and BitTorrent P2P/DHT ports. The internal streaming
+# daemon stays loopback-only and is intentionally not published.
+EXPOSE 8009 50000/tcp 50000/udp 50001/udp
 
 # Healthcheck probe against /health
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

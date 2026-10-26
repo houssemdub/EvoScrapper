@@ -1,0 +1,12 @@
+.git
+.gitignore
+.pytest_cache
+__pycache__
+**/__pycache__
+*.py[cod]
+.env
+.stream_cache
+logs
+tests
+streamer/node_modules
+streamer/daemon.log
