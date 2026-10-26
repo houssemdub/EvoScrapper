@@ -323,7 +323,27 @@ class TorrentEngine {
         }
     }
 
-    applySlidingWindow(torrent, file, byteOffset = 0) {
+    async getFileMetadata(torrent, file) {
+        const hash = this.canonicalHash(torrent.infoHash);
+        const sess = hash ? this.sessions.get(hash) : null;
+        if (sess && sess.fileInfo) return sess.fileInfo;
+
+        const info = {
+            hash: torrent.infoHash,
+            name: file ? file.name : torrent.name,
+            length: file ? file.length : torrent.length,
+            duration_seconds: 0,
+            avg_bitrate_bps: 8000000
+        };
+
+        if (sess) {
+            sess.fileInfo = info;
+            sess.avg_bitrate_bps = info.avg_bitrate_bps;
+        }
+        return info;
+    }
+
+    applySlidingWindow(torrent, file, byteOffset = 0, opts = {}) {
         if (!torrent || !torrent.pieces || !torrent.pieceLength || !file) return;
         const pieceLength = torrent.pieceLength;
 
@@ -336,15 +356,18 @@ class TorrentEngine {
             }
         }
 
+        const hash = this.canonicalHash(torrent.infoHash);
+        const sess = hash ? this.sessions.get(hash) : null;
+        const avgBitrateBps = (opts.avgBitrateBps || (sess && sess.avg_bitrate_bps) || 8000000);
+        const bufferMultiplier = opts.bufferMb ? Math.max(0.5, Math.min(4.0, opts.bufferMb / 200)) : 1.0;
+
         // Stremio-grade sequential engine: avoid file.select(1) on whole file
         // which causes 185 peers to disperse bandwidth randomly across all 500+ pieces.
-        // Instead, concentrate 100% of swarm download speed on immediate playback horizon.
         const fileStartPiece = Math.floor(file.offset / pieceLength);
         const fileEndPiece = Math.floor((file.offset + file.length - 1) / pieceLength);
         const totalPieces = Math.max(1, fileEndPiece - fileStartPiece + 1);
 
         // 1. Critical initial container header / moov atom / EBML headers:
-        // Prioritize first 3 pieces (~6MB) at critical priority 3 so the player/FFmpeg gets container headers in milliseconds.
         const criticalCount = Math.max(2, Math.min(4, Math.ceil(totalPieces * 0.02)));
         const headerEnd = Math.min(fileStartPiece + criticalCount - 1, fileEndPiece);
         torrent.select(fileStartPiece, headerEnd, 3);
@@ -357,44 +380,62 @@ class TorrentEngine {
         const indexStart = Math.max(fileStartPiece, fileEndPiece - indexPieceCount + 1);
         torrent.select(indexStart, fileEndPiece, 3);
 
-        // 3. Stremio-Grade Focused Concurrent Sliding Window around playback cursor (byteOffset):
-        // - Deselect distant pieces outside lookahead window to prevent swarm starvation
-        // - Tier 1 (Immediate Start): Current playback piece + 8 pieces ahead at Priority 3 + Critical
-        // - Tier 2 (Multi-Peer Horizon): Next 24 pieces ahead at Priority 2 (distributes across high-speed wires)
-        // - Tier 3 (Lookahead Buffer): Next 32 pieces ahead at Priority 1 (caps max ahead at ~40-64 pieces)
+        // 3. Time/Bitrate-Adaptive Sliding Window [Phase 2]
+        // Target windows in seconds:
+        // - criticalSec = 20s ahead at Priority 3 + critical()
+        // - bufferSec   = 90s * bufferMultiplier at Priority 2
+        // - horizonSec  = 240s * bufferMultiplier at Priority 1
+        const bytesPerSec = avgBitrateBps / 8;
+        const criticalPieces = Math.max(4, Math.min(64, Math.ceil((20 * bytesPerSec) / pieceLength)));
+        const bufferPieces = Math.max(8, Math.min(128, Math.ceil((90 * bufferMultiplier * bytesPerSec) / pieceLength)));
+        const horizonPieces = Math.max(16, Math.min(256, Math.ceil((240 * bufferMultiplier * bytesPerSec) / pieceLength)));
+
         const currentPiece = Math.floor((file.offset + byteOffset) / pieceLength);
         if (currentPiece <= fileEndPiece) {
             const cursorPiece = Math.max(fileStartPiece, currentPiece);
 
-            // Deselect pieces behind playback cursor (except file header pieces needed for seek tables)
-            if (cursorPiece > fileStartPiece + criticalCount) {
+            // 2.5 [STRM-MED-05] Backward-seek starvation: maintain a retention tail of 10 pieces behind cursor
+            const deselectEnd = cursorPiece - 1 - 10;
+            if (deselectEnd >= fileStartPiece + criticalCount) {
                 try {
-                    torrent.deselect(fileStartPiece + criticalCount, cursorPiece - 1, false);
+                    torrent.deselect(fileStartPiece + criticalCount, deselectEnd, false);
                 } catch (_) {}
             }
 
-            const immediateWindow = 8;
+            // Detect backwards seek: if new cursor is behind previous cursor, immediately re-select range
+            if (sess && sess.lastCursorPiece !== undefined && cursorPiece < sess.lastCursorPiece) {
+                const reselectStart = Math.max(fileStartPiece, cursorPiece - 2);
+                const reselectEnd = Math.min(fileEndPiece, cursorPiece + criticalCount);
+                torrent.select(reselectStart, reselectEnd, 3);
+                if (typeof torrent.critical === 'function') {
+                    try { torrent.critical(reselectStart, reselectEnd); } catch (_) {}
+                }
+            }
+            if (sess) {
+                sess.lastCursorPiece = cursorPiece;
+            }
+
+            // Tier 1: Immediate Start (Priority 3 + Critical)
+            const immediateWindow = criticalPieces;
             const immediateEnd = Math.min(fileEndPiece, cursorPiece + immediateWindow);
             torrent.select(cursorPiece, immediateEnd, 3);
-
-            // Activate WebTorrent native CRITICAL hotswap for the immediate next 3 pieces
             if (typeof torrent.critical === 'function') {
                 try { torrent.critical(cursorPiece, Math.min(fileEndPiece, cursorPiece + 3)); } catch (_) {}
             }
 
-            const bufferPieces = 24;
+            // Tier 2: Multi-Peer Horizon (Priority 2)
             const multiPeerEnd = Math.min(fileEndPiece, immediateEnd + bufferPieces);
             if (multiPeerEnd > immediateEnd) {
                 torrent.select(immediateEnd + 1, multiPeerEnd, 2);
             }
 
-            const backgroundHorizon = 32;
-            const reservoirEnd = Math.min(fileEndPiece, multiPeerEnd + backgroundHorizon);
+            // Tier 3: Lookahead Buffer Reservoir (Priority 1)
+            const reservoirEnd = Math.min(fileEndPiece, multiPeerEnd + horizonPieces);
             if (reservoirEnd > multiPeerEnd) {
                 torrent.select(multiPeerEnd + 1, reservoirEnd, 1);
             }
 
-            // Deselect distant unneeded future pieces so swarm bandwidth isn't wasted 1-2 hours ahead
+            // Deselect distant unneeded pieces
             if (reservoirEnd < fileEndPiece) {
                 try {
                     torrent.deselect(reservoirEnd + 1, fileEndPiece, false);
@@ -405,20 +446,31 @@ class TorrentEngine {
 
     createReadStream(torrent, file, opts = {}) {
         const start = opts.start || 0;
-        this.applySlidingWindow(torrent, file, start);
+        this.applySlidingWindow(torrent, file, start, opts);
         const stream = file.createReadStream(opts);
         const hash = this.canonicalHash(torrent.infoHash);
-        const pieceLength = torrent.pieceLength || (1024 * 1024);
-        const slideThreshold = pieceLength * 2;
         let currentOffset = start;
-        let bytesSinceWindowSlide = 0;
 
         if (hash) {
             const sess = this.sessions.get(hash);
             if (sess) {
                 sess.lastActive = Date.now();
                 sess.activeReaders = (sess.activeReaders || 0) + 1;
+
+                // 2.3 1-second interval sliding window trigger
+                const slideTimer = setInterval(() => {
+                    this.applySlidingWindow(torrent, file, currentOffset, opts);
+                }, 1000);
+
+                // Immediate slide on peer connection/unchoke
+                const wireListener = () => {
+                    this.applySlidingWindow(torrent, file, currentOffset, opts);
+                };
+                torrent.on('wire', wireListener);
+
                 const releaseReader = () => {
+                    clearInterval(slideTimer);
+                    torrent.removeListener('wire', wireListener);
                     if (sess.activeReaders > 0) sess.activeReaders--;
                     sess.lastActive = Date.now();
                 };
@@ -430,11 +482,6 @@ class TorrentEngine {
                     sess.lastActive = Date.now();
                     const len = chunk ? chunk.length : 0;
                     currentOffset += len;
-                    bytesSinceWindowSlide += len;
-                    if (bytesSinceWindowSlide >= slideThreshold) {
-                        bytesSinceWindowSlide = 0;
-                        this.applySlidingWindow(torrent, file, currentOffset);
-                    }
                 });
             }
         }
@@ -462,9 +509,9 @@ class TorrentEngine {
         const now = Date.now();
         for (const [hash, sess] of this.sessions.entries()) {
             if ((sess.activeReaders || 0) === 0 && now - sess.lastActive > idleTimeoutMs) {
-                console.log(`[TorrentEngine] Reclaiming idle session (retaining disk cache): ${hash}`);
+                console.log(`[TorrentEngine] Reclaiming idle session: ${hash}`);
                 try {
-                    this.client?.remove(sess.torrent, { destroyStore: false }, () => {});
+                    this.client?.remove(sess.torrent, { destroyStore: true }, () => {});
                 } catch (_) {}
                 this.sessions.delete(hash);
             }

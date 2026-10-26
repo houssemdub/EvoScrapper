@@ -216,6 +216,17 @@ function pickVideoFile(files, requestedIdx = null, season = null, episode = null
     return pool.slice().sort((a, b) => (b.length || 0) - (a.length || 0))[0];
 }
 
+function readJsonBody(req) {
+    return new Promise((resolve) => {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+            try { resolve(JSON.parse(body || '{}')); }
+            catch (_) { resolve({}); }
+        });
+    });
+}
+
 const server = http.createServer(async (req, res) => {
     // Enable CORS for web UI access
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -243,6 +254,67 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/status') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(engine.getStatus()));
+        return;
+    }
+
+    // ── File Info & Bitrate Metadata [Phase 2] ────────────────────────────────
+    if (pathname === '/file-info') {
+        const infoHash = query.get('hash') || query.get('info_hash');
+        const requestedIdx = query.has('idx') ? parseInt(query.get('idx'), 10) : (query.has('file_idx') ? parseInt(query.get('file_idx'), 10) : 0);
+
+        if (!infoHash) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing hash' }));
+            return;
+        }
+
+        try {
+            const torrent = await engine.addTorrent(infoHash);
+            const file = torrent.files[requestedIdx] || torrent.files[0];
+            const meta = await engine.getFileMetadata(torrent, file);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(meta));
+        } catch (err) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                hash: infoHash,
+                file_idx: requestedIdx,
+                duration_seconds: 0,
+                avg_bitrate_bps: 8000000
+            }));
+        }
+        return;
+    }
+
+    // ── Seek Window Notification [Phase 2] ────────────────────────────────────
+    if (pathname === '/window') {
+        let data = {};
+        if (req.method === 'POST') {
+            data = await readJsonBody(req);
+        }
+        const infoHash = data.hash || data.info_hash || query.get('hash') || query.get('info_hash');
+        const fileIdx = data.fileIdx !== undefined ? data.fileIdx : (query.has('file_idx') ? parseInt(query.get('file_idx'), 10) : 0);
+        const byteOffset = data.byteOffset !== undefined ? data.byteOffset : (query.has('offset') ? parseInt(query.get('offset'), 10) : 0);
+        const bufferMb = data.bufferMb !== undefined ? data.bufferMb : (query.has('buffer_mb') ? parseInt(query.get('buffer_mb'), 10) : null);
+
+        if (!infoHash) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing hash' }));
+            return;
+        }
+
+        try {
+            const torrent = await engine.addTorrent(infoHash);
+            const file = torrent.files[fileIdx] || torrent.files[0];
+            if (file) {
+                engine.applySlidingWindow(torrent, file, byteOffset, { bufferMb });
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, info_hash: infoHash, file_idx: fileIdx, byte_offset: byteOffset }));
+        } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+        }
         return;
     }
 
@@ -287,6 +359,7 @@ const server = http.createServer(async (req, res) => {
         const requestedIdx = query.has('file_idx') ? parseInt(query.get('file_idx'), 10) : null;
         const season = query.has('season') ? parseInt(query.get('season'), 10) : null;
         const episode = query.has('episode') ? parseInt(query.get('episode'), 10) : null;
+        const bufferMb = query.has('buffer_mb') ? parseInt(query.get('buffer_mb'), 10) : undefined;
 
         if (!infoHash && !magnet) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -329,6 +402,7 @@ const server = http.createServer(async (req, res) => {
         const requestedIdx = query.has('file_idx') ? parseInt(query.get('file_idx'), 10) : null;
         const season = query.has('season') ? parseInt(query.get('season'), 10) : null;
         const episode = query.has('episode') ? parseInt(query.get('episode'), 10) : null;
+        const bufferMb = query.has('buffer_mb') ? parseInt(query.get('buffer_mb'), 10) : undefined;
 
         if (!infoHash && !magnet) {
             res.writeHead(400, { 'Content-Type': 'text/plain' });
@@ -376,7 +450,7 @@ const server = http.createServer(async (req, res) => {
                     ...evoHeaders,
                 });
 
-                const stream = engine.createReadStream(torrent, targetFile, { start, end });
+                const stream = engine.createReadStream(torrent, targetFile, { start, end, bufferMb });
                 stream.on('error', (err) => {
                     if (isHarmlessCloseError(err)) return;
                     console.error('[StreamServer] ReadStream range error:', err.message);
@@ -394,7 +468,7 @@ const server = http.createServer(async (req, res) => {
                     ...evoHeaders,
                 });
 
-                const stream = engine.createReadStream(torrent, targetFile);
+                const stream = engine.createReadStream(torrent, targetFile, { bufferMb });
                 stream.on('error', (err) => {
                     if (isHarmlessCloseError(err)) return;
                     console.error('[StreamServer] ReadStream error:', err.message);

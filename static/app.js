@@ -4576,7 +4576,7 @@ function loadAllSettings() {
 
   const bufferSizeInput = document.getElementById('settings-buffer-size-input');
   const bufferSizeBadge = document.getElementById('settings-buffer-size-badge');
-  const savedBufferSize = s.buffer_size_mb || 30;
+  const savedBufferSize = s.buffer_size_mb || 200;
   if (bufferSizeInput) bufferSizeInput.value = savedBufferSize;
   if (bufferSizeBadge) bufferSizeBadge.innerText = `${savedBufferSize} MB Window`;
 
@@ -4600,7 +4600,7 @@ function saveAndApplyAllSettings() {
   const fallbackAddons = document.getElementById('settings-toggle-fallback-addons')?.checked ?? true;
   const trackers = (document.getElementById('settings-trackers-textarea')?.value || DEFAULT_ANNOUNCE_TRACKERS).trim();
   const maxPeers = parseInt(document.getElementById('settings-max-peers-input')?.value || '55', 10);
-  const bufferSize = parseInt(document.getElementById('settings-buffer-size-input')?.value || '30', 10);
+  const bufferSize = parseInt(document.getElementById('settings-buffer-size-input')?.value || '200', 10);
   const upnp = document.getElementById('settings-toggle-upnp')?.checked ?? true;
   const p2pMesh = document.getElementById('settings-toggle-p2p-mesh')?.checked ?? true;
   const defaultAspect = document.getElementById('settings-default-aspect')?.value || 'contain';
@@ -4692,9 +4692,24 @@ function handleMaxPeersInput(val) {
   if (badge) badge.innerText = `${val} Peers`;
 }
 
+function getActiveBufferSizeMb() {
+  try {
+    const s = JSON.parse(localStorage.getItem('evo_advanced_settings') || '{}');
+    if (s.buffer_size_mb) return parseInt(s.buffer_size_mb, 10);
+  } catch (_) {}
+  const input = document.getElementById('settings-buffer-size-input');
+  if (input && input.value) return parseInt(input.value, 10);
+  return 200;
+}
+
 function handleBufferSizeInput(val) {
   const badge = document.getElementById('settings-buffer-size-badge');
   if (badge) badge.innerText = `${val} MB Window`;
+  try {
+    const s = JSON.parse(localStorage.getItem('evo_advanced_settings') || '{}');
+    s.buffer_size_mb = parseInt(val, 10);
+    localStorage.setItem('evo_advanced_settings', JSON.stringify(s));
+  } catch (_) {}
 }
 
 function handleAmbilightBlurInput(val) {
@@ -7834,8 +7849,9 @@ function seekPlayer(targetSeconds) {
     ? active.playingFileIdx
     : (active.fileIdx || 0);
   const durationParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
+  const bufferParam = `&buffer_mb=${getActiveBufferSizeMb()}`;
 
-  const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${audioParam}&start_time=${clamped.toFixed(2)}${burnSubParam}${transcodeParam}${epParams}${magnetParam}${durationParam}`;
+  const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${audioParam}&start_time=${clamped.toFixed(2)}${burnSubParam}${transcodeParam}${epParams}${magnetParam}${durationParam}${bufferParam}`;
 
   const spinner = document.getElementById('player-buffering-spinner');
   if (spinner) spinner.classList.remove('hidden');
@@ -7938,7 +7954,8 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   modal.classList.remove('hidden');
 
   // Pre-warm torrent swarm and discover exact auto-selected episode file
-  const warmUrl = `/api/v1/stream/warm?info_hash=${infoHash}&file_idx=${effectiveFileIdx}${epParams}${magnetParam}`;
+  const bufferParam = `&buffer_mb=${getActiveBufferSizeMb()}`;
+  const warmUrl = `/api/v1/stream/warm?info_hash=${infoHash}&file_idx=${effectiveFileIdx}${epParams}${magnetParam}${bufferParam}`;
   fetch(warmUrl)
     .then((r) => r.json())
     .then((wData) => {
@@ -8153,8 +8170,8 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   const transcodeParam = transcodeVideo ? '&transcode_video=true' : '';
   const durationParam = initialDuration > 0 ? `&duration=${initialDuration}` : '';
   const streamUrl = useTransmux
-    ? `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${effectiveFileIdx}&audio_track=0&audio_boost=1.25${transcodeParam}${epParams}${magnetParam}${durationParam}`
-    : `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${effectiveFileIdx}${epParams}${magnetParam}${durationParam}`;
+    ? `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${effectiveFileIdx}&audio_track=0&audio_boost=1.25${transcodeParam}${epParams}${magnetParam}${durationParam}${bufferParam}`
+    : `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${effectiveFileIdx}${epParams}${magnetParam}${durationParam}${bufferParam}`;
 
   showPlayerBufferingHUD();
 

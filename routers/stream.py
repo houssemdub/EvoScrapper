@@ -15,6 +15,7 @@ from core.torrent_streamer import (
     get_internal_stream_url,
     get_torrent_files,
     warm_torrent,
+    warm_window,
 )
 import os
 from core.transmuxer import (
@@ -97,11 +98,14 @@ async def warm_swarm_endpoint(
     magnet: Optional[str] = Query(None, description="Original magnet link with trackers"),
     season: Optional[int] = Query(None, description="Season number (for series/anime)"),
     episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
+    buffer_mb: Optional[int] = Query(None, description="Buffer window size in MB"),
 ):
     """
     Pre-warms the torrent swarm and pre-buffers headers in background for instant playback.
     """
     data = await warm_torrent(info_hash, file_idx=file_idx, magnet=magnet, season=season, episode=episode)
+    b_mb = buffer_mb if isinstance(buffer_mb, int) else None
+    await warm_window(info_hash, file_idx=file_idx, byte_offset=0, buffer_mb=b_mb)
     if isinstance(data, dict):
         return data
     return {"status": "warming" if data else "failed", "info_hash": info_hash}
@@ -116,13 +120,15 @@ async def stream_raw_torrent(
     season: Optional[int] = Query(None, description="Season number (for series/anime)"),
     episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
     duration: Optional[float] = Query(None, description="Known media duration in seconds"),
+    buffer_mb: Optional[int] = Query(None, description="Buffer window size in MB"),
 ):
     """
     Direct HTTP 206 Partial Content video stream proxying the P2P engine.
     Supports seek, range requests, auto-retries, and unthrottled streaming.
     """
     await ensure_streaming_daemon()
-    target_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+    b_mb = buffer_mb if isinstance(buffer_mb, int) else None
+    target_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode, buffer_mb=b_mb)
 
     req_headers = {}
     range_header = request.headers.get("Range")
@@ -200,6 +206,7 @@ async def stream_transmuxed_torrent(
     season: Optional[int] = Query(None, description="Season number (for series/anime)"),
     episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
     duration: Optional[float] = Query(None, description="Known media duration in seconds"),
+    buffer_mb: Optional[int] = Query(None, description="Buffer window size in MB"),
 ):
     """
     Real-time FFmpeg transmuxing pipeline.
@@ -208,7 +215,11 @@ async def stream_transmuxed_torrent(
     Supports real-time PGS/ASS subtitle burn-in via burn_sub_idx.
     """
     await ensure_streaming_daemon()
-    source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+    b_mb = buffer_mb if isinstance(buffer_mb, int) else None
+    source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode, buffer_mb=b_mb)
+    if start_time and start_time > 0 and duration and isinstance(duration, (int, float)) and duration > 0:
+        approx_offset = int((start_time / duration) * 1000000000)
+        asyncio.create_task(warm_window(info_hash, file_idx=file_idx, byte_offset=approx_offset, buffer_mb=b_mb))
 
     generator = stream_transmuxed_video(
         source_url_or_path=source_url,

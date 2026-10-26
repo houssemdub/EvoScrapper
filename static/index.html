@@ -2222,9 +2222,9 @@
               <div class="settings-card">
                 <div class="settings-card-header">
                   <span class="settings-card-title"><i class="fa-solid fa-layer-group text-accent"></i> Dynamic Sliding-Window Buffer</span>
-                  <span id="settings-buffer-size-badge" class="tag tag-green mono text-xs">30 MB Window</span>
+                  <span id="settings-buffer-size-badge" class="tag tag-green mono text-xs">200 MB Window</span>
                 </div>
-                <input type="range" id="settings-buffer-size-input" min="10" max="90" step="5" value="30" class="scale-slider w-full" oninput="handleBufferSizeInput(this.value)">
+                <input type="range" id="settings-buffer-size-input" min="50" max="1000" step="25" value="200" class="scale-slider w-full" oninput="handleBufferSizeInput(this.value)">
                 <div class="settings-field-desc">Prioritizes immediate sequential piece allocation for instantaneous stream playback.</div>
               </div>
             </div>

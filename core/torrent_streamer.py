@@ -214,6 +214,31 @@ async def warm_torrent(
         return None
 
 
+async def warm_window(
+    info_hash: str,
+    file_idx: int = 0,
+    byte_offset: int = 0,
+    buffer_mb: Optional[int] = None,
+) -> bool:
+    """Explicitly signals the torrent engine to align its sliding window around a seek offset [Phase 2]."""
+    if not info_hash or info_hash.startswith("cdn_"):
+        return False
+    await ensure_streaming_daemon()
+    try:
+        session = await get_http_session()
+        payload: Dict[str, Any] = {
+            "hash": info_hash,
+            "fileIdx": file_idx,
+            "byteOffset": byte_offset,
+        }
+        if buffer_mb is not None:
+            payload["bufferMb"] = buffer_mb
+        async with session.post(f"{DAEMON_URL}/window", json=payload, timeout=aiohttp.ClientTimeout(total=3.0)) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 async def get_torrent_files(magnet_or_hash: str, magnet: Optional[str] = None) -> List[Dict[str, Any]]:
     """Resolves torrent metadata and returns the list of playable files."""
     if not magnet_or_hash or magnet_or_hash.startswith("cdn_"):
@@ -253,6 +278,7 @@ def get_internal_stream_url(
     magnet: Optional[str] = None,
     season: Optional[int] = None,
     episode: Optional[int] = None,
+    buffer_mb: Optional[int] = None,
 ) -> str:
     """Generates the direct loopback streaming URL for the P2P engine."""
     url = f"{DAEMON_URL}/stream?info_hash={info_hash}&file_idx={file_idx}"
@@ -262,4 +288,6 @@ def get_internal_stream_url(
         url += f"&season={season}"
     if episode is not None:
         url += f"&episode={episode}"
+    if buffer_mb is not None and isinstance(buffer_mb, int):
+        url += f"&buffer_mb={buffer_mb}"
     return url

@@ -355,4 +355,84 @@ def test_stream_cache_cleanup_and_no_accidental_overdownload():
     assert 'fetch(warmUrl).catch(() => {})' not in app_js
 
 
+def test_sliding_window_bitrate_scales_window():
+    """Verifies that torrent_engine.js scales piece window dynamically based on bitrate."""
+    engine_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "torrent_engine.js"))
+    with open(engine_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "avgBitrateBps" in content
+    assert "bufferMultiplier" in content
+    assert "horizonPieces" in content
+
+    node_cmd = [
+        "node", "--input-type=module", "-e",
+        """
+        import engine from './streamer/torrent_engine.js';
+        let selected = [];
+        const dummyTorrent = {
+            pieceLength: 1048576,
+            pieces: new Array(1000),
+            infoHash: 'a'.repeat(40),
+            bitfield: { get: () => false },
+            select: (start, end, prio) => { selected.push({start, end, prio}); },
+            deselect: () => {}
+        };
+        const dummyFile = { offset: 0, length: 1000 * 1048576 };
+
+        selected = [];
+        engine.applySlidingWindow(dummyTorrent, dummyFile, 0, { avgBitrateBps: 2000000 });
+        const lowRes = selected.find(s => s.prio === 1)?.end || 0;
+
+        selected = [];
+        engine.applySlidingWindow(dummyTorrent, dummyFile, 0, { avgBitrateBps: 20000000 });
+        const highRes = selected.find(s => s.prio === 1)?.end || 0;
+
+        if (!(highRes > lowRes)) process.exit(1);
+        """
+    ]
+    res = subprocess.run(node_cmd, capture_output=True, text=True)
+    assert res.returncode == 0, f"Node script failed: {res.stderr}"
+
+
+def test_sliding_window_backward_seek_retains_tail():
+    """Verifies that torrent_engine.js maintains a retention tail behind cursor and reselects on backward seek."""
+    engine_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "torrent_engine.js"))
+    with open(engine_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "cursorPiece - 1 - 10" in content or "cursorPiece - 11" in content
+    assert "sess.lastCursorPiece !== undefined && cursorPiece < sess.lastCursorPiece" in content
+
+    node_cmd = [
+        "node", "--input-type=module", "-e",
+        """
+        import engine from './streamer/torrent_engine.js';
+        let deselected = [];
+        let selected = [];
+        const dummyTorrent = {
+            pieceLength: 1048576,
+            pieces: new Array(1000),
+            infoHash: 'b'.repeat(40),
+            bitfield: { get: () => false },
+            select: (start, end, prio) => { selected.push({start, end, prio}); },
+            deselect: (start, end) => { deselected.push({start, end}); }
+        };
+        const dummyFile = { offset: 0, length: 1000 * 1048576 };
+
+        engine.sessions.set('b'.repeat(40), { lastActive: Date.now() });
+
+        engine.applySlidingWindow(dummyTorrent, dummyFile, 50 * 1048576, {});
+        const lastDeselect = deselected[0];
+
+        selected = [];
+        engine.applySlidingWindow(dummyTorrent, dummyFile, 20 * 1048576, {});
+        const reselected = selected.some(s => s.start <= 20 && s.end >= 20 && s.prio === 3);
+
+        if (!reselected || lastDeselect.end !== 39) process.exit(1);
+        """
+    ]
+    res = subprocess.run(node_cmd, capture_output=True, text=True)
+    assert res.returncode == 0, f"Node script failed: {res.stderr}"
+
+
+
 
