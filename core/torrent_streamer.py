@@ -10,9 +10,11 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 from core.logger import get_logs_dir, streaming_logger
 
-STREAM_PORT = 8889
-TORRENT_PORT = 50000
-DHT_PORT = 50001
+from config import settings
+
+STREAM_PORT = getattr(settings, "STREAM_PORT", 8889)
+TORRENT_PORT = getattr(settings, "TORRENT_PORT", 50000)
+DHT_PORT = getattr(settings, "DHT_PORT", 50001)
 DAEMON_URL = f"http://127.0.0.1:{STREAM_PORT}"
 STREAMER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer"))
 SERVER_SCRIPT = os.path.join(STREAMER_DIR, "server.js")
@@ -100,10 +102,41 @@ async def is_daemon_healthy() -> bool:
         return False
 
 
-def kill_stale_daemon():
-    """Kills any stale or deadlocked process listening on the streamer (8889), torrent wire (50000), or DHT (50001) ports."""
+def is_node_streamer_pid(pid: int) -> bool:
+    """Verifies that a process PID belongs to the Node.js torrent streamer [Phase 9 STRM-MED-03]."""
+    try:
+        import psutil
+        proc = psutil.Process(pid)
+        cmdline = " ".join(proc.cmdline() or []).lower()
+        proc_name = (proc.name() or "").lower()
+        if "server.js" in cmdline or "torrent_engine" in cmdline or "streamer" in cmdline:
+            return True
+        if "node" in proc_name:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def find_available_stream_port(preferred_port: int = 8889) -> int:
+    """Finds an open loopback port in range preferred_port..preferred_port+9."""
+    import socket
+    for port in range(preferred_port, preferred_port + 10):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    return preferred_port
+
+
+def kill_stale_daemon(target_port: Optional[int] = None):
+    """Kills any stale process on stream port ONLY if it is verified to be a Node.js streaming daemon."""
+    global STREAM_PORT, DAEMON_URL
+    port_to_check = target_port or STREAM_PORT
     if os.name == "nt":
-        for port in (STREAM_PORT, 50000, 50001):
+        for port in (port_to_check, TORRENT_PORT, DHT_PORT):
             try:
                 out = subprocess.check_output(f"netstat -ano | findstr :{port}", shell=True, text=True)
                 for line in out.strip().splitlines():
@@ -111,7 +144,16 @@ def kill_stale_daemon():
                         parts = line.strip().split()
                         pid = int(parts[-1])
                         if pid > 0 and pid != os.getpid():
-                            subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
+                            if is_node_streamer_pid(pid):
+                                subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
+                            else:
+                                streaming_logger.warning(
+                                    f"Port {port} is occupied by foreign process PID {pid}. Not killing. Selecting fallback port."
+                                )
+                                if port == port_to_check:
+                                    fallback = find_available_stream_port(8890)
+                                    STREAM_PORT = fallback
+                                    DAEMON_URL = f"http://127.0.0.1:{STREAM_PORT}"
             except Exception:
                 pass
 
@@ -133,6 +175,7 @@ def start_daemon_process() -> bool:
         # Ensure daemon output is captured in both dated and primary streaming logs
         log_file = open(log_path, "a", encoding="utf-8")
         env = os.environ.copy()
+        env["PORT"] = str(STREAM_PORT)
         env["STREAM_PORT"] = str(STREAM_PORT)
         env["TORRENT_PORT"] = str(TORRENT_PORT)
         env["DHT_PORT"] = str(DHT_PORT)

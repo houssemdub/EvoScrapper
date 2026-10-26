@@ -12,7 +12,7 @@ import engine from './torrent_engine.js';
 
 events.defaultMaxListeners = 100;
 
-const PORT = process.env.STREAM_PORT || 8889;
+const PORT = parseInt(process.env.PORT || process.env.STREAM_PORT || '8889', 10);
 
 function getMime(filename) {
     const ext = path.extname(filename || '').toLowerCase();

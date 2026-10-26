@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     STREAM_CACHE_DIR: str = ".stream_cache"
     MAX_DISK_CACHE_GB: float = 15.0
     MAX_CONCURRENT_FFMPEG: int = 4
+    STREAM_PORT: int = 8889
     TORRENT_PORT: int = 50000
     DHT_PORT: int = 50001
 
