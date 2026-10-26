@@ -116,6 +116,39 @@ def test_keyframe_snapping_on_transmux_seek():
                 pass
 
 
+def test_keyframe_snapping_does_not_snap_to_zero_when_sparse():
+    """Verifies that /transmux does NOT snap seek to 0.0 when keyframes list is empty, sparse, or distant (> 15s)."""
+    test_hash = "9876543210987654321098765432109876543210"
+    save_cached_keyframes(test_hash, 0, [0.0])
+    captured_start_seconds = None
+
+    async def mock_gen(*args, **kwargs):
+        nonlocal captured_start_seconds
+        captured_start_seconds = kwargs.get("start_seconds")
+        yield b"chunk"
+
+    try:
+        with patch("routers.stream.ensure_streaming_daemon", new=AsyncMock(return_value=True)), \
+             patch("routers.stream.warm_window", new=AsyncMock(return_value=True)), \
+             patch("routers.stream.stream_transmuxed_video", side_effect=mock_gen):
+            resp = client.get(
+                f"/api/v1/stream/transmux?info_hash={test_hash}&file_idx=0&start_time=360.0&duration=6000",
+                headers=AUTH_HEADERS,
+            )
+            assert resp.status_code == 200
+            # Must NOT snap to 0.0! Must preserve user's seek position 360.0
+            assert captured_start_seconds == 360.0
+            assert resp.headers.get("X-Evo-Seek-Keyframe") == "360.0"
+    finally:
+        from core.transmuxer import get_keyframes_cache_path
+        p = get_keyframes_cache_path(test_hash, 0)
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
 def test_engine_sliding_window_critical_index_pieces():
     """Verifies that applySlidingWindow calls critical() on container index pieces at file end."""
     engine_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "torrent_engine.js"))

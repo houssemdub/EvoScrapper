@@ -7916,10 +7916,13 @@ function seekPlayer(targetSeconds, immediate = false) {
   // In copy mode, snap seek to the preceding keyframe container boundary so video, audio, and subtitles remain sample-accurate
   let targetTime = clamped;
   const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
-  if (!active.transcodeVideo && !hasBurnSub && active.keyframes && active.keyframes.length > 0) {
+  if (!active.transcodeVideo && !hasBurnSub && active.keyframes && active.keyframes.length > 1) {
     const preceding = active.keyframes.filter((k) => k <= clamped);
     if (preceding.length > 0) {
-      targetTime = preceding[preceding.length - 1];
+      const candidate = preceding[preceding.length - 1];
+      if (clamped - candidate <= 15.0) {
+        targetTime = candidate;
+      }
     }
   }
 

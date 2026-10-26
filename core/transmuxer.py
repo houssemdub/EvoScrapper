@@ -1010,9 +1010,10 @@ async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, ti
         keyframes.sort()
         if len(keyframes) > 1:
             save_cached_keyframes(info_hash, file_idx, keyframes)
+            return keyframes
     except Exception:
         pass
-    return keyframes
+    return []
 
 
 def generate_hls_manifest(

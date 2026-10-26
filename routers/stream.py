@@ -238,10 +238,12 @@ async def stream_transmuxed_torrent(
                 cached_kfs = await probe_keyframes(source_url, info_hash, file_idx, timeout=2.0)
             except Exception:
                 cached_kfs = None
-        if cached_kfs:
+        if cached_kfs and len(cached_kfs) > 1:
             preceding = [k for k in cached_kfs if k <= start_time]
             if preceding:
-                snapped_start = preceding[-1]
+                candidate = preceding[-1]
+                if (start_time - candidate) <= 15.0:
+                    snapped_start = candidate
 
     if snapped_start and snapped_start > 0:
         dur_val = duration if (duration and isinstance(duration, (int, float)) and duration > 0) else None
