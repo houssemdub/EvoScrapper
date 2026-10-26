@@ -831,7 +831,7 @@ async def get_system_diagnostics():
         "timestamp": time.time(),
         "backend": {
             "status": "online",
-            "version": "2.5.0",
+            "version": "2.2.0",
             "python": platform.python_version(),
             "os": f"{platform.system()} {platform.release()}",
             "arch": platform.machine(),

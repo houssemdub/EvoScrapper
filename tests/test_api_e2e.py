@@ -22,7 +22,7 @@ def test_api_manifest():
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "EvoScrapper API"
-    assert data["version"] == "2.0.0"
+    assert data["version"] == "2.2.0"
 
 
 def test_health():

@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="EvoScrapper API",
-    version="2.0.0",
+    version="2.2.0",
     description="Next-Generation Fault-Tolerant Torrent & Subtitle Scraping Engine",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -154,7 +154,7 @@ async def api_manifest():
     return JSONResponse(
         {
             "name": "EvoScrapper API",
-            "version": "2.0.0",
+            "version": "2.2.0",
             "docs": "/docs",
             "redoc": "/redoc",
             "health": "/health",
