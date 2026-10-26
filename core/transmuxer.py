@@ -359,8 +359,11 @@ async def stream_transmuxed_video(
         "-fflags", "+genpts+discardcorrupt",
     ])
 
-    # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes
+    # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes.
+    # In video copy mode, -noaccurate_seek forces both audio and video demuxers to seek together to the nearest preceding keyframe container boundary, eliminating GOP asymmetry A/V desync.
     if start_seconds and start_seconds > 0:
+        if not transcode_video and burn_sub_idx is None:
+            cmd.append("-noaccurate_seek")
         cmd.extend(["-ss", f"{start_seconds:.2f}"])
 
     if duration_seconds and duration_seconds > 0:
@@ -397,14 +400,10 @@ async def stream_transmuxed_video(
         ])
 
     # Build audio filter chain with ITU-R BS.775 downmix and timestamp correction:
-    # 1. asetpts=PTS-STARTPTS resets audio PTS to zero on seek, perfectly aligning with video's -avoid_negative_ts make_zero
-    # 2. aresample=async=1 dynamically synchronizes audio clock to video stream without PTS jumps
-    # 3. ITU-R BS.775 downmix pan matrix for surround audio (> 2 channels)
-    # 4. volume boost restores center channel dialogue
-    af_filters = []
-    if start_seconds and start_seconds > 0:
-        af_filters.append("asetpts=PTS-STARTPTS")
-    af_filters.append("aresample=async=1:min_hard_comp=0.100000")
+    # 1. aresample=async=1 dynamically synchronizes audio clock to video stream without PTS jumps
+    # 2. ITU-R BS.775 downmix pan matrix for surround audio (> 2 channels)
+    # 3. volume boost restores center channel dialogue
+    af_filters = ["aresample=async=1:min_hard_comp=0.100000"]
     if channels is not None and channels > 2:
         af_filters.append("pan=stereo|FL=0.5*c0+0.7071*c2+0.7071*c4|FR=0.5*c1+0.7071*c2+0.7071*c5")
     if audio_boost and audio_boost > 0:
@@ -976,7 +975,7 @@ def save_cached_keyframes(info_hash: str, file_idx: int, keyframes: List[float])
 
 
 async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, timeout: float = 8.0) -> List[float]:
-    """Probes source video keyframes using ffprobe and caches results [Phase 7 STRM-HIGH-05]."""
+    """Probes source video keyframes using ffprobe packet flags and caches results [Phase 7 STRM-HIGH-05]."""
     cached = load_cached_keyframes(info_hash, file_idx)
     if cached is not None:
         return cached
@@ -986,9 +985,9 @@ async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, ti
         ffprobe,
         "-v", "quiet",
         "-select_streams", "v:0",
-        "-show_frames",
-        "-show_entries", "frame=pkt_pts_time,pict_type",
-        "-of", "csv",
+        "-show_packets",
+        "-show_entries", "packet=pts_time,flags",
+        "-of", "csv=p=0",
         source_url
     ]
     keyframes = [0.0]
@@ -1001,9 +1000,9 @@ async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, ti
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         for line in stdout.decode("utf-8", errors="replace").splitlines():
             parts = line.strip().split(",")
-            if len(parts) >= 3 and parts[2] == "I":
+            if len(parts) >= 2 and "K" in parts[-1]:
                 try:
-                    pts = float(parts[1])
+                    pts = float(parts[0])
                     if pts > 0 and pts not in keyframes:
                         keyframes.append(round(pts, 3))
                 except ValueError:

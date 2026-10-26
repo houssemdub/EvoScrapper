@@ -7885,6 +7885,20 @@ function seekTransmuxOffset(clamped) {
   updateSubtitleOverlay();
 }
 
+function fetchKeyframes(infoHash, fileIdx, magnet) {
+  if (!infoHash) return;
+  const magParam = magnet ? `&magnet=${encodeURIComponent(magnet)}` : '';
+  fetch(`/api/v1/stream/keyframes?info_hash=${infoHash}&file_idx=${fileIdx || 0}${magParam}`)
+    .then((r) => r.ok ? r.json() : null)
+    .then((data) => {
+      const active = state.discover.activeStream;
+      if (active && active.infoHash === infoHash && data && Array.isArray(data.keyframes) && data.keyframes.length > 0) {
+        active.keyframes = data.keyframes;
+      }
+    })
+    .catch(() => {});
+}
+
 function seekPlayer(targetSeconds, immediate = false) {
   const video = document.getElementById('evo-video-player');
   const active = state.discover.activeStream;
@@ -7899,16 +7913,26 @@ function seekPlayer(targetSeconds, immediate = false) {
     return;
   }
 
+  // In copy mode, snap seek to the preceding keyframe container boundary so video, audio, and subtitles remain sample-accurate
+  let targetTime = clamped;
+  const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
+  if (!active.transcodeVideo && !hasBurnSub && active.keyframes && active.keyframes.length > 0) {
+    const preceding = active.keyframes.filter((k) => k <= clamped);
+    if (preceding.length > 0) {
+      targetTime = preceding[preceding.length - 1];
+    }
+  }
+
   // Update UI timeline immediately for smooth dragging feedback
-  active.playbackOffset = clamped;
+  active.playbackOffset = targetTime;
   updatePlayerTimeline();
 
   if (_seekDebounceTimer) clearTimeout(_seekDebounceTimer);
   if (immediate) {
-    seekTransmuxOffset(clamped);
+    seekTransmuxOffset(targetTime);
   } else {
     _seekDebounceTimer = setTimeout(() => {
-      seekTransmuxOffset(clamped);
+      seekTransmuxOffset(targetTime);
     }, 250);
   }
 }
@@ -7984,10 +8008,12 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     episode,
     forceDirectIdx,
     audioTracks: [],
+    keyframes: [],
     isDraggingTimeline: false,
     showRemainingTime: false,
   };
   state.subtitles.userManuallySelected = false;
+  fetchKeyframes(infoHash, effectiveFileIdx, magnet);
 
   if (titleEl) {
     const epTag = (!forceDirectIdx && season !== null && episode !== null) ? ` (S${season}E${episode})` : '';
@@ -8007,6 +8033,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
           active.playingFileName = wData.file;
           if (wData.file_idx !== null && wData.file_idx !== undefined) {
             active.playingFileIdx = wData.file_idx;
+            fetchKeyframes(infoHash, wData.file_idx, magnet);
           }
           if (titleEl) {
             const epTag = (!forceDirectIdx && season !== null && episode !== null) ? ` (S${season}E${episode})` : '';

@@ -232,6 +232,12 @@ async def stream_transmuxed_torrent(
     if start_time and start_time > 0:
         from core.transmuxer import load_cached_keyframes
         cached_kfs = load_cached_keyframes(info_hash, file_idx)
+        if not cached_kfs:
+            try:
+                from core.transmuxer import probe_keyframes
+                cached_kfs = await probe_keyframes(source_url, info_hash, file_idx, timeout=2.0)
+            except Exception:
+                cached_kfs = None
         if cached_kfs:
             preceding = [k for k in cached_kfs if k <= start_time]
             if preceding:

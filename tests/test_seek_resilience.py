@@ -13,7 +13,7 @@ AUTH_HEADERS = {"X-API-Key": "test_key"}
 
 @pytest.mark.asyncio
 async def test_transmux_seek_av_alignment_flags():
-    """Verifies that transmux seeking sets asetpts=PTS-STARTPTS and avoids -copyts desync."""
+    """Verifies that transmux seeking sets -noaccurate_seek in copy mode and avoids asetpts PTS gap/copyts desync."""
     captured_cmd = None
 
     async def mock_subprocess_exec(*cmd, **kwargs):
@@ -39,8 +39,53 @@ async def test_transmux_seek_av_alignment_flags():
     assert captured_cmd is not None
     assert "-copyts" not in captured_cmd
     assert "-avoid_negative_ts" in captured_cmd
+    assert "-noaccurate_seek" in captured_cmd
+    # -noaccurate_seek must come before -i
+    noacc_idx = captured_cmd.index("-noaccurate_seek")
+    i_idx = captured_cmd.index("-i")
+    assert noacc_idx < i_idx
+    # asetpts=PTS-STARTPTS must NOT be present as it injects gaps before packet 1
     af_idx = captured_cmd.index("-af")
-    assert "asetpts=PTS-STARTPTS" in captured_cmd[af_idx + 1]
+    assert "asetpts=PTS-STARTPTS" not in captured_cmd[af_idx + 1]
+    assert "aresample=async=1" in captured_cmd[af_idx + 1]
+
+
+@pytest.mark.asyncio
+async def test_probe_keyframes_packet_based():
+    """Verifies that probe_keyframes uses packet-level parsing without full video decoding."""
+    captured_cmd = None
+
+    async def mock_subprocess_exec(*cmd, **kwargs):
+        nonlocal captured_cmd
+        captured_cmd = list(cmd)
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"0.000000,K__\n5.000000,K__\n10.000000,K__\n", b""))
+        mock_proc.returncode = 0
+        return mock_proc
+
+    from core.transmuxer import probe_keyframes, get_keyframes_cache_path
+    test_hash = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+    p = get_keyframes_cache_path(test_hash, 99)
+    if os.path.isfile(p):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+    try:
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_subprocess_exec):
+            kfs = await probe_keyframes("http://127.0.0.1:8889/stream", test_hash, file_idx=99)
+
+        assert captured_cmd is not None
+        assert "-show_packets" in captured_cmd
+        assert "-show_frames" not in captured_cmd
+        assert kfs == [0.0, 5.0, 10.0]
+    finally:
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 def test_keyframe_snapping_on_transmux_seek():

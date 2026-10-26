@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.2.1] - 2026-10-26
+
+### Audio/Video & Subtitle Seek Synchronization Fix
+
+#### Fixed
+- **A/V & Subtitle Desync on Seek**:
+  - Eliminated mid-GOP seek asymmetry where video stream copy mode (`-c:v copy`) anchored to the nearest preceding keyframe while audio transcoding accurate-sought forward, resulting in a 1–5 second audio lead over video.
+  - Added `-noaccurate_seek` before `-ss` in copy mode so FFmpeg demuxes both audio and video starting from the identical keyframe container boundary.
+  - Removed `asetpts=PTS-STARTPTS` filter which was injecting multi-second timestamp gaps between audio packet 0 and packet 1; continuous monotonic audio clock synchronization is now maintained gaplessly by `aresample=async=1:min_hard_comp=0.100000` with `-avoid_negative_ts make_zero`.
+  - Re-engineered `probe_keyframes` to use fast container packet inspection (`-show_packets -show_entries packet=pts_time,flags -of csv=p=0`) without full video decoding, slashing probe time from ~8s to ~30ms.
+  - Player frontend pre-loads stream keyframes in the background and snaps timeline seek operations to keyframe boundaries, guaranteeing sample-accurate alignment between video frames, audio samples, and subtitle cue intervals.
+
+---
+
 ## [2.2.0] - 2026-10-26
 
 ### Comprehensive Streaming & Buffering Overhaul
