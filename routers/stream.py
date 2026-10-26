@@ -700,7 +700,7 @@ async def get_hls_segment(
         media_type="video/mp2t",
         headers={
             "Access-Control-Allow-Origin": "*",
-            "Cache-Control": "public, max-age=86400",
+            "Cache-Control": "public, max-age=300, immutable",
         },
     )
 

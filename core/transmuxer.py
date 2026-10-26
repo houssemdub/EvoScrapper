@@ -1,9 +1,12 @@
 import asyncio
+import hashlib
 import os
 import re
 import shutil
 import subprocess
+import time
 from typing import AsyncGenerator, List, Optional
+import aiofiles
 from core.logger import streaming_logger, subtitles_logger
 
 
@@ -429,73 +432,275 @@ async def stream_transmuxed_video(
                 pass
 
 
-async def stream_hls_ts_segment(
+_HLS_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("EVO_HLS_MAX_CONCURRENCY", "3"))))
+
+
+class HlsSegmentCache:
+    """
+    Persistent disk cache for virtual HLS TS segments.
+    Single-flight deduplication prevents redundant FFmpeg spawns for duplicate segment requests.
+    Enforces TTL (default 30m) and LRU cache eviction at max_mb threshold (default 2GB).
+    """
+
+    def __init__(self, cache_dir: Optional[str] = None, max_mb: Optional[int] = None, ttl_sec: int = 1800):
+        if cache_dir is None:
+            cache_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "hls_cache"))
+        self.cache_dir = cache_dir
+        self.max_bytes = (max_mb or int(os.getenv("EVO_HLS_CACHE_MAX_MB", "2048"))) * 1024 * 1024
+        self.ttl_sec = ttl_sec
+        self._in_flight: dict[str, asyncio.Future] = {}
+        self._lock = asyncio.Lock()
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+    def get_cache_key(self, source_url: str, start: float, duration: float) -> str:
+        m_hash = re.search(r"info_hash=([0-9a-fA-F]{40})", source_url)
+        m_idx = re.search(r"file_idx=(\d+)", source_url)
+        start_ms = int(round(start * 1000))
+        dur_ms = int(round(duration * 1000))
+        if m_hash:
+            h = m_hash.group(1).lower()
+            idx = m_idx.group(1) if m_idx else "0"
+            return f"{h}_{idx}_{start_ms}_{dur_ms}"
+        raw = f"{source_url}_{start_ms}_{dur_ms}"
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def get_file_path(self, key: str) -> str:
+        return os.path.join(self.cache_dir, f"{key}.ts")
+
+    def has(self, key: str) -> bool:
+        ts_path = self.get_file_path(key)
+        done_path = f"{ts_path}.done"
+        if os.path.isfile(ts_path) and os.path.isfile(done_path):
+            try:
+                if time.time() - os.path.getmtime(done_path) < self.ttl_sec:
+                    return True
+            except OSError:
+                pass
+        return False
+
+    async def get_cached_chunks(self, key: str, chunk_size: int = 65536) -> AsyncGenerator[bytes, None]:
+        ts_path = self.get_file_path(key)
+        try:
+            now = time.time()
+            os.utime(ts_path, (now, now))
+        except OSError:
+            pass
+        async with aiofiles.open(ts_path, "rb") as f:
+            while True:
+                chunk = await f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
+    async def evict_lru_if_needed(self):
+        try:
+            total_size = 0
+            files = []
+            for entry in os.scandir(self.cache_dir):
+                if entry.name.endswith(".ts"):
+                    try:
+                        stat = entry.stat()
+                        total_size += stat.st_size
+                        files.append((stat.st_mtime, stat.st_size, entry.path))
+                    except OSError:
+                        pass
+            if total_size > self.max_bytes:
+                files.sort(key=lambda x: x[0])
+                for _, size, path in files:
+                    try:
+                        os.remove(path)
+                        done = f"{path}.done"
+                        if os.path.isfile(done):
+                            os.remove(done)
+                        total_size -= size
+                        if total_size <= self.max_bytes * 0.8:
+                            break
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+
+
+_hls_cache = HlsSegmentCache()
+
+
+async def _spawn_ts_segment(
     source_url_or_path: str,
     start_seconds: float = 0.0,
     duration_seconds: float = 6.0,
     chunk_size: int = 65536,
 ) -> AsyncGenerator[bytes, None]:
-    """
-    Extracts an individual MPEG-TS segment for HLS streaming.
-    Constrains processing strictly to duration_seconds using -ss and -t with -f mpegts.
-    """
-    ffmpeg_bin = find_ffmpeg() or "ffmpeg"
+    """Spawns an FFmpeg process to slice an individual MPEG-TS segment through the bounded HLS semaphore."""
+    async with _HLS_SEMAPHORE:
+        ffmpeg_bin = find_ffmpeg() or "ffmpeg"
+        cmd: List[str] = [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel", "error",
+        ]
 
-    cmd: List[str] = [
-        ffmpeg_bin,
-        "-hide_banner",
-        "-loglevel", "error",
-    ]
+        if source_url_or_path.startswith("http"):
+            cmd.extend([
+                "-reconnect", "1",
+                "-reconnect_at_eof", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_on_network_error", "1",
+                "-reconnect_delay_max", "15",
+            ])
 
-    if source_url_or_path.startswith("http"):
         cmd.extend([
-            "-reconnect", "1",
-            "-reconnect_at_eof", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_on_network_error", "1",
-            "-reconnect_delay_max", "15",
+            "-ss", f"{start_seconds:.3f}",
+            "-t", f"{duration_seconds:.3f}",
+            "-i", source_url_or_path,
+            "-map", "0:V:0?",
+            "-map", "0:a:0?",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ac", "2",
+            "-af", "aresample=async=1:first_pts=0",
+            "-sn",
+            "-dn",
+            "-f", "mpegts",
+            "-mpegts_copyts", "1",
+            "-output_ts_offset", f"{start_seconds:.3f}",
+            "pipe:1",
         ])
 
-    cmd.extend([
-        "-ss", f"{start_seconds:.3f}",
-        "-t", f"{duration_seconds:.3f}",
-        "-i", source_url_or_path,
-        "-map", "0:V:0?",
-        "-map", "0:a:0?",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-ac", "2",
-        "-af", "aresample=async=1:first_pts=0",
-        "-sn",
-        "-dn",
-        "-f", "mpegts",
-        "-mpegts_copyts", "1",
-        "-output_ts_offset", f"{start_seconds:.3f}",
-        "pipe:1",
-    ])
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+        try:
+            while True:
+                chunk = await process.stdout.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        finally:
+            try:
+                if process.returncode is None:
+                    process.terminate()
+                    await process.wait()
+            except Exception:
+                pass
+
+
+def _trigger_hls_prefetch(source_url_or_path: str, current_start: float, duration_seconds: float):
+    """Enqueues background muxing of the next 1-3 segments through the bounded semaphore."""
+    async def _prefetch_worker():
+        for i in range(1, 4):
+            next_start = current_start + (i * duration_seconds)
+            next_key = _hls_cache.get_cache_key(source_url_or_path, next_start, duration_seconds)
+            if _hls_cache.has(next_key):
+                continue
+            try:
+                ts_path = _hls_cache.get_file_path(next_key)
+                tmp_path = f"{ts_path}.tmp.{os.getpid()}.{time.time_ns()}"
+                async with aiofiles.open(tmp_path, "wb") as f:
+                    async for chunk in _spawn_ts_segment(source_url_or_path, next_start, duration_seconds):
+                        await f.write(chunk)
+                if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 0:
+                    os.replace(tmp_path, ts_path)
+                    with open(f"{ts_path}.done", "w") as df:
+                        df.write("1")
+            except Exception:
+                pass
 
     try:
-        while True:
-            chunk = await process.stdout.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
-    except (asyncio.CancelledError, GeneratorExit):
+        asyncio.create_task(_prefetch_worker())
+    except RuntimeError:
         pass
-    finally:
+
+
+async def stream_hls_ts_segment(
+    source_url_or_path: str,
+    start_seconds: float = 0.0,
+    duration_seconds: float = 6.0,
+    chunk_size: int = 65536,
+    prefetch: bool = True,
+) -> AsyncGenerator[bytes, None]:
+    """
+    Extracts an individual MPEG-TS segment for HLS streaming with persistent disk cache,
+    single-flight deduplication, and bounded FFmpeg concurrency [STRM-HIGH-04].
+    """
+    key = _hls_cache.get_cache_key(source_url_or_path, start_seconds, duration_seconds)
+
+    # 1. Cache hit: serve directly from disk with ZERO ffmpeg spawns
+    if _hls_cache.has(key):
+        async for chunk in _hls_cache.get_cached_chunks(key, chunk_size=chunk_size):
+            yield chunk
+        if prefetch:
+            _trigger_hls_prefetch(source_url_or_path, start_seconds, duration_seconds)
+        return
+
+    # 2. Single-flight lock: if another request is currently generating this exact segment, wait for it
+    fut = None
+    is_initiator = False
+    async with _hls_cache._lock:
+        if key in _hls_cache._in_flight:
+            fut = _hls_cache._in_flight[key]
+        else:
+            loop = asyncio.get_running_loop()
+            fut = loop.create_future()
+            _hls_cache._in_flight[key] = fut
+            is_initiator = True
+
+    if not is_initiator:
         try:
-            if process.returncode is None:
-                process.terminate()
-                await process.wait()
+            await asyncio.wait_for(asyncio.shield(fut), timeout=30.0)
         except Exception:
             pass
+        if _hls_cache.has(key):
+            async for chunk in _hls_cache.get_cached_chunks(key, chunk_size=chunk_size):
+                yield chunk
+            return
+
+    # 3. Cache miss initiator: spawn bounded FFmpeg, stream chunks to caller, and write to cache
+    ts_path = _hls_cache.get_file_path(key)
+    tmp_path = f"{ts_path}.tmp.{os.getpid()}.{time.time_ns()}"
+    out_f = None
+    try:
+        out_f = await aiofiles.open(tmp_path, "wb")
+        async for chunk in _spawn_ts_segment(source_url_or_path, start_seconds, duration_seconds, chunk_size):
+            await out_f.write(chunk)
+            yield chunk
+        await out_f.close()
+        out_f = None
+
+        if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 0:
+            os.replace(tmp_path, ts_path)
+            done_path = f"{ts_path}.done"
+            with open(done_path, "w") as df:
+                df.write("1")
+            await _hls_cache.evict_lru_if_needed()
+        if not fut.done():
+            fut.set_result(True)
+    except Exception as e:
+        if not fut.done():
+            fut.set_exception(e)
+        raise
+    finally:
+        if out_f:
+            try:
+                await out_f.close()
+            except Exception:
+                pass
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        async with _hls_cache._lock:
+            _hls_cache._in_flight.pop(key, None)
+
+    # 4. Trigger background prefetch for subsequent segments
+    if prefetch:
+        _trigger_hls_prefetch(source_url_or_path, start_seconds, duration_seconds)
 
 
 _TRACKED_VLC_PIDS: set[int] = set()
