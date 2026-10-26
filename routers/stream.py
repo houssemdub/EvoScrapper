@@ -679,6 +679,7 @@ async def get_hls_playlist(
     segment_duration: float = Query(6.0, description="HLS chunk duration in seconds"),
     season: Optional[int] = Query(None, description="Season number"),
     episode: Optional[int] = Query(None, description="Episode number"),
+    format: str = Query("ts", description="Segment format: 'ts' or 'fmp4'"),
 ):
     """
     Returns an RFC 8216 compliant HLS VOD playlist with virtual segment references.
@@ -693,12 +694,40 @@ async def get_hls_playlist(
         magnet=magnet,
         season=season,
         episode=episode,
+        prefer_fmp4=(format == "fmp4"),
     )
     return Response(
         content=manifest,
         media_type="application/vnd.apple.mpegurl",
         headers={
             "Cache-Control": "no-cache",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+@router.get("/hls/init.mp4")
+async def get_hls_init_segment(
+    info_hash: str = Query(..., description="Torrent info hash"),
+    file_idx: int = Query(0, description="File index inside torrent"),
+    magnet: Optional[str] = Query(None, description="Optional magnet URI"),
+    season: Optional[int] = Query(None, description="Season number"),
+    episode: Optional[int] = Query(None, description="Episode number"),
+):
+    """Generates the fMP4 initialization segment (ftyp + moov) for RFC 8216 EXT-X-MAP [Phase 7 STRM-HIGH-05]."""
+    await ensure_streaming_daemon()
+    source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+    generator = stream_transmuxed_video(
+        source_url_or_path=source_url,
+        start_seconds=0.0,
+        duration_seconds=0.5,
+        transcode_video=False,
+    )
+    return StreamingResponse(
+        generator,
+        media_type="video/mp4",
+        headers={
+            "Cache-Control": "public, max-age=3600, immutable",
             "Access-Control-Allow-Origin": "*",
         },
     )

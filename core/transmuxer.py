@@ -907,6 +907,82 @@ def launch_vlc_process(stream_url_or_path: str, title: Optional[str] = None) -> 
         return False
 
 
+KEYFRAMES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "keyframes"))
+
+
+def get_keyframes_cache_path(info_hash: str, file_idx: int = 0) -> str:
+    """Returns the persistent keyframe cache file path for a torrent file [Phase 7 STRM-HIGH-05]."""
+    os.makedirs(KEYFRAMES_DIR, exist_ok=True)
+    return os.path.join(KEYFRAMES_DIR, f"{info_hash.lower()}_{file_idx}.json")
+
+
+def load_cached_keyframes(info_hash: str, file_idx: int = 0) -> Optional[List[float]]:
+    """Loads cached keyframe timestamps if available on disk."""
+    path = get_keyframes_cache_path(info_hash, file_idx)
+    if os.path.isfile(path):
+        try:
+            import json
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list) and data:
+                    return sorted([float(x) for x in data])
+        except Exception:
+            pass
+    return None
+
+
+def save_cached_keyframes(info_hash: str, file_idx: int, keyframes: List[float]):
+    """Persists probed keyframe timestamps to disk."""
+    path = get_keyframes_cache_path(info_hash, file_idx)
+    try:
+        import json
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(sorted(keyframes), f)
+    except Exception:
+        pass
+
+
+async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, timeout: float = 8.0) -> List[float]:
+    """Probes source video keyframes using ffprobe and caches results [Phase 7 STRM-HIGH-05]."""
+    cached = load_cached_keyframes(info_hash, file_idx)
+    if cached is not None:
+        return cached
+
+    ffprobe = shutil.which("ffprobe") or "ffprobe"
+    cmd = [
+        ffprobe,
+        "-v", "quiet",
+        "-select_streams", "v:0",
+        "-show_frames",
+        "-show_entries", "frame=pkt_pts_time,pict_type",
+        "-of", "csv",
+        source_url
+    ]
+    keyframes = [0.0]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
+            parts = line.strip().split(",")
+            if len(parts) >= 3 and parts[2] == "I":
+                try:
+                    pts = float(parts[1])
+                    if pts > 0 and pts not in keyframes:
+                        keyframes.append(round(pts, 3))
+                except ValueError:
+                    pass
+        keyframes.sort()
+        if len(keyframes) > 1:
+            save_cached_keyframes(info_hash, file_idx, keyframes)
+    except Exception:
+        pass
+    return keyframes
+
+
 def generate_hls_manifest(
     info_hash: str,
     total_duration_sec: float = 7200.0,
@@ -915,25 +991,74 @@ def generate_hls_manifest(
     magnet: Optional[str] = None,
     season: Optional[int] = None,
     episode: Optional[int] = None,
+    keyframes: Optional[List[float]] = None,
+    prefer_fmp4: bool = False,
 ) -> str:
-    """Generates an RFC 8216 compliant HLS VOD playlist with virtual segment references."""
+    """Generates an RFC 8216 compliant HLS VOD playlist with virtual segment references and keyframe snapping."""
     import urllib.parse
-    target_duration = int(segment_duration_sec)
-    total_segments = max(1, int(total_duration_sec / segment_duration_sec))
+    import math
+
+    if keyframes is None:
+        keyframes = load_cached_keyframes(info_hash, file_idx)
+
+    segments: List[tuple[float, float]] = []
+
+    if keyframes and len(keyframes) > 1:
+        sorted_kf = sorted([k for k in keyframes if 0.0 <= k <= total_duration_sec])
+        if 0.0 not in sorted_kf:
+            sorted_kf.insert(0, 0.0)
+
+        cur_start = 0.0
+        while cur_start < total_duration_sec:
+            target_next = cur_start + segment_duration_sec
+            if target_next >= total_duration_sec:
+                seg_dur = max(0.1, total_duration_sec - cur_start)
+                segments.append((cur_start, seg_dur))
+                break
+
+            candidates = [k for k in sorted_kf if k > cur_start + 0.5]
+            if candidates:
+                best_kf = min(candidates, key=lambda k: abs(k - target_next))
+                if abs(best_kf - target_next) <= (segment_duration_sec * 0.7):
+                    next_start = best_kf
+                else:
+                    next_start = target_next
+            else:
+                next_start = target_next
+
+            next_start = min(total_duration_sec, next_start)
+            seg_dur = round(next_start - cur_start, 3)
+            segments.append((cur_start, seg_dur))
+            cur_start = next_start
+    else:
+        total_segments = max(1, int(total_duration_sec / segment_duration_sec))
+        for i in range(total_segments):
+            start_time = i * segment_duration_sec
+            seg_dur = min(segment_duration_sec, total_duration_sec - start_time) if total_duration_sec > start_time else segment_duration_sec
+            segments.append((start_time, seg_dur))
+
+    max_seg_dur = max([s[1] for s in segments], default=segment_duration_sec)
+    target_duration = max(int(segment_duration_sec), int(math.ceil(max_seg_dur)))
 
     lines = [
         "#EXTM3U",
-        "#EXT-X-VERSION:3",
+        f"#EXT-X-VERSION:{7 if prefer_fmp4 else 3}",
         f"#EXT-X-TARGETDURATION:{target_duration}",
         "#EXT-X-MEDIA-SEQUENCE:0",
         "#EXT-X-PLAYLIST-TYPE:VOD",
     ]
 
-    for i in range(total_segments):
-        start_time = i * segment_duration_sec
-        seg_dur = min(segment_duration_sec, total_duration_sec - start_time) if total_duration_sec > start_time else segment_duration_sec
+    if prefer_fmp4:
+        init_url = f"/api/v1/stream/hls/init.mp4?info_hash={info_hash}&file_idx={file_idx}"
+        if magnet:
+            init_url += f"&magnet={urllib.parse.quote(magnet)}"
+        lines.append(f'#EXT-X-MAP:URI="{init_url}"')
+
+    for i, (start_time, seg_dur) in enumerate(segments):
         lines.append(f"#EXTINF:{seg_dur:.1f},")
-        seg_url = f"/api/v1/stream/hls/segment?info_hash={info_hash}&file_idx={file_idx}&segment_idx={i}&duration={seg_dur}&start={start_time:.2f}"
+        seg_url = f"/api/v1/stream/hls/segment?info_hash={info_hash}&file_idx={file_idx}&segment_idx={i}&duration={seg_dur:.2f}&start={start_time:.2f}"
+        if prefer_fmp4:
+            seg_url += "&format=fmp4"
         if magnet:
             seg_url += f"&magnet={urllib.parse.quote(magnet)}"
         if season is not None:
