@@ -7,6 +7,7 @@ import subprocess
 import time
 from typing import AsyncGenerator, List, Optional
 import aiofiles
+from fastapi import HTTPException
 from core.logger import streaming_logger, subtitles_logger
 
 
@@ -408,18 +409,37 @@ async def stream_transmuxed_video(
     ])
 
     async with _FFMPEG_SEMAPHORE:
-        # Use DEVNULL for stderr to prevent pipe buffer deadlocks (which hang ffmpeg when logging warnings)
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
+
+        bytes_yielded = 0
+        stderr_lines: List[str] = []
+
+        async def _drain_stderr():
+            try:
+                while True:
+                    line = await process.stderr.readline()
+                    if not line:
+                        break
+                    decoded = line.decode("utf-8", errors="replace").strip()
+                    if decoded:
+                        stderr_lines.append(decoded)
+                        if len(stderr_lines) > 50:
+                            stderr_lines.pop(0)
+            except Exception:
+                pass
+
+        drain_task = asyncio.create_task(_drain_stderr())
 
         try:
             while True:
                 chunk = await process.stdout.read(chunk_size)
                 if not chunk:
                     break
+                bytes_yielded += len(chunk)
                 yield chunk
         except (asyncio.CancelledError, GeneratorExit):
             pass
@@ -430,6 +450,18 @@ async def stream_transmuxed_video(
                     await process.wait()
             except Exception:
                 pass
+            if not drain_task.done():
+                drain_task.cancel()
+
+        if bytes_yielded == 0 and process.returncode is not None and process.returncode != 0:
+            stderr_snippet = " ".join(stderr_lines[-5:]).strip()
+            streaming_logger.error(
+                f"[Transmuxer] FFmpeg exited with code {process.returncode} before yielding any bytes: {stderr_snippet}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Transmuxer failed to start: {stderr_snippet or 'premature exit'}"
+            )
 
 
 _HLS_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("EVO_HLS_MAX_CONCURRENCY", "3"))))

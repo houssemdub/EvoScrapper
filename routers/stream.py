@@ -171,6 +171,7 @@ async def stream_raw_torrent(
             resp_headers[key] = val
     if "Accept-Ranges" not in resp_headers:
         resp_headers["Accept-Ranges"] = "bytes"
+    resp_headers["X-Evo-Buffer-State"] = "healthy"
     if duration and isinstance(duration, (int, float)) and duration > 0:
         resp_headers["X-Content-Duration"] = str(round(duration, 2))
         resp_headers["Content-Duration"] = str(round(duration, 2))
@@ -235,6 +236,7 @@ async def stream_transmuxed_torrent(
         "Content-Type": "video/mp4",
         "Accept-Ranges": "none",
         "X-EvoStream-Audio": f"track_{audio_track}_boost_{audio_boost}",
+        "X-Evo-Buffer-State": "healthy",
     }
     if duration and isinstance(duration, (int, float)) and duration > 0:
         resp_hdrs["X-Content-Duration"] = str(round(duration, 2))

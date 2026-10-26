@@ -442,6 +442,80 @@ class TorrentEngine {
                 } catch (_) {}
             }
         }
+        this.checkBufferHealth(torrent, file, byteOffset);
+    }
+
+    checkBufferHealth(torrent, file, byteOffset = 0) {
+        if (!torrent || !file) return null;
+        const hash = this.canonicalHash(torrent.infoHash);
+        const sess = hash ? this.sessions.get(hash) : null;
+        if (!sess) return null;
+
+        const pieceLength = torrent.pieceLength || (1024 * 1024);
+        const avgBitrateBps = (sess && sess.avg_bitrate_bps) || 8000000;
+        const bytesPerSec = avgBitrateBps / 8;
+
+        const currentSpeed = torrent.downloadSpeed || 0;
+        sess.emaSpeed = sess.emaSpeed ? (0.3 * currentSpeed + 0.7 * sess.emaSpeed) : currentSpeed;
+
+        const cursorPiece = Math.floor((file.offset + byteOffset) / pieceLength);
+        const fileEndPiece = Math.floor((file.offset + file.length - 1) / pieceLength);
+
+        let verifiedPiecesAhead = 0;
+        if (torrent.bitfield) {
+            const checkLimit = Math.min(fileEndPiece, cursorPiece + 64);
+            for (let i = cursorPiece; i <= checkLimit; i++) {
+                if (torrent.bitfield.get(i)) {
+                    verifiedPiecesAhead++;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        const downloadedBytesAhead = verifiedPiecesAhead * pieceLength;
+        const secondsAhead = (downloadedBytesAhead * 8) / avgBitrateBps;
+        const deficitRatio = bytesPerSec / Math.max(1000, sess.emaSpeed);
+
+        let healthState = 'healthy';
+        if (secondsAhead < 2 || (torrent.numPeers === 0 && verifiedPiecesAhead === 0)) {
+            healthState = 'starved';
+        } else if (secondsAhead < 5 && deficitRatio > 1.2) {
+            healthState = 'deficit';
+        }
+
+        sess.healthState = healthState;
+        sess.secondsAhead = Math.round(secondsAhead * 10) / 10;
+        sess.deficitRatio = Math.round(deficitRatio * 100) / 100;
+
+        if (healthState === 'deficit' || healthState === 'starved') {
+            const criticalEnd = Math.min(fileEndPiece, cursorPiece + 3);
+            torrent.select(cursorPiece, criticalEnd, 3);
+            if (typeof torrent.critical === 'function') {
+                try { torrent.critical(cursorPiece, criticalEnd); } catch (_) {}
+            }
+
+            if (Array.isArray(torrent.wires)) {
+                const now = Date.now();
+                for (const wire of torrent.wires) {
+                    if (wire.downloaded === 0 && wire.connected && (now - (wire.lastActive || now)) > 3000) {
+                        try {
+                            if (typeof wire.choke === 'function') wire.choke();
+                        } catch (_) {}
+                    }
+                }
+            }
+        }
+
+        return {
+            hash: torrent.infoHash,
+            health_state: healthState,
+            seconds_ahead: sess.secondsAhead,
+            deficit_ratio: sess.deficitRatio,
+            speed_bps: Math.round(sess.emaSpeed * 8),
+            num_peers: torrent.numPeers || 0,
+            unchoked_peers: (torrent.wires || []).filter(w => !w.peerChoking).length
+        };
     }
 
     createReadStream(torrent, file, opts = {}) {
@@ -567,6 +641,9 @@ class TorrentEngine {
                 pieces_total: t.pieces ? t.pieces.length : 0,
                 piece_map: piece_map,
                 peers_list: peers_list,
+                health_state: sess.healthState || 'healthy',
+                seconds_ahead: sess.secondsAhead || 0,
+                deficit_ratio: sess.deficitRatio || 0,
                 lastActiveSecAgo: Math.round((Date.now() - sess.lastActive) / 1000)
             });
         }

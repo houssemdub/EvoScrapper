@@ -395,6 +395,30 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // ── Buffer-Health Watchdog [Phase 3 STRM-MED-01] ───────────────────────────
+    if (pathname === '/health-watch') {
+        const infoHash = query.get('info_hash') || query.get('hash');
+        const sess = infoHash ? engine.sessions.get(engine.canonicalHash(infoHash)) : null;
+        if (!sess || !sess.torrent) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Session not found' }));
+            return;
+        }
+        const file = (sess.torrent.files && sess.torrent.files[0]) || null;
+        const health = engine.checkBufferHealth(sess.torrent, file, 0) || {
+            hash: sess.torrent.infoHash,
+            health_state: sess.healthState || 'healthy',
+            seconds_ahead: sess.secondsAhead || 0,
+            deficit_ratio: sess.deficitRatio || 0,
+            speed_bps: 0,
+            num_peers: sess.torrent.numPeers || 0,
+            unchoked_peers: 0
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify(health));
+        return;
+    }
+
     // ── HTTP Range Streaming ───────────────────────────────────────────────────
     if (pathname === '/stream') {
         const infoHash = query.get('info_hash') || query.get('hash');

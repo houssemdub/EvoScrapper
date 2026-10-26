@@ -5286,6 +5286,27 @@ function initPlayerTimelineControls() {
     video.addEventListener('ended', () => {
       updatePlayPauseIcon(false);
       stopPlayerTicker();
+
+      const active = state.discover.activeStream;
+      if (active && active.totalDuration > 30) {
+        const cur = (active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+        if (Math.abs(cur - active.totalDuration) > 15) {
+          if (!window._evoAutoReconnectFailures) window._evoAutoReconnectFailures = 0;
+          if (window._evoAutoReconnectFailures < 3) {
+            window._evoAutoReconnectFailures++;
+            const mm = Math.floor(cur / 60);
+            const ss = Math.floor(cur % 60).toString().padStart(2, '0');
+            showToast(`Stream interrupted by swarm. Resuming playback at ${mm}:${ss}...`, 'warning');
+            if (active.useTransmux) {
+              seekTransmuxOffset(cur);
+            } else {
+              video.currentTime = cur;
+              video.play().catch(() => {});
+            }
+            return;
+          }
+        }
+      }
     });
   }
 
@@ -8015,7 +8036,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
 
   // Probe stream metadata in background for exact duration, multi-audio tracks, and embedded subtitles
   let probeAttempts = 0;
-  const maxProbeAttempts = 4;
+  const maxProbeAttempts = 10;
   if (window._evoProbeTimer) clearTimeout(window._evoProbeTimer);
 
   const triggerStreamProbe = () => {
@@ -8149,22 +8170,29 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             }
           }
         } else {
-          // Swarm cold or downloading initial header: retry with backoff
+          // Swarm cold or downloading initial header: retry with exponential backoff
           if (probeAttempts < maxProbeAttempts) {
-            window._evoProbeTimer = setTimeout(triggerStreamProbe, probeAttempts * 2000);
+            const nextDelay = Math.min(10000, 1500 * Math.pow(1.3, probeAttempts));
+            window._evoProbeTimer = setTimeout(triggerStreamProbe, nextDelay);
           }
         }
       })
       .catch((err) => {
         console.warn('[EvoPlayer] Probe retry notice:', err.message);
         if (probeAttempts < maxProbeAttempts) {
-          window._evoProbeTimer = setTimeout(triggerStreamProbe, probeAttempts * 2000);
+          const nextDelay = Math.min(10000, 1500 * Math.pow(1.3, probeAttempts));
+          window._evoProbeTimer = setTimeout(triggerStreamProbe, nextDelay);
         }
       });
   };
 
-  // Initial probe scheduled after stream setup
+  // Initial probe scheduled after stream setup, plus guaranteed probe once video data flows
   window._evoProbeTimer = setTimeout(triggerStreamProbe, 1000);
+  video.addEventListener('canplay', () => triggerStreamProbe(), { once: true });
+  video.addEventListener('playing', () => {
+    window._evoAutoReconnectFailures = 0;
+    triggerStreamProbe();
+  }, { once: true });
 
   // Set Video Source with duration hint for immediate header injection
   const transcodeParam = transcodeVideo ? '&transcode_video=true' : '';
