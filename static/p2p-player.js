@@ -23,16 +23,22 @@ class EvoP2PPlayerManager {
     updateHud() {
         const peersEl = document.getElementById('p2p-peers-count');
         const ratioEl = document.getElementById('p2p-ratio');
+        const swarmStat = document.getElementById('player-swarm-stat');
         if (peersEl) {
             peersEl.innerHTML = `${this.peerCount} ${this.peerCount === 1 ? 'Peer' : 'Peers'}`;
         }
+        const total = this.p2pBytes + this.httpBytes;
+        const ratio = total > 0 ? Math.round((this.p2pBytes / total) * 100) : 0;
         if (ratioEl) {
-            const total = this.p2pBytes + this.httpBytes;
             if (total > 0) {
-                const ratio = Math.round((this.p2pBytes / total) * 100);
                 ratioEl.textContent = `P2P Mesh: ${ratio}% (${(this.p2pBytes / 1024 / 1024).toFixed(1)}MB)`;
             } else {
                 ratioEl.textContent = 'P2P Ready';
+            }
+        }
+        if (swarmStat) {
+            if (this.peerCount > 0) {
+                swarmStat.innerHTML = `<i class="fa-solid fa-circle-nodes text-green"></i> WebRTC Mesh Active: ${this.peerCount} peers (${ratio}% P2P)`;
             }
         }
     }
@@ -56,6 +62,12 @@ class EvoP2PPlayerManager {
             this.p2pEngine = null;
         }
 
+        let p2pMeshEnabled = true;
+        try {
+            const s = JSON.parse(localStorage.getItem('evo_advanced_settings') || '{}');
+            if (s.p2p_mesh_enabled === false) p2pMeshEnabled = false;
+        } catch (_) {}
+
         // ── P2P HLS Mesh Mode ───────────────────────────────────────────────────
         const p2pSupported = typeof p2pml !== 'undefined' && p2pml.hlsjs && p2pml.hlsjs.Engine && p2pml.hlsjs.Engine.isSupported();
         const hlsSupported = typeof Hls !== 'undefined' && Hls.isSupported();
@@ -68,7 +80,7 @@ class EvoP2PPlayerManager {
                 backBufferLength: 90
             };
 
-            if (p2pSupported) {
+            if (p2pMeshEnabled && p2pSupported) {
                 try {
                     this.p2pEngine = new p2pml.hlsjs.Engine({
                         segments: {

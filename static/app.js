@@ -8469,6 +8469,7 @@ function closePlayerModal() {
     window.evoPgsDecoder.detach();
   }
   stopSwarmStatsMonitor();
+  if (window.evoP2PPlayer) window.evoP2PPlayer.destroy();
   toggleSubtitleDrawer(false);
   togglePlayerSettingsMenu(false);
   toggleSwarmInspectorModal(false);
