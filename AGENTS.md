@@ -1,7 +1,8 @@
 # Agent Directives & Operating Rules
 
 ## Primary Workflows
-This repository enforces Addy Osmani's `agent-skills` located under `.agents/skills/`:
+This repository enforces Addy Osmani's `agent-skills` and the `p2p-streaming-engineering` domain skill:
+- **p2p-streaming-engineering**: Follow sequential piece buffering, fMP4 transmuxing, audio downmixing (ITU-R BS.775), and subtitle sanitization rules.
 - **spec-driven-development**: Lock input/output specifications and constraints before writing code.
 - **test-driven-development**: Write unit tests before writing production implementation. Red -> Green -> Refactor.
 - **incremental-implementation**: Only modify one isolated component per turn.
