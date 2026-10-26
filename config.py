@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     STREAM_CACHE_DIR: str = ".stream_cache"
     MAX_DISK_CACHE_GB: float = 15.0
     MAX_CONCURRENT_FFMPEG: int = 4
+    TORRENT_PORT: int = 50000
+    DHT_PORT: int = 50001
 
     # Debrid Multi-IP Stream Proxy
     DEBRID_PROXY_ENABLED: bool = True

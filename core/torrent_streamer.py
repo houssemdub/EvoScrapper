@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import datetime
 import os
 import re
 import subprocess
@@ -7,8 +8,11 @@ import sys
 import urllib.parse
 from typing import Any, Dict, List, Optional
 import aiohttp
+from core.logger import get_logs_dir, streaming_logger
 
 STREAM_PORT = 8889
+TORRENT_PORT = 50000
+DHT_PORT = 50001
 DAEMON_URL = f"http://127.0.0.1:{STREAM_PORT}"
 STREAMER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer"))
 SERVER_SCRIPT = os.path.join(STREAMER_DIR, "server.js")
@@ -97,18 +101,19 @@ async def is_daemon_healthy() -> bool:
 
 
 def kill_stale_daemon():
-    """Kills any stale or deadlocked process listening on the streamer port."""
+    """Kills any stale or deadlocked process listening on the streamer (8889), torrent wire (50000), or DHT (50001) ports."""
     if os.name == "nt":
-        try:
-            out = subprocess.check_output(f"netstat -ano | findstr :{STREAM_PORT}", shell=True, text=True)
-            for line in out.strip().splitlines():
-                if "LISTENING" in line:
-                    parts = line.strip().split()
-                    pid = int(parts[-1])
-                    if pid > 0 and pid != os.getpid():
-                        subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
-        except Exception:
-            pass
+        for port in (STREAM_PORT, 50000, 50001):
+            try:
+                out = subprocess.check_output(f"netstat -ano | findstr :{port}", shell=True, text=True)
+                for line in out.strip().splitlines():
+                    if "LISTENING" in line:
+                        parts = line.strip().split()
+                        pid = int(parts[-1])
+                        if pid > 0 and pid != os.getpid():
+                            subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
+            except Exception:
+                pass
 
 
 def start_daemon_process() -> bool:
@@ -120,18 +125,31 @@ def start_daemon_process() -> bool:
     kill_stale_daemon()
 
     try:
-        creationflags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
-        log_path = os.path.join(STREAMER_DIR, "daemon.log")
+        creationflags = (0x08000000 | 0x00000008) if os.name == "nt" else 0  # CREATE_NO_WINDOW | DETACHED_PROCESS
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        logs_dir = get_logs_dir()
+        log_path = os.path.join(logs_dir, f"streaming_{today}.log")
+        generic_path = os.path.join(logs_dir, "streaming.log")
+        # Ensure daemon output is captured in both dated and primary streaming logs
         log_file = open(log_path, "a", encoding="utf-8")
+        env = os.environ.copy()
+        env["STREAM_PORT"] = str(STREAM_PORT)
+        env["TORRENT_PORT"] = str(TORRENT_PORT)
+        env["DHT_PORT"] = str(DHT_PORT)
+        streaming_logger.info(
+            f"Spawning Node.js streaming daemon (ports: stream={STREAM_PORT}, torrent={TORRENT_PORT}, dht={DHT_PORT})"
+        )
         _daemon_process = subprocess.Popen(
             ["node", SERVER_SCRIPT],
             cwd=STREAMER_DIR,
             stdout=log_file,
             stderr=log_file,
+            env=env,
             creationflags=creationflags,
         )
         return True
     except Exception as e:
+        streaming_logger.error(f"Failed to spawn node daemon: {e}")
         print(f"[TorrentStreamer] Failed to spawn node daemon: {e}")
         return False
 
@@ -145,7 +163,7 @@ async def ensure_streaming_daemon() -> bool:
     if not started:
         return False
 
-    for _ in range(8):
+    for _ in range(12):
         await asyncio.sleep(0.4)
         if await is_daemon_healthy():
             return True
@@ -174,10 +192,10 @@ async def warm_torrent(
     magnet: Optional[str] = None,
     season: Optional[int] = None,
     episode: Optional[int] = None,
-) -> bool:
+) -> Optional[Dict[str, Any]]:
     """Pre-warms the torrent swarm and pre-buffers headers in background."""
     if not info_hash or info_hash.startswith("cdn_"):
-        return False
+        return None
     await ensure_streaming_daemon()
     try:
         session = await get_http_session()
@@ -188,10 +206,12 @@ async def warm_torrent(
             params["season"] = season
         if episode is not None:
             params["episode"] = episode
-        async with session.get(f"{DAEMON_URL}/warm", params=params, timeout=aiohttp.ClientTimeout(total=3.0)) as resp:
-            return resp.status == 200
+        async with session.get(f"{DAEMON_URL}/warm", params=params, timeout=aiohttp.ClientTimeout(total=4.0)) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            return None
     except Exception:
-        return False
+        return None
 
 
 async def get_torrent_files(magnet_or_hash: str, magnet: Optional[str] = None) -> List[Dict[str, Any]]:

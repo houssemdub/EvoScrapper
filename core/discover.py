@@ -1,5 +1,6 @@
 import asyncio
 import re
+import urllib.parse
 from typing import Dict, List, Optional
 from core.anime_client import AnimeClient
 from core.cache import cache
@@ -449,6 +450,216 @@ async def fetch_discover_detail(
     return detail
 
 
+async def fetch_person_filmography(
+    name: str,
+    limit: int = 36,
+) -> List[DiscoverItem]:
+    """
+    Fetches comprehensive curated filmography (movies and series) for an actor or director.
+    Queries TVMaze for television works, Cinemeta for director credits, and Wikipedia
+    filmography tables with parallel IMDb metadata resolution.
+    """
+    clean_name = (name or "").strip()
+    if not clean_name or len(clean_name) < 2:
+        return []
+
+    cache_key = f"discover:filmography:{clean_name.lower()}:{limit}"
+    cached = await cache.get(cache_key)
+    if cached:
+        return cached
+
+    items: List[DiscoverItem] = []
+    seen_ids = set()
+
+    # 1. Query Wikipedia filmography wikitext/links and resolve titles in parallel
+    try:
+        clean_wiki = clean_name.replace(" ", "_")
+        film_titles = []
+        for page in [f"{clean_wiki}_filmography", clean_wiki]:
+            url = f"https://en.wikipedia.org/w/api.php?action=parse&page={urllib.parse.quote(page)}&prop=wikitext&format=json"
+            res = await http_client.get_json(url, timeout=3.5)
+            if res and "parse" in res:
+                wt = res.get("parse", {}).get("wikitext", {}).get("*", "")
+                pattern = r"''\[\[([^\]\|]+)(?:\|[^\]]+)?\]\]''"
+                raw_matches = re.findall(pattern, wt)
+                for t in raw_matches:
+                    if any(t.startswith(prefix) for prefix in ("Category:", "File:", "Template:", "Special:", "Help:", "Portal:")):
+                        continue
+                    clean_t = re.sub(r"\s*\([^)]*\)$", "", t).strip()
+                    if clean_t and len(clean_t) >= 2:
+                        film_titles.append(clean_t)
+                if len(film_titles) >= 5:
+                    break
+
+        # Fallback to prop=links if wikitext table parsing was empty
+        if not film_titles:
+            for page in [f"{clean_wiki}_filmography", clean_wiki]:
+                url = f"https://en.wikipedia.org/w/api.php?action=parse&page={urllib.parse.quote(page)}&prop=links&format=json"
+                res = await http_client.get_json(url, timeout=3.0)
+                if res and "parse" in res:
+                    links = [l["*"] for l in res["parse"].get("links", [])]
+                    for l in links:
+                        if any(l.startswith(prefix) for prefix in ("Help:", "Wikipedia:", "Category:", "Portal:", "Template:", "Special:", "File:")):
+                            continue
+                        low = l.lower()
+                        if "(film)" in low or "(19" in low or "(20" in low or "(tv series)" in low:
+                            idx = l.rfind("(")
+                            clean_link = l[:idx].strip() if idx > 0 else l
+                            film_titles.append(clean_link)
+                    if len(film_titles) >= 4:
+                        break
+
+        film_titles_dedup = list(dict.fromkeys(film_titles))[:35]
+        sem = asyncio.Semaphore(6)
+
+        async def resolve_imdb_title(t_name: str) -> Optional[DiscoverItem]:
+            slug = re.sub(r"[^a-zA-Z0-9\s]", "", t_name).strip().lower().replace(" ", "_")
+            if not slug:
+                return None
+            first_c = slug[0] if slug else "x"
+            s_url = f"https://v3.sg.media-imdb.com/suggestion/{first_c}/{slug}.json"
+            async with sem:
+                try:
+                    s_data = await http_client.get_json(s_url, timeout=3.5)
+                    entries = (s_data.get("d") or []) if isinstance(s_data, dict) else []
+                    for it in entries:
+                        ent_id = it.get("id") or ""
+                        if ent_id.startswith("tt") and ent_id not in seen_ids:
+                            seen_ids.add(ent_id)
+                            img = it.get("i", {}).get("imageUrl") if isinstance(it.get("i"), dict) else None
+                            inferred_type = "movie" if it.get("q") == "feature" else "series"
+                            return DiscoverItem(
+                                id=ent_id,
+                                title=it.get("l") or t_name,
+                                type=inferred_type,
+                                year=str(it.get("y")) if it.get("y") else None,
+                                poster=_normalize_poster(img),
+                                description=f"Credits: {it.get('s', clean_name)}",
+                            )
+                except Exception:
+                    pass
+            return None
+
+        wiki_resolved = await asyncio.gather(*[resolve_imdb_title(t) for t in film_titles_dedup])
+        for it in wiki_resolved:
+            if it:
+                items.append(it)
+    except Exception:
+        pass
+
+    # 2. Query TVMaze for television credits (matches person name to prevent false matches)
+    try:
+        tv_search_url = f"https://api.tvmaze.com/search/people?q={urllib.parse.quote(clean_name)}"
+        people = await http_client.get_json(tv_search_url, timeout=2.5)
+        if isinstance(people, list) and people:
+            target_person = None
+            for p_entry in people:
+                p_name = p_entry.get("person", {}).get("name", "").strip().lower()
+                if p_name == clean_name.lower():
+                    target_person = p_entry.get("person")
+                    break
+
+            if target_person and target_person.get("id"):
+                p_id = target_person["id"]
+                cast_url = f"https://api.tvmaze.com/people/{p_id}/castcredits?embed=show"
+                crew_url = f"https://api.tvmaze.com/people/{p_id}/crewcredits?embed=show"
+                cred_responses = await asyncio.gather(
+                    http_client.get_json(cast_url, timeout=3.0),
+                    http_client.get_json(crew_url, timeout=3.0),
+                    return_exceptions=True,
+                )
+                tv_count = 0
+                for res in cred_responses:
+                    if isinstance(res, list):
+                        for cred in res:
+                            if tv_count >= 8:
+                                break
+                            show = cred.get("_embedded", {}).get("show")
+                            if not show:
+                                continue
+                            imdb_id = show.get("externals", {}).get("imdb")
+                            ident = imdb_id if (imdb_id and imdb_id.startswith("tt")) else f"tvmaze:{show.get('id')}"
+                            if ident in seen_ids:
+                                continue
+                            seen_ids.add(ident)
+                            poster_img = show.get("image", {}).get("original") or show.get("image", {}).get("medium")
+                            premiered = show.get("premiered") or ""
+                            year_str = premiered[:4] if len(premiered) >= 4 else None
+                            rating_val = str(show.get("rating", {}).get("average")) if show.get("rating", {}).get("average") else None
+                            desc = (show.get("summary") or "").replace("<p>", "").replace("</p>", "").replace("<b>", "").replace("</b>", "").strip()
+                            items.append(
+                                DiscoverItem(
+                                    id=ident,
+                                    title=show.get("name") or clean_name,
+                                    type="series",
+                                    year=year_str,
+                                    poster=_normalize_poster(poster_img),
+                                    rating=rating_val,
+                                    genres=show.get("genres") or [],
+                                    description=desc,
+                                )
+                            )
+                            tv_count += 1
+    except Exception:
+        pass
+
+    # 3. Query Cinemeta for director/crew catalog entries
+    surname = clean_name.split()[-1].lower() if clean_name.split() else ""
+    for t in ("movie", "series"):
+        for cat in ("top", "imdbRating"):
+            try:
+                endpoint = f"https://v3-cinemeta.strem.io/catalog/{t}/{cat}/search={urllib.parse.quote(clean_name)}.json"
+                data = await http_client.get_json(endpoint, timeout=3.5)
+                metas = (data.get("metas") or []) if isinstance(data, dict) else []
+                for m in metas:
+                    imdb_id = m.get("imdb_id") or m.get("id")
+                    if not imdb_id or not str(imdb_id).startswith("tt") or str(imdb_id) in seen_ids:
+                        continue
+                    m_name = (m.get("name") or "").lower()
+                    m_dir = str(m.get("director") or "").lower()
+                    if surname and surname not in m_name and surname not in m_dir:
+                        continue
+                    seen_ids.add(str(imdb_id))
+                    items.append(
+                        DiscoverItem(
+                            id=str(imdb_id),
+                            title=m.get("name") or clean_name,
+                            type=m.get("type") or t,
+                            year=str(m.get("year")) if m.get("year") else None,
+                            poster=_normalize_poster(m.get("poster")),
+                            backdrop=m.get("background"),
+                            rating=str(m.get("imdbRating")) if m.get("imdbRating") else None,
+                            genres=m.get("genres") or [],
+                            description=m.get("description"),
+                        )
+                    )
+            except Exception:
+                pass
+
+    # Sort filmography by poster availability, person match in credits, and recency
+    def _film_rank(it: DiscoverItem) -> tuple:
+        has_post = 1 if it.poster else 0
+        desc_low = (it.description or "").lower()
+        stars_person = 1 if surname and surname in desc_low else 0
+        try:
+            r = float(it.rating or 0)
+        except Exception:
+            r = 0.0
+        try:
+            y = int(it.year or 0)
+        except Exception:
+            y = 0
+        return (has_post, stars_person, r, y)
+
+    items.sort(key=_film_rank, reverse=True)
+    res_items = items[:limit]
+
+    if res_items:
+        await cache.set(cache_key, res_items, ttl=86400)  # 24 hours
+
+    return res_items
+
+
 async def search_catalog(
     query: str,
     media_type: Optional[str] = None,
@@ -510,42 +721,67 @@ async def search_catalog(
                 pass
 
     # Augment with IMDb suggestions for comprehensive filmography and cast results
+    film_item_ids = set()
+    entries = []
     try:
         slug = re.sub(r"[^a-zA-Z0-9\s]", "", clean_q).strip().lower().replace(" ", "_")
         if slug:
-            endpoint = f"https://v3.sg.media-imdb.com/suggestion/x/{slug}.json"
-            data = await http_client.get_json(endpoint, timeout=3.5)
+            first_c = slug[0] if slug else "x"
+            endpoint = f"https://v3.sg.media-imdb.com/suggestion/{first_c}/{slug}.json"
+            data = await http_client.get_json(endpoint, timeout=5.0)
             entries = (data.get("d") or []) if isinstance(data, dict) else []
-            for it in entries:
-                entry_id = it.get("id") or ""
-                if entry_id.startswith("tt") and entry_id not in seen_ids:
-                    seen_ids.add(entry_id)
-                    img = it.get("i", {}).get("imageUrl") if isinstance(it.get("i"), dict) else None
-                    inferred = "anime" if media_type == "anime" else ("movie" if it.get("q") == "feature" else "series")
-                    items.append(
-                        DiscoverItem(
-                            id=entry_id,
-                            title=it.get("l") or clean_q,
-                            type=inferred,
-                            year=str(it.get("y")) if it.get("y") else None,
-                            poster=img,
-                            description=f"Starring: {it.get('s', '')}",
-                        )
-                    )
     except Exception:
-        pass
+        entries = []
+
+    has_person_match = any((it.get("id") or "").startswith("nm") for it in entries)
+    # If explicit person match or multi-word query likely to be a person name
+    if has_person_match or (len(clean_q.split()) >= 2 and not any(it.title.lower() == clean_q.lower() for it in items)):
+        try:
+            film_items = await fetch_person_filmography(clean_q, limit=25)
+            for f_it in film_items:
+                film_item_ids.add(f_it.id)
+                if f_it.id not in seen_ids:
+                    seen_ids.add(f_it.id)
+                    items.append(f_it)
+        except Exception:
+            pass
+
+    for it in entries:
+        entry_id = it.get("id") or ""
+        if entry_id.startswith("tt") and entry_id not in seen_ids:
+            seen_ids.add(entry_id)
+            img = it.get("i", {}).get("imageUrl") if isinstance(it.get("i"), dict) else None
+            inferred = "anime" if media_type == "anime" else ("movie" if it.get("q") == "feature" else "series")
+            items.append(
+                DiscoverItem(
+                    id=entry_id,
+                    title=it.get("l") or clean_q,
+                    type=inferred,
+                    year=str(it.get("y")) if it.get("y") else None,
+                    poster=img,
+                    description=f"Starring: {it.get('s', '')}",
+                )
+            )
 
     # Intelligently rank search results:
     # 1. Acclaimed titles with valid posters and ratings appear at the top
-    # 2. Prefer titles matching query or having high IMDb ratings
+    # 2. Prefer filmography items or real title matches over fan clips / tabloids
     def _search_rank(item: DiscoverItem) -> tuple:
         has_poster = 1 if item.poster else 0
+        desc_low = (item.description or "").lower()
+        title_lower = (item.title or "").lower()
+        is_fan_doc = 1 if any(doc in title_lower for doc in ("couple of the year", "hollywood hunk", "pretty face", "wanna be", "dies alot", "breaking hollywood", "celebrity news")) else 0
+        is_filmography = 1 if item.id in film_item_ids or clean_q.lower() in desc_low else 0
+        is_title_match = 1 if clean_q.lower() in title_lower and not is_fan_doc else 0
         try:
             r = float(item.rating or 0)
         except (ValueError, TypeError):
             r = 0.0
-        is_exact = 1 if clean_q.lower() in (item.title or "").lower() else 0
-        return (has_poster, is_exact, r)
+        try:
+            y = int(item.year or 0)
+        except (ValueError, TypeError):
+            y = 0
+        return (has_poster, 1 - is_fan_doc, 1 if (is_filmography or is_title_match) else 0, r, y)
 
     items.sort(key=_search_rank, reverse=True)
 
@@ -594,6 +830,15 @@ async def get_discover_suggestions(
             endpoint = f"https://v3.sg.media-imdb.com/suggestion/x/{slug}.json"
             data = await http_client.get_json(endpoint, timeout=2.5)
             entries = (data.get("d") or []) if isinstance(data, dict) else []
+            # If search matches a person entity (nm...), retrieve their filmography works
+            has_person_match = any((it.get("id") or "").startswith("nm") for it in entries)
+            if has_person_match:
+                film_items = await fetch_person_filmography(clean_q, limit=20)
+                for f_it in film_items:
+                    if f_it.id not in seen_ids:
+                        seen_ids.add(f_it.id)
+                        items.append(f_it)
+
             for it in entries:
                 entry_id = it.get("id") or ""
                 if not entry_id.startswith("tt") or entry_id in seen_ids:

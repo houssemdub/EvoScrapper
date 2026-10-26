@@ -9,6 +9,7 @@ from core.client import http_client
 from core.security import validate_outbound_proxy_url, verify_api_key
 from models.subtitle import SubtitleItem, SubtitleSearchResponse
 from providers.subtitles import SUBTITLE_PROVIDERS
+from core.logger import subtitles_logger
 
 router = APIRouter(prefix="/api/v1/subtitles", tags=["Subtitles"], dependencies=[Depends(verify_api_key)])
 

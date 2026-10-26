@@ -27,6 +27,7 @@ from core.transmuxer import (
     stream_hls_ts_segment,
     stream_transmuxed_video,
 )
+from core.logger import debrid_logger, streaming_logger
 from models.stream import LaunchVlcRequest, StreamResolveResponse
 
 router = APIRouter(prefix="/api/v1/stream", tags=["Streaming"], dependencies=[Depends(verify_api_key)])
@@ -94,12 +95,16 @@ async def warm_swarm_endpoint(
     info_hash: str = Query(..., description="Torrent info hash"),
     file_idx: int = Query(0, description="File index inside torrent"),
     magnet: Optional[str] = Query(None, description="Original magnet link with trackers"),
+    season: Optional[int] = Query(None, description="Season number (for series/anime)"),
+    episode: Optional[int] = Query(None, description="Episode number (for series/anime)"),
 ):
     """
     Pre-warms the torrent swarm and pre-buffers headers in background for instant playback.
     """
-    success = await warm_torrent(info_hash, file_idx=file_idx, magnet=magnet)
-    return {"status": "warming" if success else "failed", "info_hash": info_hash}
+    data = await warm_torrent(info_hash, file_idx=file_idx, magnet=magnet, season=season, episode=episode)
+    if isinstance(data, dict):
+        return data
+    return {"status": "warming" if data else "failed", "info_hash": info_hash}
 
 
 @router.get("/play")
@@ -134,7 +139,7 @@ async def stream_raw_torrent(
             upstream_resp = await session.get(
                 target_url,
                 headers=req_headers,
-                timeout=aiohttp.ClientTimeout(total=35.0, sock_connect=5.0),
+                timeout=aiohttp.ClientTimeout(total=45.0, sock_connect=8.0),
             )
             # If 503 (swarm buffering with Retry-After), wait briefly and retry
             if upstream_resp.status == 503 and attempt < 3:
@@ -562,6 +567,7 @@ async def resolve_debrid_stream(
     Resolves a cached torrent to an unthrottled 1Gbps HTTPS direct cloud streaming link
     via Real-Debrid, AllDebrid, or TorBox.
     """
+    debrid_logger.info(f"Resolving Debrid stream info_hash={info_hash} file_idx={file_idx} provider={provider}")
     from core.debrid.manager import get_debrid_manager
     manager = get_debrid_manager()
     result = await manager.resolve_stream(
@@ -634,6 +640,7 @@ async def get_debrid_statuses():
     """
     Returns account and connection statuses for all configured Debrid providers.
     """
+    debrid_logger.info(f"Resolving Debrid stream info_hash={info_hash} file_idx={file_idx} provider={provider}")
     from core.debrid.manager import get_debrid_manager
     manager = get_debrid_manager()
     statuses = await manager.get_all_statuses()

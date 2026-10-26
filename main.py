@@ -1,12 +1,14 @@
 import os
+import time
 from contextlib import asynccontextmanager
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from config import settings
 from core.client import http_client
+from core.logger import app_logger
 from routers import (
     discover_router,
     health_router,
@@ -35,16 +37,20 @@ async def lifespan(app: FastAPI):
     if settings.DEBRID_PROXY_SECRET == "evoscrapper-debrid-proxy-secret-key":
         print("  [!] Security Advisory: DEBRID_PROXY_SECRET is using default placeholder.", flush=True)
     print("=" * 58 + "\n", flush=True)
+    app_logger.info(f"EvoScrapper v2.0 live on http://{host_display}:{settings.PORT}")
 
     # Start Node.js WebTorrent streaming micro-daemon
     try:
         from core.torrent_streamer import ensure_streaming_daemon
         daemon_ok = await ensure_streaming_daemon()
         if daemon_ok:
+            app_logger.info("WebTorrent streaming daemon online at http://127.0.0.1:8889")
             print("[+] WebTorrent streaming daemon online at http://127.0.0.1:8889", flush=True)
         else:
+            app_logger.warning("Streaming daemon not responding at startup")
             print("[!] Warning: Streaming daemon not responding at startup", flush=True)
     except Exception as e:
+        app_logger.error(f"Streaming daemon startup notice: {e}")
         print(f"[!] Streaming daemon startup notice: {e}", flush=True)
 
     # Start CometNet P2P mesh networking node
@@ -52,11 +58,14 @@ async def lifespan(app: FastAPI):
         try:
             from core.cometnet import get_cometnet_node
             await get_cometnet_node().start()
+            app_logger.info("CometNet P2P metadata mesh listener started")
             print("[+] CometNet P2P metadata mesh listener started", flush=True)
         except Exception as e:
+            app_logger.error(f"CometNet startup notice: {e}")
             print(f"[!] CometNet startup notice: {e}", flush=True)
 
     yield
+    app_logger.info("EvoScrapper shutting down, closing connection pools...")
     print("[*] EvoScrapper shutting down, closing connection pools...")
     if getattr(settings, "COMETNET_ENABLED", False):
         try:
@@ -95,6 +104,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        app_logger.info(f"{request.method} {request.url.path} - {response.status_code} ({elapsed_ms:.1f}ms)")
+        return response
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        app_logger.error(f"{request.method} {request.url.path} - Exception: {exc} ({elapsed_ms:.1f}ms)", exc_info=True)
+        raise exc
 
 # Mount Static Files
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

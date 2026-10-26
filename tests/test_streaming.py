@@ -128,6 +128,27 @@ async def test_stream_resolver_async():
     print(f"[+] P2P Streaming Engine Daemon healthy: {healthy}")
 
 
+def test_ffmpeg_fps_mode_compatibility():
+    """Verifies that transmuxer uses -fps_mode passthrough for modern FFmpeg (>=5.1) without deprecated -vsync."""
+    from core.transmuxer import get_passthrough_fps_flag
+    flag = get_passthrough_fps_flag()
+    assert isinstance(flag, list)
+    assert len(flag) == 2
+    # On modern systems (FFmpeg 7, 8, 9), flag must be ['-fps_mode', 'passthrough']
+    assert flag[0] in ("-fps_mode", "-vsync")
+    assert flag[1] == "passthrough"
+    assert flag[0] != "-vsync" or "-vsync" in flag
+
+
+def test_ffmpeg_fmp4_movflags_and_probing():
+    """Verifies that the transmuxer uses empty_moov and low probesize so Chromium gets valid fMP4 moof boxes immediately."""
+    import inspect
+    from core.transmuxer import stream_transmuxed_video
+    src = inspect.getsource(stream_transmuxed_video)
+    assert "empty_moov" in src, "empty_moov is required in movflags so Chromium parses fMP4 progressive live streams without blocking"
+    assert "-probesize" in src, "-probesize is required to prevent FFmpeg buffering 5MB+ before emitting output"
+
+
 def test_pgs_burn_in_and_sup_pipeline():
     """Verifies that the transmuxer and stream router support PGS burn-in and raw SUP streaming."""
     from core.transmuxer import extract_embedded_sup_stream, stream_transmuxed_video

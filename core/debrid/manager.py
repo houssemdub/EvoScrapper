@@ -8,6 +8,7 @@ from core.debrid.torbox import TorboxClient
 from core.debrid.debridlink import DebridLinkClient
 from core.debrid.premiumize import PremiumizeClient
 from core.debrid.pikpak import PikPakClient
+from core.logger import debrid_logger
 
 
 class DebridManager:

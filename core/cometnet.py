@@ -11,8 +11,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from config import settings
+from core.logger import cometnet_logger
 
-logger = logging.getLogger("CometNet")
+logger = cometnet_logger
 
 
 class CometMessageType(str, Enum):

@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 from typing import AsyncGenerator, List, Optional
+from core.logger import streaming_logger, subtitles_logger
 
 
 def find_ffmpeg() -> Optional[str]:
@@ -35,6 +36,34 @@ def find_vlc() -> Optional[str]:
         if c and os.path.isfile(c):
             return c
     return None
+
+
+_FFMPEG_SUPPORTS_FPS_MODE: Optional[bool] = None
+
+
+def get_passthrough_fps_flag() -> List[str]:
+    """
+    Returns the appropriate passthrough framerate flag:
+    Modern FFmpeg (>=5.1, including 6, 7, 8, 9) uses ['-fps_mode', 'passthrough'].
+    Deprecated legacy FFmpeg (<5.1) used ['-vsync', 'passthrough'].
+    """
+    global _FFMPEG_SUPPORTS_FPS_MODE
+    if _FFMPEG_SUPPORTS_FPS_MODE is None:
+        try:
+            ffmpeg_bin = find_ffmpeg() or "ffmpeg"
+            proc = subprocess.run(
+                [ffmpeg_bin, "-version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=2,
+            )
+            out = proc.stdout.decode("utf-8", errors="ignore")
+            m = re.search(r"version\s+(\d+)", out)
+            major = int(m.group(1)) if m else 7
+            _FFMPEG_SUPPORTS_FPS_MODE = (major >= 5)
+        except Exception:
+            _FFMPEG_SUPPORTS_FPS_MODE = True
+    return ["-fps_mode", "passthrough"] if _FFMPEG_SUPPORTS_FPS_MODE else ["-vsync", "passthrough"]
 
 
 def find_ffprobe() -> Optional[str]:
@@ -304,16 +333,20 @@ async def stream_transmuxed_video(
             "-reconnect", "1",
             "-reconnect_at_eof", "1",
             "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "5",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_delay_max", "15",
         ])
 
     cmd.extend([
         "-probesize", "524288",         # 512KB probe for ultra-low latency playback initiation
         "-analyzeduration", "1000000",  # 1s header analysis for multi-track streams
+        "-fflags", "+genpts+discardcorrupt",
     ])
 
     # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes
     if start_seconds and start_seconds > 0:
+        if not transcode_video and burn_sub_idx is None:
+            cmd.append("-noaccurate_seek")
         cmd.extend(["-ss", f"{start_seconds:.2f}"])
 
     if duration_seconds and duration_seconds > 0:
@@ -346,13 +379,13 @@ async def stream_transmuxed_video(
     else:
         cmd.extend([
             "-c:v", "copy",
-            "-vsync", "passthrough",       # Preserve original video PTS (avoids A/V drift from copy)
+            *get_passthrough_fps_flag(),       # Preserve original video PTS (avoids A/V drift from copy)
         ])
 
     # Build audio filter chain with full timestamp correction:
-    # 1. aresample=async=1000 dynamically synchronizes audio clock to video stream without PTS desync
+    # 1. aresample=async=1:first_pts=0 dynamically synchronizes audio clock to video stream with instant start alignment
     # 2. volume boost restores center channel dialogue lost during 5.1/7.1 downmix
-    af_filters = ["aresample=async=1000"]
+    af_filters = ["aresample=async=1:first_pts=0:min_hard_comp=0.100000"]
     if audio_boost and audio_boost > 0:
         af_filters.append(f"volume={audio_boost:.2f}")
 
@@ -365,7 +398,7 @@ async def stream_transmuxed_video(
         "-dn",                          # Strip data streams
         "-avoid_negative_ts", "make_zero",  # Fix negative PTS timestamps from seek operations
         "-max_muxing_queue_size", "2048",   # Prevent queue starvation on multi-track streams
-        "-movflags", "frag_keyframe+default_base_moof",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
         "-flush_packets", "1",
         "-f", "mp4",
         "pipe:1",
@@ -419,7 +452,8 @@ async def stream_hls_ts_segment(
             "-reconnect", "1",
             "-reconnect_at_eof", "1",
             "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "5",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_delay_max", "15",
         ])
 
     cmd.extend([
@@ -432,6 +466,7 @@ async def stream_hls_ts_segment(
         "-c:a", "aac",
         "-b:a", "192k",
         "-ac", "2",
+        "-af", "aresample=async=1:first_pts=0",
         "-sn",
         "-dn",
         "-f", "mpegts",
@@ -724,6 +759,7 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
             "-reconnect", "1",
             "-reconnect_at_eof", "1",
             "-reconnect_streamed", "1",
+            "-reconnect_on_network_error", "1",
             "-reconnect_delay_max", "5",
         ])
     cmd.extend([
@@ -742,10 +778,18 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20.0)
-        text = stdout.decode("utf-8", errors="replace")
-        err_text = stderr.decode("utf-8", errors="replace").lower()
-        if text.strip():
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            stdout, stderr = await proc.communicate()
+
+        text = stdout.decode("utf-8", errors="replace") if stdout else ""
+        err_text = stderr.decode("utf-8", errors="replace").lower() if stderr else ""
+        if text.strip() and ("-->" in text or "WEBVTT" in text):
             return sanitize_webvtt_content(text)
         if "bitmap" in err_text or "pgs" in err_text:
             return (
@@ -774,6 +818,7 @@ async def extract_embedded_sup_stream(source_url: str, sub_stream_index: int = 0
             "-reconnect", "1",
             "-reconnect_at_eof", "1",
             "-reconnect_streamed", "1",
+            "-reconnect_on_network_error", "1",
             "-reconnect_delay_max", "5",
         ])
     cmd.extend([

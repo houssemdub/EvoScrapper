@@ -4,11 +4,13 @@ from core.cache import cache
 from core.discover import (
     fetch_catalog,
     fetch_discover_detail,
+    fetch_person_filmography,
     fetch_recommendations,
     get_discover_suggestions,
     search_catalog,
 )
 from models.discover import DiscoverCatalogResponse, DiscoverDetail, DiscoverItem
+from core.logger import discover_logger
 
 router = APIRouter(prefix="/api/v1/discover", tags=["Discover"])
 
@@ -111,3 +113,15 @@ async def get_discover_suggestions_route(
     Ultra-fast autocomplete search suggestions matching titles, years, and posters.
     """
     return await get_discover_suggestions(query=q, media_type=type.lower() if type else "all", limit=limit)
+
+
+@router.get("/filmography", response_model=List[DiscoverItem])
+async def get_discover_filmography(
+    name: str = Query(..., min_length=2, description="Actor, director, or creator name"),
+    limit: int = Query(36, ge=1, le=100, description="Max titles to return"),
+):
+    """
+    Fetches comprehensive curated filmography (movies and series) for an actor or director.
+    """
+    return await fetch_person_filmography(name=name, limit=limit)
+

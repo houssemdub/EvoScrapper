@@ -9,6 +9,7 @@ from core.cache import cache
 from core.security import verify_api_key
 from models.torrent import TorrentItem, TorrentSearchResponse
 from providers.torrents import TORRENT_PROVIDERS
+from core.logger import scrapers_logger
 
 router = APIRouter(prefix="/api/v1/torrents", tags=["Torrents"], dependencies=[Depends(verify_api_key)])
 
@@ -29,7 +30,10 @@ async def search_torrents(
     cache_key = f"torrent_search:{provider}:{query}:{category}:{resolution}:{min_seeders}:{limit}"
     cached = await cache.get(cache_key)
     if cached:
+        scrapers_logger.info(f"Cache hit for query='{query}' provider='{provider}'")
         return cached
+
+    scrapers_logger.info(f"Searching torrents for query='{query}' provider='{provider}' category={category}")
 
     start = time.time()
     query_str = query.strip()

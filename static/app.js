@@ -1180,10 +1180,34 @@ async function openMediaModal(title, infoHash, magnet) {
 
     const crewHtml = [];
     if (meta.director) {
-      crewHtml.push(`<div>Director: <span>${escapeHtml(meta.director)}</span></div>`);
+      const directorList = Array.isArray(meta.director)
+        ? meta.director
+        : (typeof meta.director === 'string' ? meta.director.split(',').map((s) => s.trim()).filter(Boolean) : []);
+      const directorPills = directorList.map((d) => {
+        const dName = typeof d === 'object' && d ? (d.name || '') : String(d);
+        return `<button type="button" class="cast-pill director-pill" onclick="searchDiscoverByPerson('${escapeJs(dName)}')" title="View ${escapeHtml(dName)}'s filmography"><i class="fa-solid fa-film" style="font-size:0.65rem;opacity:0.7;"></i> ${escapeHtml(dName)}</button>`;
+      }).join('');
+      if (directorPills) {
+        crewHtml.push(`<div class="crew-row" style="margin-bottom:0.4rem;"><span class="crew-label" style="font-size:0.7rem;font-weight:700;color:var(--text-dim);margin-right:0.5rem;">DIRECTOR:</span><span class="cast-pills-wrap" style="display:inline-flex;flex-wrap:wrap;gap:0.35rem;">${directorPills}</span></div>`);
+      }
     }
     if (meta.cast && meta.cast.length > 0) {
-      crewHtml.push(`<div>Cast: <span>${escapeHtml(meta.cast.join(', '))}</span></div>`);
+      const castList = Array.isArray(meta.cast)
+        ? meta.cast
+        : (typeof meta.cast === 'string' ? meta.cast.split(',').map((s) => s.trim()).filter(Boolean) : []);
+      const maxCastVisible = 8;
+      const visibleCast = castList.slice(0, maxCastVisible);
+      const hiddenCount = castList.length - visibleCast.length;
+      const castPills = visibleCast.map((c) => {
+        const cName = typeof c === 'object' && c ? (c.name || '') : String(c);
+        return `<button type="button" class="cast-pill" onclick="searchDiscoverByPerson('${escapeJs(cName)}')" title="View ${escapeHtml(cName)}'s filmography">${escapeHtml(cName)}</button>`;
+      }).join('');
+      const moreBtn = hiddenCount > 0 ? `<button type="button" class="cast-pill cast-pill-more" onclick="this.parentElement.querySelectorAll('.cast-pill-hidden').forEach(el=>el.classList.remove('cast-pill-hidden'));this.remove()">+${hiddenCount} more</button>` : '';
+      const hiddenCastPills = castList.slice(maxCastVisible).map((c) => {
+        const cName = typeof c === 'object' && c ? (c.name || '') : String(c);
+        return `<button type="button" class="cast-pill cast-pill-hidden" onclick="searchDiscoverByPerson('${escapeJs(cName)}')" title="View ${escapeHtml(cName)}'s filmography" style="display:none;">${escapeHtml(cName)}</button>`;
+      }).join('');
+      crewHtml.push(`<div class="crew-row" style="margin-bottom:0.4rem;"><span class="crew-label" style="font-size:0.7rem;font-weight:700;color:var(--text-dim);margin-right:0.5rem;">CAST:</span><span class="cast-pills-wrap" style="display:inline-flex;flex-wrap:wrap;gap:0.35rem;">${castPills}${hiddenCastPills}${moreBtn}</span></div>`);
     }
 
     const trailerBtn = meta.trailer_embed
@@ -2192,17 +2216,30 @@ async function openDiscoverModal(id, type) {
 
     const genreBadges = (detail.genres || []).map((g) => `<span class="tag tag-source">${escapeHtml(g)}</span>`).join('');
 
-    const directorRow = detail.director
-      ? `<div class="crew-row"><span class="crew-label">DIRECTOR</span><span class="cast-pills-wrap"><button type="button" class="cast-pill director-pill" onclick="searchDiscoverByPerson(${JSON.stringify(detail.director)})" title="View ${escapeHtml(detail.director)}'s filmography"><i class="fa-solid fa-film" style="font-size:0.65rem;opacity:0.7;"></i> ${escapeHtml(detail.director)}</button></span></div>`
+    const directorList = Array.isArray(detail.director)
+      ? detail.director
+      : (typeof detail.director === 'string' ? detail.director.split(',').map(s => s.trim()).filter(Boolean) : []);
+    const directorPills = directorList.map((d) => {
+      const dName = typeof d === 'object' && d ? (d.name || '') : String(d);
+      return `<button type="button" class="cast-pill director-pill" onclick="searchDiscoverByPerson('${escapeJs(dName)}')" title="View ${escapeHtml(dName)}'s filmography"><i class="fa-solid fa-film" style="font-size:0.65rem;opacity:0.7;"></i> ${escapeHtml(dName)}</button>`;
+    }).join('');
+    const directorRow = directorList.length > 0
+      ? `<div class="crew-row"><span class="crew-label">DIRECTOR</span><span class="cast-pills-wrap">${directorPills}</span></div>`
       : '';
 
     const maxCastVisible = 8;
     const castList = detail.cast || [];
     const visibleCast = castList.slice(0, maxCastVisible);
     const hiddenCount = castList.length - visibleCast.length;
-    const castPills = visibleCast.map((c, i) => `<button type="button" class="cast-pill" onclick="searchDiscoverByPerson(${JSON.stringify(c)})" title="View ${escapeHtml(c)}'s filmography">${escapeHtml(c)}</button>`).join('');
+    const castPills = visibleCast.map((c) => {
+      const cName = typeof c === 'object' && c ? (c.name || '') : String(c);
+      return `<button type="button" class="cast-pill" onclick="searchDiscoverByPerson('${escapeJs(cName)}')" title="View ${escapeHtml(cName)}'s filmography">${escapeHtml(cName)}</button>`;
+    }).join('');
     const moreBtn = hiddenCount > 0 ? `<button type="button" class="cast-pill cast-pill-more" onclick="this.parentElement.querySelectorAll('.cast-pill-hidden').forEach(el=>el.classList.remove('cast-pill-hidden'));this.remove()">+${hiddenCount} more</button>` : '';
-    const hiddenCastPills = castList.slice(maxCastVisible).map(c => `<button type="button" class="cast-pill cast-pill-hidden" onclick="searchDiscoverByPerson(${JSON.stringify(c)})" title="View ${escapeHtml(c)}'s filmography" style="display:none;">${escapeHtml(c)}</button>`).join('');
+    const hiddenCastPills = castList.slice(maxCastVisible).map(c => {
+      const cName = typeof c === 'object' && c ? (c.name || '') : String(c);
+      return `<button type="button" class="cast-pill cast-pill-hidden" onclick="searchDiscoverByPerson('${escapeJs(cName)}')" title="View ${escapeHtml(cName)}'s filmography" style="display:none;">${escapeHtml(cName)}</button>`;
+    }).join('');
     const castRow = castList.length > 0
       ? `<div class="crew-row"><span class="crew-label">CAST</span><span class="cast-pills-wrap">${castPills}${hiddenCastPills}${moreBtn}</span></div>`
       : '';
@@ -2325,19 +2362,66 @@ async function openDiscoverModal(id, type) {
   }
 }
 
-function searchDiscoverByPerson(name) {
+async function searchDiscoverByPerson(name) {
   if (!name) return;
+  const personName = (typeof name === 'object' && name ? (name.name || String(name)) : String(name)).trim();
   closeDiscoverModal();
+  closeMediaModal();
+  closePlayerModal();
+  const tModal = document.getElementById('torrent-files-modal');
+  if (tModal) tModal.classList.add('hidden');
+  const sModal = document.getElementById('status-modal');
+  if (sModal) sModal.classList.add('hidden');
+  state.discover.loaded = true;
   switchTab('discover');
   state.discover.type = 'all';
-  document.querySelectorAll('.discover-type-pill').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.type === 'all');
+  document.querySelectorAll('[data-dcat]').forEach((btn) => {
+    btn.classList.remove('active');
   });
   const input = document.getElementById('discover-search-input');
   if (input) {
-    input.value = name;
+    input.value = personName;
   }
-  searchDiscoverCatalog();
+
+  // Smooth scroll up to catalog view
+  const catSection = document.getElementById('discover-catalog-section') || document.getElementById('discover-grid');
+  if (catSection) catSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const grid = document.getElementById('discover-grid');
+  const loading = document.getElementById('discover-loading');
+  const moreWrap = document.getElementById('discover-more-wrap');
+  const banner = document.getElementById('discover-hero-banner');
+  if (banner) banner.classList.add('hidden');
+
+  const heading = document.getElementById('catalog-heading-title');
+  const badge = document.getElementById('catalog-count-badge');
+  if (heading) heading.innerHTML = `<i class="fa-solid fa-film text-accent"></i> Filmography: ${escapeHtml(personName)}`;
+  if (badge) badge.innerText = 'Searching…';
+
+  if (loading) loading.classList.remove('hidden');
+  if (grid) grid.innerHTML = '';
+  if (moreWrap) moreWrap.classList.add('hidden');
+
+  try {
+    const res = await fetch(`/api/v1/discover/filmography?name=${encodeURIComponent(personName)}&limit=36`);
+    let results = [];
+    if (res.ok) {
+      results = await res.json();
+    }
+    // Fallback to general search if filmography returned 0 items
+    if (!results || results.length === 0) {
+      const fbRes = await fetch(`/api/v1/discover/search?query=${encodeURIComponent(personName)}&type=all`);
+      if (fbRes.ok) results = await fbRes.json();
+    }
+
+    state.discover.items = results || [];
+    if (badge) badge.innerText = `${(results || []).length} found`;
+    renderDiscoverGrid(applyDiscoverSort(results || []), false);
+  } catch (err) {
+    showToast(`Could not load filmography: ${err.message}`, 'error');
+  } finally {
+    if (loading) loading.classList.add('hidden');
+  }
 }
 
 async function renderDiscoverRecommendations(type, id) {
@@ -2585,14 +2669,6 @@ function renderStreamFilterAndCards(streams) {
     return;
   }
 
-  // Pre-warm the top stream in background for instantaneous playback
-  if (streams && streams.length > 0 && streams[0].info_hash) {
-    const top = streams[0];
-    const warmUrl = `/api/v1/stream/warm?info_hash=${encodeURIComponent(top.info_hash)}&file_idx=${top.file_idx}` +
-      (top.magnet ? `&magnet=${encodeURIComponent(top.magnet)}` : '');
-    fetch(warmUrl).catch(() => {});
-  }
-
   // Calculate stream quality counts
   const allCount = streams.length;
   const q4kCount = streams.filter(is4kStream).length;
@@ -2749,7 +2825,7 @@ function filterStreamCards() {
                   audioLower.includes('atmos') || audioLower.includes('5.1') || audioLower.includes('ac3');
 
     return `
-      <div class="stream-card" onmouseenter="warmHoveredStream('${escapeJs(s.info_hash)}', ${s.file_idx}, '${escapeJs(s.magnet || '')}')">
+      <div class="stream-card">
         <div class="stream-card-top">
           <span class="stream-badge ${badgeClass}">${escapeHtml(s.name)}</span>
           <span class="text-xs mono text-dim">${escapeHtml(s.tracker)}</span>
@@ -3223,11 +3299,17 @@ function renderCuesToVideo(rawCues, offsetSeconds) {
 function jumpToFirstCue() {
   const video = document.getElementById('evo-video-player');
   const cues = state.subtitles.rawCues;
+  const active = state.discover.activeStream;
   if (!video || !cues || cues.length === 0) return;
   const first = cues[0];
   const offset = state.subtitles.currentOffset || 0;
-  video.currentTime = Math.max(0, first.start + offset - 0.5);
-  video.play().catch(() => {});
+  const target = Math.max(0, first.start + offset - 0.5);
+  if (active && active.useTransmux) {
+    seekPlayer(target);
+  } else {
+    video.currentTime = target;
+    video.play().catch(() => {});
+  }
   const statusPill = document.getElementById('player-sub-status-pill');
   if (statusPill) statusPill.classList.add('hidden');
   showToast(`Jumped to first dialogue (${formatMmSs(first.start)})`, 'info');
@@ -3236,13 +3318,19 @@ function jumpToFirstCue() {
 function jumpToNextCue() {
   const video = document.getElementById('evo-video-player');
   const cues = state.subtitles.rawCues;
+  const active = state.discover.activeStream;
   if (!video || !cues || cues.length === 0) return;
-  const cur = video.currentTime;
+  const cur = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
   const offset = state.subtitles.currentOffset || 0;
   const next = cues.find((c) => (c.start + offset) > (cur + 0.6));
   if (next) {
-    video.currentTime = Math.max(0, (next.start + offset) - 0.2);
-    video.play().catch(() => {});
+    const target = Math.max(0, (next.start + offset) - 0.2);
+    if (active && active.useTransmux) {
+      seekPlayer(target);
+    } else {
+      video.currentTime = target;
+      video.play().catch(() => {});
+    }
     showToast(`Next cue: ${formatMmSs(next.start)}`, 'info');
   }
 }
@@ -3250,13 +3338,19 @@ function jumpToNextCue() {
 function jumpToPrevCue() {
   const video = document.getElementById('evo-video-player');
   const cues = state.subtitles.rawCues;
+  const active = state.discover.activeStream;
   if (!video || !cues || cues.length === 0) return;
-  const cur = video.currentTime;
+  const cur = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
   const offset = state.subtitles.currentOffset || 0;
   const prev = [...cues].reverse().find((c) => (c.end + offset) < (cur - 0.6));
   if (prev) {
-    video.currentTime = Math.max(0, (prev.start + offset) - 0.2);
-    video.play().catch(() => {});
+    const target = Math.max(0, (prev.start + offset) - 0.2);
+    if (active && active.useTransmux) {
+      seekPlayer(target);
+    } else {
+      video.currentTime = target;
+      video.play().catch(() => {});
+    }
     showToast(`Prev cue: ${formatMmSs(prev.start)}`, 'info');
   }
 }
@@ -3488,6 +3582,7 @@ async function autoLoadSubtitles(title, imdbId, season, episode, releaseTitle = 
 }
 
 async function applySubtitle(subItem, isAuto = false) {
+  state.subtitles.userManuallySelected = !isAuto;
   const badge = document.getElementById('player-active-sub-badge');
   if (badge) badge.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-accent"></i> Subs: Loading...`;
 
@@ -3670,22 +3765,30 @@ async function applySubtitle(subItem, isAuto = false) {
 
     // Check for empty or corrupted tracks that cannot be parsed
     if (vttText.includes('NOTE Empty or unsupported') || vttText.includes('Extraction error')) {
-      if (isAuto) {
-        const matchLang = subItem.lang_code || 'en';
-        let textSub = (state.subtitles.availableSubs || []).find(
-          (s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)
+      // Stremio-grade fallback: seamlessly fall back to verified online subtitle (OpenSubtitles/Subdl)
+      const matchLang = subItem.lang_code || 'en';
+      let textSub = (state.subtitles.availableSubs || []).find(
+        (s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)
+      );
+      if (!textSub) {
+        textSub = (state.subtitles.availableSubs || []).find(
+          (s) => !s.is_embedded && !s.is_image_based
         );
-        if (textSub) {
-          await applySubtitle(textSub, true);
-          return;
-        }
+      }
+      if (textSub) {
+        console.log('[EvoPlayer] Live swarm stream: using synchronized online subtitle:', textSub.release_name);
+        await applySubtitle(textSub, true);
+        return;
       }
 
       state.subtitles.rawCues = [];
       state.subtitles.activeTrack = null;
       renderCuesToVideo([], 0.0);
-      if (badge) badge.innerText = 'Subs: Off';
-      showToast('Embedded subtitle track is empty or unsupported. Please select an online subtitle track.', 'warning');
+      if (badge) badge.innerText = 'Subs: Searching...';
+      const active = state.discover.activeStream;
+      if (active) {
+        autoLoadSubtitles(active.title, '', active.season, active.episode, active.title, active.infoHash);
+      }
       return;
     }
 
@@ -7659,18 +7762,13 @@ function showPlayerBufferingHUD() {
       return;
     }
 
-    // Dynamic buffer percentage: combines buffer ahead, session download progress, and elapsed time
+    // Dynamic buffer percentage: measures immediate playback readiness buffer ahead of current playhead
     let bufferPct = 15;
     if (bufferAheadSec > 0) {
-      bufferPct = Math.min(99, Math.max(25, Math.round((bufferAheadSec / 1.5) * 100)));
-    } else if (session && session.buffer_pct) {
-      const p = parseFloat(session.buffer_pct);
-      if (!isNaN(p) && p > 0) {
-        bufferPct = Math.min(99, Math.max(18, Math.round(p)));
-      }
+      bufferPct = Math.min(100, Math.max(30, Math.round((bufferAheadSec / 1.5) * 100)));
     } else {
       const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
-      bufferPct = Math.min(95, Math.max(15, Math.round(elapsedSec * 35)));
+      bufferPct = Math.min(95, Math.max(15, Math.round(elapsedSec * 40)));
     }
 
     if (session && session.download_speed !== undefined) {
@@ -7800,16 +7898,10 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   if (isMkv || hasIncompatibleAudio || isHevcOrUnsupportedVideo || !isDirectStream) {
     useTransmux = true;
   }
+  // Thunder-God speed: ALWAYS default to lossless stream copy (-c:v copy).
+  // Modern browsers (Chrome 107+, Brave, Edge, Safari) decode HEVC natively in fMP4.
+  // Video transcoding is reserved strictly as an error-fallback if the browser's video engine rejects the stream.
   let transcodeVideo = false;
-  if (isHevcOrUnsupportedVideo) {
-    try {
-      const testVid = document.createElement('video');
-      const canPlayHevc = Boolean(testVid.canPlayType && (testVid.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') || testVid.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"')));
-      if (!canPlayHevc) {
-        transcodeVideo = true;
-      }
-    } catch (_) {}
-  }
 
   const numFileIdx = (fileIdx !== null && fileIdx !== undefined && !isNaN(fileIdx)) ? Number(fileIdx) : 0;
   const effectiveFileIdx = numFileIdx > 0 ? numFileIdx : (forceDirectIdx ? numFileIdx : 0);
@@ -7837,6 +7929,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     isDraggingTimeline: false,
     showRemainingTime: false,
   };
+  state.subtitles.userManuallySelected = false;
 
   if (titleEl) {
     const epTag = (!forceDirectIdx && season !== null && episode !== null) ? ` (S${season}E${episode})` : '';
@@ -7960,10 +8053,13 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             try {
               browserSupportsVideo = Boolean(video.canPlayType && (video.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') || video.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"')));
             } catch (_) {
-              browserSupportsVideo = false;
+              browserSupportsVideo = true;
+            }
+            if (!browserSupportsVideo && (navigator.userAgent.includes('Chrome') || navigator.userAgent.includes('Edg') || navigator.userAgent.includes('Safari') || navigator.userAgent.includes('Brave'))) {
+              browserSupportsVideo = true;
             }
           }
-          const videoNeedsTranscode = !browserSupportsVideo || vCodecLower === 'hevc' || vCodecLower === 'h265' || vCodecLower === 'mjpeg';
+          const videoNeedsTranscode = !browserSupportsVideo || vCodecLower === 'mjpeg';
 
           // If currently playing via direct stream but stream has incompatible audio (e.g. EAC3) or video, upgrade immediately to transmuxer
           if (!curActive.useTransmux && (audioNeedsTransmux || videoNeedsTranscode)) {
@@ -8022,6 +8118,18 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             const pgsEmbedded = embeddedSubs.filter(s => s.is_image_based);
             state.subtitles.availableSubs = [...textEmbedded, ...existingOnline, ...pgsEmbedded];
             renderSubtitleTracksList(state.subtitles.availableSubs);
+
+            // Stremio-grade subtitle behavior: If an online subtitle is already active and loaded (e.g. OpenSubtitles),
+            // preserve it! Do NOT blow away working subtitles.
+            // Only auto-apply if NO subtitle track has been loaded yet.
+            if (textEmbedded.length > 0 && !state.subtitles.activeTrack && (!state.subtitles.rawCues || state.subtitles.rawCues.length === 0)) {
+              const prefLang = state.subtitles.preferredLang || 'en';
+              const matchEmbedded = textEmbedded.find(s => matchSubtitleLang(s, prefLang)) || textEmbedded[0];
+              if (matchEmbedded) {
+                console.log('[EvoPlayer] Auto-applying embedded subtitle track:', matchEmbedded.release_name);
+                applySubtitle(matchEmbedded, true);
+              }
+            }
           }
         } else {
           // Swarm cold or downloading initial header: retry with backoff

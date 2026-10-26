@@ -329,3 +329,30 @@ def test_player_cinematic_redesign_and_subtitle_studio():
     assert "sub-preview-render" in js
 
 
+def test_stream_cache_cleanup_and_no_accidental_overdownload():
+    """Verifies stream cache evicts inactive torrents and frontend does not spam download streams on hover."""
+    # 1. Verify torrent_engine.js has cleanupOtherSessions and 5-min idle timeout
+    engine_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "torrent_engine.js"))
+    with open(engine_path, "r", encoding="utf-8") as f:
+        engine_js = f.read()
+    assert "cleanupOtherSessions(activeHash)" in engine_js
+    assert "destroyStore: true" in engine_js
+    assert "cleanupIdleSessions(idleTimeoutMs = 5 * 60 * 1000)" in engine_js
+
+    # 2. Verify streamer/server.js evicts non-active sessions when streaming starts
+    server_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "streamer", "server.js"))
+    with open(server_path, "r", encoding="utf-8") as f:
+        server_js = f.read()
+    assert "engine.cleanupOtherSessions(torrent.infoHash)" in server_js
+
+    # 3. Verify static/app.js does not auto-download streams on hover or stream modal open
+    app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"))
+    with open(app_path, "r", encoding="utf-8") as f:
+        app_js = f.read()
+    # Card wrapper must NOT have onmouseenter warmHoveredStream
+    assert 'class="stream-card" onmouseenter="warmHoveredStream' not in app_js
+    # Modal open must NOT automatically warm streams[0]
+    assert 'fetch(warmUrl).catch(() => {})' not in app_js
+
+
+

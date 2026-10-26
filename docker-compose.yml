@@ -9,6 +9,9 @@ services:
     restart: unless-stopped
     ports:
       - "8009:8009"
+      - "50000:50000/tcp"
+      - "50000:50000/udp"
+      - "50001:50001/udp"
     environment:
       - HOST=0.0.0.0
       - PORT=8009
@@ -25,6 +28,8 @@ services:
       - COMETNET_ENABLED=true
       - STREAM_CACHE_DIR=.stream_cache
       - MAX_DISK_CACHE_GB=15
+      - TORRENT_PORT=50000
+      - DHT_PORT=50001
     volumes:
       - ./data:/app/data
       - evoscrapper_stream_cache:/app/.stream_cache

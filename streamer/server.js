@@ -149,15 +149,13 @@ function pickVideoFile(files, requestedIdx = null, season = null, episode = null
     if (!files || files.length === 0) return null;
 
     // 1. Explicit valid index requested:
-    // If an exact index > 0 was specified (e.g. pre-resolved by Torrentio like fileIdx 39 or 438),
-    // or if no episode was specified, directly return the requested file!
+    // If an exact non-zero index was specified (e.g. pre-resolved by Torrentio like fileIdx 39 or 438),
+    // directly return the requested file if valid and not a bonus clip.
     const numIdx = (requestedIdx !== null && requestedIdx !== undefined && !isNaN(requestedIdx)) ? parseInt(requestedIdx, 10) : null;
-    if (numIdx !== null && numIdx >= 0 && numIdx < files.length) {
-        if (numIdx > 0 || episode === null || episode === undefined || isNaN(episode)) {
-            const direct = files[numIdx];
-            if (direct && VIDEO_EXT.has(path.extname(direct.name || direct.path || '').toLowerCase())) {
-                return direct;
-            }
+    if (numIdx !== null && numIdx > 0 && numIdx < files.length) {
+        const direct = files[numIdx];
+        if (direct && VIDEO_EXT.has(path.extname(direct.name || direct.path || '').toLowerCase()) && !isBonusOrNonEpisode(direct.path || direct.name, season)) {
+            return direct;
         }
     }
 
@@ -346,6 +344,7 @@ const server = http.createServer(async (req, res) => {
 
         try {
             const torrent = await engine.addTorrent(infoHash, magnet);
+            engine.cleanupOtherSessions(torrent.infoHash);
             const targetFile = pickVideoFile(torrent.files, requestedIdx, season, episode);
 
             if (!targetFile) {
@@ -380,7 +379,7 @@ const server = http.createServer(async (req, res) => {
 
                 const stream = engine.createReadStream(torrent, targetFile, { start, end });
                 stream.on('error', (err) => {
-                    if (err && (err.code === 'PREMATURE_CLOSE' || err.code === 'ERR_STREAM_PREMATURE_CLOSE' || (err.message && err.message.includes('closed')))) return;
+                    if (isHarmlessCloseError(err)) return;
                     console.error('[StreamServer] ReadStream range error:', err.message);
                 });
                 stream.pipe(res);
@@ -398,7 +397,7 @@ const server = http.createServer(async (req, res) => {
 
                 const stream = engine.createReadStream(torrent, targetFile);
                 stream.on('error', (err) => {
-                    if (err && (err.code === 'PREMATURE_CLOSE' || err.code === 'ERR_STREAM_PREMATURE_CLOSE' || (err.message && err.message.includes('closed')))) return;
+                    if (isHarmlessCloseError(err)) return;
                     console.error('[StreamServer] ReadStream error:', err.message);
                 });
                 stream.pipe(res);
@@ -421,12 +420,25 @@ const server = http.createServer(async (req, res) => {
     res.end('Not Found');
 });
 
+function isHarmlessCloseError(err) {
+    if (!err) return false;
+    const msg = String(err.message || '').toLowerCase();
+    const code = String(err.code || '');
+    return code === 'PREMATURE_CLOSE' ||
+           code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+           msg.includes('closed') ||
+           msg.includes('close called') ||
+           msg.includes('user-initiated abort') ||
+           msg.includes('abort');
+}
+
 process.on('uncaughtException', (err) => {
-    if (err && (err.code === 'PREMATURE_CLOSE' || (err.message && err.message.includes('closed')))) return;
+    if (isHarmlessCloseError(err)) return;
     console.error('[StreamServer] Process uncaught exception:', err.message);
 });
 
 process.on('unhandledRejection', (reason) => {
+    if (isHarmlessCloseError(reason)) return;
     console.error('[StreamServer] Process unhandled rejection:', reason);
 });
 
