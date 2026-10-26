@@ -1,7 +1,7 @@
 import asyncio
 import re
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import quote_plus
 
 from core.aggregator import deduplicate_torrents
