@@ -16,6 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const CACHE_DIR = path.resolve(__dirname, '../.stream_cache');
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+const PEER_CACHE_FILE = path.join(CACHE_DIR, 'peers.json');
 
 // ── Ultra-Expanded Public Trackers ──────────────────────────────────────────
 const DEFAULT_TRACKERS = [
@@ -124,6 +125,31 @@ class TorrentEngine {
         };
     }
 
+    loadCachedPeers(hash) {
+        try {
+            if (fs.existsSync(PEER_CACHE_FILE)) {
+                const data = JSON.parse(fs.readFileSync(PEER_CACHE_FILE, 'utf-8'));
+                return Array.isArray(data[hash]) ? data[hash] : [];
+            }
+        } catch (_) {}
+        return [];
+    }
+
+    saveCachedPeers(hash, peers) {
+        try {
+            let data = {};
+            if (fs.existsSync(PEER_CACHE_FILE)) {
+                try { data = JSON.parse(fs.readFileSync(PEER_CACHE_FILE, 'utf-8')); } catch (_) {}
+            }
+            const existing = new Set(data[hash] || []);
+            for (const p of peers) {
+                if (p && typeof p === 'string') existing.add(p);
+            }
+            data[hash] = Array.from(existing).slice(-100);
+            fs.writeFileSync(PEER_CACHE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+        } catch (_) {}
+    }
+
     enforceSessionCapacity() {
         if (this.sessions.size < MAX_ACTIVE_TORRENTS) return;
         // Evict only the least recently active session that has NO active readers
@@ -220,13 +246,15 @@ class TorrentEngine {
 
         // 4. Fresh torrent addition with in-flight lock to prevent duplicate add errors
         const addPromise = new Promise((resolve, reject) => {
+            const storeSlots = parseInt(process.env.EVO_STORE_CACHE_SLOTS || '128', 10);
+            const maxWebConns = parseInt(process.env.EVO_MAX_WEB_CONNS || '50', 10);
             const torrentOpts = {
                 path: CACHE_DIR,
                 announce: DEFAULT_TRACKERS,
                 deselect: true,
                 strategy: 'sequential',
-                maxWebConns: 50,
-                storeCacheSlots: 500
+                maxWebConns: maxWebConns,
+                storeCacheSlots: storeSlots
             };
 
             let settled = false;
@@ -261,6 +289,17 @@ class TorrentEngine {
 
             try {
                 torrent = this.client.add(targetSource, torrentOpts);
+                const cachedPeers = this.loadCachedPeers(hash);
+                if (cachedPeers.length > 0 && typeof torrent.addPeer === 'function') {
+                    for (const peer of cachedPeers) {
+                        try { torrent.addPeer(peer); } catch (_) {}
+                    }
+                }
+                torrent.on('wire', (wire) => {
+                    if (wire.remoteAddress && wire.remotePort) {
+                        this.saveCachedPeers(hash, [`${wire.remoteAddress}:${wire.remotePort}`]);
+                    }
+                });
             } catch (err) {
                 clearTimeout(timerId);
                 return reject(err);
