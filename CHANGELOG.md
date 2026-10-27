@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Embedded Subtitle Delivery Overhaul
+
+#### Fixed
+- **VTT extraction timeout over cold swarms**: embedded-subtitle extraction previously ran FFmpeg synchronously with a hard 8s budget, which a multi-GB swarm source routinely blew past — producing empty "Empty or unsupported" responses and silent fallback to online subs. Extraction now runs as a single-flight background job with a 240s budget (`EVO_SUB_EXTRACT_TIMEOUT` env override), and the `/api/v1/stream/subtitles` endpoint answers cache misses with a pollable `X-Evo-Sub-Pending` marker.
+
+#### Added
+- **Embedded subtitle VTT disk cache** (`data/subtitle_vtt_cache/`): successful extractions are persisted per `info_hash|file_idx|sub_index|season|episode` and served immediately on subsequent requests; note-only results are never cached.
+- **Frontend extraction polling**: the player now polls pending embedded-subtitle responses (4s interval, 4-minute ceiling, token-guarded so track switches cancel cleanly) instead of instantly degrading to online subtitle guesses.
+- **Stremio addon embedded-track advertising**: the `stream` resource remembers the top torrent candidates per item, and the `subtitles` resource probes those containers (25s budget, 30min probe cache) to expose embedded text tracks (SRT/ASS) as WebVTT URLs alongside the five online providers — bitmap PGS tracks are excluded since Stremio cannot render them.
+
+#### Tests
+- Added `tests/test_embedded_subtitle_delivery.py` (9 tests): cache roundtrip/invalid rejection, single-flight background job behavior, pending-protocol contract, endpoint functional cache/pending flow, app.js polling contract, and Stremio embedded-track merge.
+
+---
+
 ## [2.3.2] - 2026-10-27
 
 ### Beyond Stremio Completion: SQLite Swarm DAL, Profiles, Stremio Portal & Intelligence UI

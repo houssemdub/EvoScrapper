@@ -7,6 +7,9 @@ Also allows querying external community Stremio addons via /api/v1/addons/*.
 """
 
 from typing import Any, Dict, List, Optional
+import asyncio
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
@@ -16,6 +19,13 @@ from core.stream_resolver import resolve_streams
 from core.stremio_addon import fetch_addon_manifest, fetch_addon_streams
 
 router = APIRouter(tags=["Stremio Addon Engine"])
+
+# Torrent candidates resolved per item, so the subtitles resource can expose
+# container-embedded tracks for the stream the user actually picked.
+_RECENT_ITEM_STREAMS: Dict[str, Any] = {}  # key -> (timestamp, [(info_hash, file_idx), ...])
+_EMBEDDED_PROBE_CACHE: Dict[str, Any] = {}  # info_hash:file_idx -> (timestamp, [track, ...])
+_RECENT_ITEM_STREAMS_TTL = 6 * 3600
+_EMBEDDED_PROBE_TTL = 1800
 
 
 # ==============================================================================
@@ -344,6 +354,16 @@ async def get_stremio_stream(type: str, item_id: str) -> Dict[str, List[Dict[str
 
         stremio_streams.append(stream_entry)
 
+    # Remember the top torrent candidates so /subtitles can advertise their
+    # container-embedded tracks for this exact item.
+    torrent_candidates = [(s.info_hash, s.file_idx) for s in res.streams[:5] if s.info_hash]
+    if torrent_candidates:
+        item_key = f"{media_type}:{clean_id}:{season}:{episode}"
+        _RECENT_ITEM_STREAMS[item_key] = (time.time(), torrent_candidates)
+        if len(_RECENT_ITEM_STREAMS) > 500:
+            for stale_key in sorted(_RECENT_ITEM_STREAMS, key=lambda k: _RECENT_ITEM_STREAMS[k][0])[:100]:
+                _RECENT_ITEM_STREAMS.pop(stale_key, None)
+
     return {"streams": stremio_streams}
 
 
@@ -351,9 +371,62 @@ async def get_stremio_stream(type: str, item_id: str) -> Dict[str, List[Dict[str
 # External Addon Client Endpoints
 # ==============================================================================
 
+async def _probe_embedded_tracks(info_hash: str, file_idx: int) -> List[Dict[str, Any]]:
+    """Probes a torrent's container for subtitle streams, cached per info_hash+file_idx."""
+    cache_key = f"{info_hash}:{file_idx}"
+    hit = _EMBEDDED_PROBE_CACHE.get(cache_key)
+    if hit and time.time() - hit[0] < _EMBEDDED_PROBE_TTL:
+        return hit[1]
+
+    tracks: List[Dict[str, Any]] = []
+    try:
+        from core.torrent_streamer import ensure_streaming_daemon, get_internal_stream_url
+        from core.transmuxer import probe_media_stream
+
+        await ensure_streaming_daemon()
+        probe = await asyncio.wait_for(
+            probe_media_stream(get_internal_stream_url(info_hash, file_idx)),
+            timeout=25.0,
+        )
+        tracks = probe.get("subtitle_tracks", []) or []
+    except Exception:
+        tracks = []
+
+    _EMBEDDED_PROBE_CACHE[cache_key] = (time.time(), tracks)
+    if len(_EMBEDDED_PROBE_CACHE) > 300:
+        for stale_key in sorted(_EMBEDDED_PROBE_CACHE, key=lambda k: _EMBEDDED_PROBE_CACHE[k][0])[:50]:
+            _EMBEDDED_PROBE_CACHE.pop(stale_key, None)
+    return tracks
+
+
+async def _embedded_subtitles_for_item(
+    stype: str, clean_id: str, season: Optional[int], episode: Optional[int], base_url: str,
+) -> List[Dict[str, Any]]:
+    """Builds Stremio subtitle entries for text tracks embedded in recently resolved torrents."""
+    item_key = f"{stype.lower()}:{clean_id}:{season}:{episode}"
+    record = _RECENT_ITEM_STREAMS.get(item_key)
+    if not record or time.time() - record[0] > _RECENT_ITEM_STREAMS_TTL:
+        return []
+
+    entries: List[Dict[str, Any]] = []
+    for info_hash, file_idx in record[1][:2]:
+        tracks = await _probe_embedded_tracks(info_hash, file_idx)
+        for st in tracks:
+            if st.get("is_bitmap"):
+                continue
+            sub_idx = st.get("sub_idx", 0)
+            entries.append({
+                "id": f"evo-embedded:{info_hash}:{file_idx}:{sub_idx}",
+                "url": f"{base_url}/api/v1/stream/subtitles?info_hash={info_hash}&file_idx={file_idx}&sub_index={sub_idx}",
+                "lang": str(st.get("language") or "eng"),
+            })
+    return entries
+
+
 @router.get("/subtitles/{stype}/{item_id}.json")
 @router.get("/stremio/subtitles/{stype}/{item_id}.json")
 async def get_stremio_subtitles(
+    request: Request,
     stype: str,
     item_id: str,
     season: Optional[int] = None,
@@ -363,7 +436,8 @@ async def get_stremio_subtitles(
     """
     T4.6 Stremio v3 subtitles resource: serves EvoScrapper's aggregated
     subtitle providers (OpenSubtitles, Gestdown, SubDL, SubSource, YIFY) to
-    official Stremio apps.
+    official Stremio apps, plus container-embedded text tracks from recently
+    resolved torrents for this item.
     """
     clean_id = item_id.split(".")[0]
     import re as _re
@@ -395,6 +469,14 @@ async def get_stremio_subtitles(
             "url": url,
             "lang": str(getattr(sub, "language_code", "") or getattr(sub, "language", "") or "eng"),
         })
+
+    # Container-embedded text tracks from recently resolved torrents for this item
+    try:
+        base_url = str(request.base_url).rstrip("/")
+        subtitles.extend(await _embedded_subtitles_for_item(stype, clean_id, season, episode, base_url))
+    except Exception:
+        pass
+
     return {"subtitles": subtitles}
 
 

@@ -99,6 +99,11 @@ class TestWatchParty:
 
 
 class TestStremioSubtitles:
+    @staticmethod
+    def _fake_request():
+        from types import SimpleNamespace
+        return SimpleNamespace(base_url="http://127.0.0.1:8000/")
+
     @pytest.mark.asyncio
     async def test_subtitles_resource_maps_to_stremio_shape(self):
         from routers.stremio import get_stremio_subtitles
@@ -112,7 +117,9 @@ class TestStremioSubtitles:
             data = [FakeSub()]
 
         with patch("routers.subtitles.search_subtitles", new=AsyncMock(return_value=FakeResponse())):
-            result = await get_stremio_subtitles(stype="series", item_id="tt0944947", season=1, episode=2)
+            result = await get_stremio_subtitles(
+                self._fake_request(), stype="series", item_id="tt0944947", season=1, episode=2
+            )
 
         assert result["subtitles"][0]["url"] == "https://subs.example/download/1"
         assert result["subtitles"][0]["lang"] == "en"
@@ -121,7 +128,7 @@ class TestStremioSubtitles:
     async def test_non_imdb_id_returns_empty(self):
         from routers.stremio import get_stremio_subtitles
 
-        result = await get_stremio_subtitles(stype="series", item_id="kitsu:4502")
+        result = await get_stremio_subtitles(self._fake_request(), stype="series", item_id="kitsu:4502")
         assert result == {"subtitles": []}
 
 

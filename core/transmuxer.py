@@ -7,7 +7,7 @@ import shutil
 import struct
 import subprocess
 import time
-from typing import AsyncGenerator, List, Optional
+from typing import AsyncGenerator, Dict, List, Optional
 import aiofiles
 from fastapi import HTTPException
 from core.logger import streaming_logger, subtitles_logger
@@ -1533,9 +1533,79 @@ def sanitize_webvtt_content(vtt_text: str) -> str:
     return "\n".join(output)
 
 
-async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int = 0) -> str:
+# ── Embedded subtitle VTT extraction: disk cache + background jobs ────────────
+# Subtitle extraction demuxes the entire container; over a cold swarm that can
+# take minutes, far beyond a reasonable HTTP timeout. Results are persisted to
+# disk and served from cache, while the HTTP endpoint returns a pending marker
+# that clients poll until the background job lands.
+SUB_VTT_CACHE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "subtitle_vtt_cache"))
+SUB_EXTRACT_TIMEOUT = float(os.getenv("EVO_SUB_EXTRACT_TIMEOUT", "240"))
+_sub_vtt_jobs: Dict[str, "asyncio.Task"] = {}
+
+
+def _sub_vtt_cache_path(key: str) -> str:
+    safe = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()
+    return os.path.join(SUB_VTT_CACHE_DIR, f"{safe}.vtt")
+
+
+def store_cached_sub_vtt(key: str, vtt_text: str) -> bool:
+    """Persists an extracted VTT only if it contains real timing cues."""
+    if not vtt_text or not vtt_text.lstrip().startswith("WEBVTT") or "-->" not in vtt_text:
+        return False
+    try:
+        os.makedirs(SUB_VTT_CACHE_DIR, exist_ok=True)
+        path = _sub_vtt_cache_path(key)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(vtt_text)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        return False
+
+
+def load_cached_sub_vtt(key: str) -> Optional[str]:
+    try:
+        with open(_sub_vtt_cache_path(key), "r", encoding="utf-8") as f:
+            text = f.read()
+    except Exception:
+        return None
+    if "-->" not in text:
+        return None
+    return text
+
+
+def sub_vtt_job_running(key: str) -> bool:
+    task = _sub_vtt_jobs.get(key)
+    return task is not None and not task.done()
+
+
+def start_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0) -> bool:
+    """Launches a single-flight background extraction job. Returns False if one is already running."""
+    if sub_vtt_job_running(key):
+        return False
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    _sub_vtt_jobs[key] = loop.create_task(_run_sub_vtt_extraction(key, source_url, sub_index))
+    return True
+
+
+async def _run_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0) -> None:
+    try:
+        vtt = await extract_embedded_subtitle_vtt(source_url, sub_index, timeout=SUB_EXTRACT_TIMEOUT)
+        store_cached_sub_vtt(key, vtt)
+    except Exception:
+        pass
+    finally:
+        _sub_vtt_jobs.pop(key, None)
+
+
+async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int = 0, timeout: float = 8.0) -> str:
     """
     Extracts an embedded subtitle stream from MKV/MP4 using FFmpeg and converts it to WebVTT format on stdout.
+    Background jobs pass a long timeout (SUB_EXTRACT_TIMEOUT); direct callers keep the legacy 8s budget.
     """
     ffmpeg_bin = find_ffmpeg()
     if not ffmpeg_bin:
@@ -1571,7 +1641,7 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             try:
                 proc.terminate()

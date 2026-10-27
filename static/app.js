@@ -3928,12 +3928,28 @@ async function applySubtitle(subItem, isAuto = false) {
 
     let vttText = '';
     const rawUrl = subItem.download_url || '';
+    const subPollToken = state.subtitles._subPollToken = (state.subtitles._subPollToken || 0) + 1;
 
     // Direct fetch for internal API endpoints (e.g. /api/v1/stream/subtitles) to avoid proxy 502
     if (rawUrl.startsWith('/api/')) {
-      const res = await fetch(rawUrl);
+      let res = await fetch(rawUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       vttText = await res.text();
+      // Server marks cache-miss responses while FFmpeg walks the whole swarm source in the background
+      if (res.headers.get('X-Evo-Sub-Pending') === '1') {
+        if (badge) badge.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-accent"></i> Extracting embedded subs…`;
+        for (let attempt = 0; attempt < 60; attempt++) {
+          await new Promise(r => setTimeout(r, 4000));
+          if (state.subtitles._subPollToken !== subPollToken) return;
+          try {
+            const pollRes = await fetch(rawUrl);
+            if (pollRes.ok) {
+              vttText = await pollRes.text();
+              if (pollRes.headers.get('X-Evo-Sub-Pending') !== '1') break;
+            }
+          } catch (_) { /* transient swarm hiccup — keep polling */ }
+        }
+      }
     } else {
       const vttUrl = `/api/v1/subtitles/vtt?url=${encodeURIComponent(rawUrl)}&offset=0`;
       const res = await fetch(vttUrl);
@@ -3948,8 +3964,8 @@ async function applySubtitle(subItem, isAuto = false) {
       return;
     }
 
-    // Check for empty or corrupted tracks that cannot be parsed
-    if (vttText.includes('NOTE Empty or unsupported') || vttText.includes('Extraction error')) {
+    // Check for empty, pending, or corrupted tracks that cannot be parsed
+    if (vttText.includes('NOTE Empty or unsupported') || vttText.includes('Extraction error') || vttText.includes('NOTE Extraction pending')) {
       // Stremio-grade fallback: seamlessly fall back to verified online subtitle (OpenSubtitles/Subdl)
       const matchLang = subItem.lang_code || 'en';
       let textSub = (state.subtitles.availableSubs || []).find(
@@ -8705,7 +8721,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
                 fetch(refTrack.download_url)
                   .then(r => r.ok ? r.text() : '')
                   .then(txt => {
-                    if (txt && !txt.includes('NOTE Empty') && !txt.includes('Extraction error')) {
+                    if (txt && !txt.includes('NOTE Empty') && !txt.includes('Extraction error') && !txt.includes('NOTE Extraction pending')) {
                       state.subtitles.referenceCues = parseVttOrSrtToCues(txt);
                     }
                   })

@@ -28,6 +28,8 @@ from core.transmuxer import (
     find_vlc,
     launch_external_player_process,
     launch_vlc_process,
+    load_cached_sub_vtt,
+    start_sub_vtt_extraction,
     stream_hls_fmp4_init,
     stream_hls_ts_segment,
     stream_transmuxed_video,
@@ -489,6 +491,9 @@ async def get_embedded_subtitles(
 ):
     """
     Extracts embedded Matroska/MP4 subtitles on the fly into WebVTT format using FFmpeg.
+    Full-file extraction over a cold swarm takes minutes, so the response is served
+    from a disk cache when ready and marked X-Evo-Sub-Pending while a background
+    extraction job runs — clients poll until the marker disappears.
     """
     if info_hash.startswith("cdn_"):
         return Response(
@@ -497,15 +502,28 @@ async def get_embedded_subtitles(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
         )
 
+    cache_key = f"vtt|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
+    cached = load_cached_sub_vtt(cache_key)
+    if cached:
+        return Response(
+            content=cached,
+            media_type="text/vtt; charset=utf-8",
+            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
+        )
+
     await ensure_streaming_daemon()
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
     local_file = _find_cached_media_path(info_hash=info_hash, episode=episode)
     target_source = local_file if local_file else source_url
-    vtt = await extract_embedded_subtitle_vtt(target_source, sub_index)
+    start_sub_vtt_extraction(cache_key, target_source, sub_index)
     return Response(
-        content=vtt,
+        content="WEBVTT\n\nNOTE Extraction pending\n",
         media_type="text/vtt; charset=utf-8",
-        headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-store",
+            "X-Evo-Sub-Pending": "1",
+        },
     )
 
 
