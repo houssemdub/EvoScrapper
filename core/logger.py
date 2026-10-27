@@ -51,6 +51,32 @@ class AccurateMillisecondFormatter(logging.Formatter):
         return s
 
 
+class DateStampedFileHandler(logging.FileHandler):
+    """
+    Writes to logs/{category}_{YYYY-MM-DD}.log and reopens the file when the
+    calendar date changes (a long-running process must not keep appending
+    yesterday's date-stamped file past midnight).
+    """
+
+    def __init__(self, directory: Path, category: str, encoding: str = "utf-8"):
+        self._directory = directory
+        self._category = category
+        self._stamp = datetime.datetime.now().strftime("%Y-%m-%d")
+        super().__init__(directory / f"{category}_{self._stamp}.log", encoding=encoding)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        if today != self._stamp:
+            self._stamp = today
+            try:
+                self.close()
+                self.baseFilename = os.fspath(self._directory / f"{self._category}_{today}.log")
+                self.stream = None
+            except Exception:
+                pass
+        super().emit(record)
+
+
 def get_logger(category: str = "app", level: int = logging.INFO) -> logging.Logger:
     """
     Returns a configured, thread-safe logger for a specific subsystem.
@@ -69,12 +95,10 @@ def get_logger(category: str = "app", level: int = logging.INFO) -> logging.Logg
 
     # Avoid duplicate handlers if logger was already created elsewhere
     if not logger.handlers:
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
         formatter = AccurateMillisecondFormatter(_LOG_FORMAT, datefmt=_DATE_FORMAT)
 
-        # 1. Dated log file: logs/{category}_{YYYY-MM-DD}.log
-        dated_file = LOGS_DIR / f"{category}_{today}.log"
-        dated_handler = logging.FileHandler(dated_file, encoding="utf-8")
+        # 1. Dated log file: logs/{category}_{YYYY-MM-DD}.log (rolls at midnight)
+        dated_handler = DateStampedFileHandler(LOGS_DIR, category)
         dated_handler.setFormatter(formatter)
         dated_handler.setLevel(level)
         logger.addHandler(dated_handler)
