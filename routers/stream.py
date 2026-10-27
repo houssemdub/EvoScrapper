@@ -648,6 +648,121 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
     }
 
 
+class SubtitleAutoSyncV2Request(BaseModel):
+    info_hash: str
+    file_idx: int = 0
+    cues: List[CueItem]
+    reference_sub_idx: Optional[int] = None
+    magnet: Optional[str] = None
+    season: Optional[int] = None
+    episode: Optional[int] = None
+    preferred_lang: Optional[str] = "en"
+    external_cues: Optional[List[List[CueItem]]] = None
+
+
+class SubtitleAdjustRequest(BaseModel):
+    session_id: str
+    position_sec: float
+    delta_ms: int
+
+
+# Bounded session cache for real-time adaptive playback controllers
+ADAPTIVE_CONTROLLERS: dict = {}
+MAX_ADAPTIVE_SESSIONS = 500
+
+
+@router.post("/subtitles/auto-sync-v2")
+async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
+    """
+    Subtitle Sync Engine v2:
+    Multi-modal fusion across Audio VAD, embedded reference tracks, external subtitles,
+    forced subtitle filtering, framerate drift modeling, and real-time adaptive controller.
+    """
+    if not req.cues:
+        return {"success": False, "offset": 0.0, "confidence": 0.0, "method": "none", "message": "No cues provided"}
+
+    from core.subtitle_sync import SubtitleSyncEngine
+
+    await ensure_streaming_daemon()
+    source_url = get_internal_stream_url(req.info_hash, req.file_idx, magnet=req.magnet, season=req.season, episode=req.episode)
+    local_file = _find_cached_media_path(info_hash=req.info_hash, episode=req.episode)
+    target_source = local_file if local_file else source_url
+
+    cue_tuples = [(c.start, c.end, c.text or "") for c in req.cues]
+
+    # Extract embedded reference track if specified
+    ref_tuples = None
+    if req.reference_sub_idx is not None:
+        try:
+            vtt = await extract_embedded_subtitle_vtt(target_source, req.reference_sub_idx)
+            if vtt and not vtt.startswith("WEBVTT\n\nNOTE Empty"):
+                ref_tuples = []
+                for m in re.finditer(r"(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})", vtt):
+                    def _parse_ts(s: str) -> float:
+                        h, m_, s_ = s.split(":")
+                        return int(h) * 3600 + int(m_) * 60 + float(s_)
+                    ref_tuples.append((_parse_ts(m.group(1)), _parse_ts(m.group(2)), ""))
+        except Exception as e:
+            streaming_logger.warning(f"[SubtitleAutoSyncV2] Reference extraction fallback: {e}")
+
+    # Prepare external cues list
+    ext_cues_list = None
+    if req.external_cues:
+        ext_cues_list = [[(c.start, c.end, c.text or "") for c in sub_list] for sub_list in req.external_cues]
+
+    engine = SubtitleSyncEngine()
+    result = await engine.sync(
+        video_source=target_source,
+        subtitle_cues=cue_tuples,
+        reference_cues=ref_tuples,
+        external_cues_list=ext_cues_list,
+        embedded_ref_idx=req.reference_sub_idx,
+        preferred_lang=req.preferred_lang,
+    )
+
+    session_id = f"{req.info_hash}:{req.file_idx}:{req.episode or 0}"
+    if result.adaptive_controller:
+        if len(ADAPTIVE_CONTROLLERS) >= MAX_ADAPTIVE_SESSIONS:
+            # Drop an arbitrary older session key to avoid memory leak
+            ADAPTIVE_CONTROLLERS.pop(next(iter(ADAPTIVE_CONTROLLERS)))
+        ADAPTIVE_CONTROLLERS[session_id] = result.adaptive_controller
+
+    return {
+        "success": result.success,
+        "offset": result.offset,
+        "confidence": result.confidence,
+        "method": result.method,
+        "signals_used": result.signals_used,
+        "drift_model": result.drift_model,
+        "session_id": session_id,
+        "cues_analyzed": result.cues_analyzed,
+        "message": result.message,
+    }
+
+
+@router.post("/subtitles/adjust")
+async def user_adjust_sync_endpoint(req: SubtitleAdjustRequest):
+    """
+    Real-time playback hotkey adjustment endpoint (H/J deltas).
+    Updates session's AdaptiveSyncController and returns position-weighted offset.
+    """
+    from core.subtitle_sync import AdaptiveSyncController
+
+    controller = ADAPTIVE_CONTROLLERS.get(req.session_id)
+    if not controller:
+        controller = AdaptiveSyncController(initial_offset=0.0)
+        ADAPTIVE_CONTROLLERS[req.session_id] = controller
+
+    await controller.apply_user_correction(req.position_sec, req.delta_ms)
+    return {
+        "success": True,
+        "session_id": req.session_id,
+        "offset": controller.get_offset(req.position_sec),
+        "confidence": controller.get_confidence(),
+    }
+
+
+
 @router.get("/stats")
 async def get_torrent_engine_stats():
     """

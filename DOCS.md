@@ -134,7 +134,9 @@ Debrid download URLs often expose private user tokens or expire quickly. EvoScra
 ---
 
 ### 2.6. Subtitle Engine ("EvoSubs")
-Subtitle synchronization supports multiple lookup strategies:
+Subtitle synchronization supports multiple lookup and alignment strategies:
+- **Subtitle Sync Engine v2 (`core/subtitle_sync/`)**: Multi-modal alignment fusing Audio Voice Activity Detection (silencedetect), container-embedded reference tracks, external subtitle provider consensus, forced subtitle / sign filtering, and framerate drift modeling.
+- **Real-Time Adaptive Playback Controller**: Stateful session engine allowing interactive user sync adjustments (`H`/`J` keypress deltas) that dynamically converge across playback timestamps with exponential proximity decay weighting.
 - **Hash Matching**: 64-bit uint64 OpenSubtitles checksum and Shooter MD5 hashing against local or streamed media files.
 - **Multi-Provider Search**: Queries OpenSubtitles, Gestdown, SubDL, SubSource, AnimeTosho, and YIFY Subtitles.
 - **ZIP Language Disambiguation**: In multi-file subtitle archives, `select_zip_subtitle_member` analyzes file paths and extracts the exact requested language rather than picking arbitrary first members.
@@ -335,3 +337,27 @@ EvoScrapper eliminates this via a two-stage tokenized classification engine in `
 ### 5.11. WebRTC Mesh Acceleration & Kill-Fast Hygiene [STRM-HIGH-03, STRM-MED-04]
 - Client player integrates P2P Media Loader over WebRTC with automatic direct HTTP chunk fallback.
 - Transmux FFmpeg processes are bounded by dynamic semaphore sizing and terminated with 1.0s kill-fast timeout on client disconnect to prevent hanging processes.
+
+### 5.12. Subtitle Sync Engine v2: Multi-Modal Fusion & Adaptive Alignment
+The Subtitle Sync Engine v2 (`core/subtitle_sync/`) addresses subtitle lead/lag, framerate mismatch, and cue desynchronization via a multi-signal fusion pipeline:
+
+1. **Forced Subtitle / Signs Isolation (`forced_subs.py`)**:
+   - Matches regex patterns for bracketed signs (`[Sign: ...]`, `(Music ...)`), title cards (`Sign: Hospital`), credits headers (`Credits: ...`), and ultra-short cues ($\le 1.0$s duration with $\le 2$ words).
+   - Strips non-dialogue cues from target cues prior to cross-track alignment to eliminate artificial skew.
+
+2. **Multi-Source RANSAC Consensus (`consensus.py`)**:
+   - Collects sync candidate offsets from embedded reference tracks, audio VAD speech intervals, and external subtitle releases (OpenSubtitles, SubDL, AnimeTosho).
+   - Applies RANSAC clustering with a configurable maximum outlier threshold (`max_outlier_sec = 1.5s`) to group agreeing timings and compute a confidence-weighted average offset.
+   - Calibrates confidence with multi-signal agreement boosts up to 0.99.
+
+3. **Framerate Drift Modeling (`drift.py`)**:
+   - Detects linear framerate conversion drift (e.g., 23.976 fps NTSC vs 24.0 fps Film vs 25.0 fps PAL) using pure Python closed-form Ordinary Least Squares regression:
+     $$\text{offset}(t) = a \cdot t + b$$
+   - Solves for $a$ (drift rate) and $b$ (initial lead/lag). When $|a| > 0.0005$ and RMSE is low, attaches the drift model to dynamically adjust subtitles across long playback durations.
+
+4. **Real-Time Adaptive Playback Controller (`adaptive.py`)**:
+   - Bounded session controller (`ADAPTIVE_CONTROLLERS`) updated in real time via `POST /api/v1/stream/subtitles/adjust`.
+   - Coalesces rapid sequential keypresses (e.g. repeated `H` delay taps) into the current cumulative offset.
+   - Computes position-weighted offset using exponential timeline proximity:
+     $$w_i = \exp\left(-\frac{|p_i - \text{position\_sec}|}{180.0}\right)$$
+   - Calculates real-time user alignment confidence based on correction variance.

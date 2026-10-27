@@ -44,6 +44,10 @@
 - **Native VLC Launcher**: Seamless one-click desktop streaming directly to VLC media player with tracked child process PID lifecycle management.
 
 ### 📝 4. Precision Subtitle Engine ("EvoSubs")
+- **Multi-Modal Subtitle Sync Engine v2**: Multi-signal temporal alignment fusing Audio Voice Activity Detection (FFmpeg silencedetect), container-embedded reference tracks, and multi-source external timing consensus.
+- **Forced Subtitles & Signs Isolation**: Automatically detects and filters bracketed signs, song lyrics, title cards, and credits before alignment to prevent artificial timing skew.
+- **Framerate & Non-Linear Drift Modeling**: Pure-Python Ordinary Least Squares (OLS) regression resolving framerate speedup/slowdown drift (e.g. 23.976 fps vs 24.0/25.0 fps PAL) without heavy scientific library overhead.
+- **Real-Time Adaptive Playback Learning**: Live session controller with `/api/v1/stream/subtitles/adjust` that coalesces user hotkey nudges (`H`/`J` delay keys) and applies exponential timeline proximity weighting.
 - **Multi-Source Aggregation**: Simultaneous lookups across **OpenSubtitles (v1 & Stremio v3)**, **Gestdown** (zero-auth Addic7ed proxy), **SubDL** (with ZIP extraction and language disambiguation), **SubSource**, **AnimeTosho** (SHA-1 hash softsub extraction), and **YIFY Subtitles**.
 - **Word-Tokenized Language Isolation**: Implements strict language boundary checks preventing substring collisions (e.g. isolating Arabic `ar` from `hungARian` and `bulgARian`) across 20+ language families.
 - **Binary Hash Matching**: 64-bit OpenSubtitles uint64 checksum and Shooter MD5 hashing for byte-perfect subtitle synchronization.
@@ -137,6 +141,7 @@ EvoScrapper/
 │   ├── library_manager.py    # Atomic watchlist storage (fsync + os.replace)
 │   ├── anime_client.py       # Paginated Kitsu anime metadata client
 │   ├── media_meta.py         # Cinemeta & IMDb metadata extractor
+│   ├── subtitle_sync/        # Subtitle Sync Engine v2 (VAD, drift, consensus, adaptive)
 │   ├── stremio_addon.py      # Stremio community addon manifest engine
 │   ├── cometnet.py           # Ed25519 decentralized P2P gossip protocol
 │   └── debrid/               # 6 Debrid Unrestricters (RealDebrid, AllDebrid, etc.)

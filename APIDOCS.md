@@ -268,6 +268,72 @@ Launches the native desktop VLC media player targeting the stream URL with `--no
 
 ---
 
+#### `POST /api/v1/stream/subtitles/auto-sync-v2`
+Automatic multi-modal subtitle alignment fusing Audio VAD (FFmpeg silencedetect), container embedded reference tracks, external subtitle timing consensus, forced subtitle / sign filtering, and framerate drift modeling.
+
+**Request Body (JSON):**
+```json
+{
+  "info_hash": "c1205d5e6834f89d...",
+  "file_idx": 0,
+  "cues": [
+    { "start": 12.4, "end": 15.8, "text": "Hello world" },
+    { "start": 25.1, "end": 28.3, "text": "Second line" }
+  ],
+  "reference_sub_idx": 2,
+  "magnet": "magnet:?xt=urn:btih:...",
+  "season": 1,
+  "episode": 3,
+  "preferred_lang": "en",
+  "external_cues": null
+}
+```
+
+**Response (JSON):**
+```json
+{
+  "success": true,
+  "offset": -2.35,
+  "confidence": 0.92,
+  "method": "consensus",
+  "signals_used": ["embedded_ref", "audio_vad"],
+  "drift_model": {
+    "model": "linear",
+    "params": [0.04167, -2.35],
+    "rmse": 0.012
+  },
+  "session_id": "c1205d5e6834f89d...:0:3",
+  "cues_analyzed": 45,
+  "message": null
+}
+```
+
+---
+
+#### `POST /api/v1/stream/subtitles/adjust`
+Real-time interactive sync adjustment endpoint called when the user presses subtitle delay/advance hotkeys (`H` / `J`) during playback.
+
+**Request Body (JSON):**
+```json
+{
+  "session_id": "c1205d5e6834f89d...:0:3",
+  "position_sec": 125.4,
+  "delta_ms": 50
+}
+```
+
+**Response (JSON):**
+```json
+{
+  "success": true,
+  "session_id": "c1205d5e6834f89d...:0:3",
+  "offset": -2.30,
+  "confidence": 0.94
+}
+```
+
+---
+
 ### 2.3. Subtitles Engine ("EvoSubs") (`/api/v1/subtitles`)
 
 #### `GET /api/v1/subtitles/search`

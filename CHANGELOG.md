@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Subtitle Sync Engine v2: Multi-Modal Signal Fusion & Real-Time Adaptive Alignment
+
+#### Added
+- **Unified Multi-Modal Alignment Pipeline (`core/subtitle_sync/engine.py`)**: Fuses multiple temporal signals—FFmpeg silencedetect Audio Voice Activity Detection (VAD), container-embedded reference tracks, external provider subtitle timing consensus, forced subtitle / sign filtering, and framerate drift modeling—into an authoritative consensus alignment.
+- **Forced Subtitles & Signs Filter (`core/subtitle_sync/forced_subs.py`)**: Filters out bracketed markers (`[Sign]`, `(Music)`), onscreen location / title cards (`Sign: Hospital`), credits headers, and ultra-short non-dialogue cues before calculating alignment to prevent artificial skew.
+- **Framerate & Non-Linear Drift Modeling (`core/subtitle_sync/drift.py`)**: Pure-Python Ordinary Least Squares (OLS) regression for linear drift (e.g. 23.976 fps $\leftrightarrow$ 24.0/25.0 fps PAL speedup) and quadratic polynomial fitting for variable-rate encoding drift without requiring heavy scientific packages.
+- **RANSAC Multi-Source Consensus (`core/subtitle_sync/consensus.py`)**: Confidence-weighted voting and outlier rejection across multiple subtitle releases and audio signals, with multi-signal agreement confidence calibration.
+- **Real-Time Adaptive Playback Controller (`core/subtitle_sync/adaptive.py`)**: In-memory session controller that coalesces live user playback corrections (`H`/`J` keypress deltas), applies exponential proximity decay weighting across the timeline, and calculates convergence confidence.
+- **New API Endpoints (`routers/stream.py`)**:
+  - `POST /api/v1/stream/subtitles/auto-sync-v2`: Performs unified multi-signal alignment and registers the session's adaptive controller.
+  - `POST /api/v1/stream/subtitles/adjust`: Interactive playback sync adjustment endpoint receiving timeline position and millisecond offsets from the player HUD.
+- **Package Refactoring (`core/subtitle_sync/`)**: Restructured `core/subtitle_sync.py` into a modular package with 100% backward compatibility for all legacy imports.
+
+#### Tests
+- Added `tests/test_subtitle_sync_v2.py` (9 tests) covering forced subtitle filtering, drift regression and PAL speedup detection, RANSAC consensus clustering and outlier rejection, adaptive controller temporal convergence, unified engine coordination, and endpoint contract flows.
+
 ### Embedded Subtitle Delivery Overhaul
 
 #### Fixed

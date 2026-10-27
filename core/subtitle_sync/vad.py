@@ -1,7 +1,6 @@
 """
-core/subtitle_sync.py — Automatic Subtitle Synchronization Engine
-Uses Voice Activity Detection (VAD) via FFmpeg silencedetect and cross-track
-cue alignment to eliminate subtitle lead/lag and framerate drift.
+core/subtitle_sync/vad.py — Voice Activity Detection (VAD) via FFmpeg silencedetect.
+Extracts active speech intervals and computes cross-track cue alignment.
 """
 import asyncio
 import os

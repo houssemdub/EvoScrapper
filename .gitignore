@@ -67,6 +67,7 @@ data/keyframes/
 data/hls_cache/
 data/sprites/
 data/cometnet/
+data/subtitle_vtt_cache/
 
 # Scratch files
 scratch/
