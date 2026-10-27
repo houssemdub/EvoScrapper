@@ -152,25 +152,38 @@ def align_to_reference_cues(
 
 async def extract_speech_intervals_from_stream(
     source_url: str,
-    duration: float = 180.0,
+    duration: float = 90.0,
     noise_db: int = -30,
 ) -> List[Tuple[float, float]]:
     """
     Runs fast FFmpeg silencedetect on the audio stream and parses active speech intervals.
+    Includes network reconnect resilience and stereo downmix for robust surround detection.
     """
     ffmpeg_bin = find_ffmpeg() or "ffmpeg"
     cmd = [
         ffmpeg_bin,
         "-hide_banner",
         "-loglevel", "info",
+    ]
+    if source_url.startswith("http"):
+        cmd.extend([
+            "-reconnect", "1",
+            "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_delay_max", "5",
+        ])
+    cmd.extend([
         "-ss", "0",
         "-t", str(duration),
         "-i", source_url,
         "-vn",
+        "-map", "0:a:0?",
+        "-ac", "2",
         "-af", f"silencedetect=noise={noise_db}dB:d=0.35",
         "-f", "null",
         "-",
-    ]
+    ])
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -178,8 +191,16 @@ async def extract_speech_intervals_from_stream(
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=20.0)
-        stderr_text = stderr_data.decode("utf-8", errors="replace")
+        try:
+            _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=35.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            _, stderr_data = await proc.communicate()
+
+        stderr_text = stderr_data.decode("utf-8", errors="replace") if stderr_data else ""
         return parse_silencedetect_output(stderr_text, total_duration=duration)
     except Exception as e:
         app_logger.warning(f"[SubtitleSync] Speech extraction failed: {e}")

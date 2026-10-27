@@ -268,6 +268,40 @@ Launches the native desktop VLC media player targeting the stream URL with `--no
 
 ---
 
+#### `POST /api/v1/stream/subtitles/auto-sync`
+Standard automatic subtitle alignment matching target subtitle cues against container-embedded reference tracks, direct caller reference cues, or audio speech intervals via FFmpeg silencedetect Voice Activity Detection (VAD).
+
+**Request Body (JSON):**
+```json
+{
+  "info_hash": "c1205d5e6834f89d...",
+  "file_idx": 0,
+  "cues": [
+    { "start": 12.4, "end": 15.8, "text": "Hello world" },
+    { "start": 25.1, "end": 28.3, "text": "Second line" }
+  ],
+  "reference_sub_idx": 2,
+  "reference_cues": [
+    { "start": 10.0, "end": 13.4, "text": "Hello world" }
+  ],
+  "preferred_lang": "en"
+}
+```
+
+**Response (JSON):**
+```json
+{
+  "success": true,
+  "offset": -2.40,
+  "confidence": 0.88,
+  "method": "embedded_reference",
+  "cues_analyzed": 45,
+  "message": null
+}
+```
+
+---
+
 #### `POST /api/v1/stream/subtitles/auto-sync-v2`
 Automatic multi-modal subtitle alignment fusing Audio VAD (FFmpeg silencedetect), container embedded reference tracks, external subtitle timing consensus, forced subtitle / sign filtering, and framerate drift modeling.
 
@@ -281,6 +315,9 @@ Automatic multi-modal subtitle alignment fusing Audio VAD (FFmpeg silencedetect)
     { "start": 25.1, "end": 28.3, "text": "Second line" }
   ],
   "reference_sub_idx": 2,
+  "reference_cues": [
+    { "start": 10.0, "end": 13.4, "text": "Hello world" }
+  ],
   "magnet": "magnet:?xt=urn:btih:...",
   "season": 1,
   "episode": 3,

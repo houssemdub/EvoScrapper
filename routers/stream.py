@@ -29,6 +29,7 @@ from core.transmuxer import (
     launch_external_player_process,
     launch_vlc_process,
     load_cached_sub_vtt,
+    get_failed_sub_vtt,
     start_sub_vtt_extraction,
     stream_hls_fmp4_init,
     stream_hls_ts_segment,
@@ -511,6 +512,14 @@ async def get_embedded_subtitles(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
         )
 
+    failed = get_failed_sub_vtt(cache_key)
+    if failed:
+        return Response(
+            content=failed,
+            media_type="text/vtt; charset=utf-8",
+            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
+        )
+
     await ensure_streaming_daemon()
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
     local_file = _find_cached_media_path(info_hash=info_hash, episode=episode)
@@ -571,24 +580,27 @@ class SubtitleAutoSyncRequest(BaseModel):
     file_idx: int = 0
     cues: List[CueItem]
     reference_sub_idx: Optional[int] = None
+    reference_cues: Optional[List[CueItem]] = None
     magnet: Optional[str] = None
     season: Optional[int] = None
     episode: Optional[int] = None
+    preferred_lang: Optional[str] = "en"
+    external_cues: Optional[List[List[CueItem]]] = None
 
 
 @router.post("/subtitles/auto-sync")
 async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
     """
     Automatic subtitle alignment engine:
-    1. If an embedded reference text track exists, aligns target cues to ground-truth container timings.
-    2. Otherwise, runs Voice Activity Detection (silencedetect) on the audio stream and computes optimal cross-correlation offset.
+    1. If reference cues or embedded reference track are provided, aligns directly to ground-truth container timings.
+    2. Otherwise runs Voice Activity Detection (silencedetect) on the audio stream.
     """
     if not req.cues:
         return {"success": False, "offset": 0.0, "confidence": 0.0, "method": "none", "message": "No cues provided"}
 
     from core.subtitle_sync import (
-        compute_optimal_offset,
         align_to_reference_cues,
+        compute_optimal_offset,
         extract_speech_intervals_from_stream,
     )
 
@@ -599,34 +611,40 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
 
     cue_tuples = [(c.start, c.end) for c in req.cues]
 
-    # Mode 1: Align to container-embedded reference subtitle if available
-    ref_idx = req.reference_sub_idx
-    if ref_idx is not None:
+    # Mode 1: Align to container-embedded reference subtitle or provided reference cues
+    ref_tuples = None
+    if req.reference_cues:
+        ref_tuples = [(c.start, c.end) for c in req.reference_cues]
+    elif req.reference_sub_idx is not None:
         try:
-            vtt = await extract_embedded_subtitle_vtt(target_source, ref_idx)
-            if vtt and not vtt.startswith("WEBVTT\n\nNOTE Empty"):
+            cache_key = f"vtt|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
+            vtt = load_cached_sub_vtt(cache_key)
+            if not vtt:
+                vtt = await extract_embedded_subtitle_vtt(target_source, req.reference_sub_idx, timeout=6.0)
+            if vtt and not vtt.startswith("WEBVTT\n\nNOTE Empty") and "-->" in vtt:
                 ref_tuples = []
                 for m in re.finditer(r"(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})", vtt):
                     def _parse_ts(s: str) -> float:
                         h, m_, s_ = s.split(":")
                         return int(h) * 3600 + int(m_) * 60 + float(s_)
                     ref_tuples.append((_parse_ts(m.group(1)), _parse_ts(m.group(2))))
-
-                if ref_tuples:
-                    offset, conf = align_to_reference_cues(cue_tuples, ref_tuples)
-                    return {
-                        "success": True,
-                        "offset": offset,
-                        "confidence": conf,
-                        "method": "embedded_reference",
-                        "reference_sub_idx": ref_idx,
-                    }
         except Exception as e:
             streaming_logger.warning(f"[SubtitleAutoSync] Reference alignment fallback: {e}")
 
+    if ref_tuples:
+        offset, conf = align_to_reference_cues(cue_tuples, ref_tuples)
+        return {
+            "success": True,
+            "offset": offset,
+            "confidence": conf,
+            "method": "embedded_reference",
+            "mode": "embedded_reference",
+            "reference_sub_idx": req.reference_sub_idx,
+        }
+
     # Mode 2: Audio Voice Activity Detection (VAD) via FFmpeg silencedetect
     try:
-        speech = await extract_speech_intervals_from_stream(target_source, duration=180.0)
+        speech = await extract_speech_intervals_from_stream(target_source, duration=90.0)
         if speech:
             offset, conf = compute_optimal_offset(cue_tuples, speech)
             return {
@@ -634,6 +652,7 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
                 "offset": offset,
                 "confidence": conf,
                 "method": "audio_vad",
+                "mode": "audio_vad",
                 "speech_intervals_detected": len(speech),
             }
     except Exception as e:
@@ -644,6 +663,7 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
         "offset": 0.0,
         "confidence": 0.0,
         "method": "none",
+        "mode": "none",
         "message": "Could not detect audio speech intervals or reference tracks",
     }
 

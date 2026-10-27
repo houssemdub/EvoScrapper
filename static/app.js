@@ -3522,7 +3522,7 @@ async function triggerAutoSyncSubtitles() {
 
   if (statusEl) statusEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-accent"></i> Syncing...';
   if (btn) btn.disabled = true;
-  showToast('Auto-syncing subtitles with audio stream...', 'info');
+  showToast('Auto-syncing subtitles with audio stream & reference tracks...', 'info');
 
   try {
     const fileIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null)
@@ -3544,6 +3544,11 @@ async function triggerAutoSyncSubtitles() {
       }));
     }
 
+    const embeddedSub = (state.subtitles.availableSubs || []).find(
+      (s) => s.is_embedded && !s.is_image_based
+    );
+    const refSubIdx = embeddedSub ? (embeddedSub.sub_index ?? 0) : null;
+
     const payload = {
       info_hash: active.infoHash,
       file_idx: fileIdx,
@@ -3552,7 +3557,8 @@ async function triggerAutoSyncSubtitles() {
       episode: (active.episode !== undefined && active.episode !== null) ? active.episode : null,
       cues: payloadCues,
       reference_cues: refCues,
-      max_duration_seconds: 180.0,
+      reference_sub_idx: refSubIdx,
+      max_duration_seconds: 90.0,
     };
 
     const res = await fetch('/api/v1/stream/subtitles/auto-sync', {
@@ -3567,6 +3573,10 @@ async function triggerAutoSyncSubtitles() {
     }
 
     const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.message || 'Auto-sync could not detect a reliable offset.');
+    }
+
     const offset = typeof data.offset === 'number' ? data.offset : 0.0;
     const confidencePct = Math.round((data.confidence || 0) * 100);
 
@@ -3577,14 +3587,15 @@ async function triggerAutoSyncSubtitles() {
     }
 
     const sign = offset >= 0 ? '+' : '';
+    const modeName = data.method || data.mode || 'VAD';
     showToast(
-      `🪄 Auto-sync complete! Applied ${sign}${offset.toFixed(2)}s offset (${confidencePct}% confidence · Mode: ${data.mode || 'VAD'})`,
+      `🪄 Auto-sync complete! Applied ${sign}${offset.toFixed(2)}s offset (${confidencePct}% confidence · Mode: ${modeName})`,
       'success'
     );
   } catch (err) {
     console.warn('[EvoPlayer] Subtitle auto-sync error:', err);
     if (statusEl) statusEl.innerHTML = '<span class="text-red font-bold">Failed</span>';
-    showToast(`Auto-sync failed: ${err.message}`, 'error');
+    showToast(`Auto-sync: ${err.message}`, 'error');
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -3937,15 +3948,29 @@ async function applySubtitle(subItem, isAuto = false) {
       vttText = await res.text();
       // Server marks cache-miss responses while FFmpeg walks the whole swarm source in the background
       if (res.headers.get('X-Evo-Sub-Pending') === '1') {
+        const matchLang = subItem.lang_code || 'en';
+        // Immediately load matching online text subtitle so the user has working subtitles while extraction runs
+        const onlineFallback = (state.subtitles.availableSubs || []).find(
+          (s) => !s.is_embedded && !s.is_image_based && matchSubtitleLang(s, matchLang)
+        ) || (state.subtitles.availableSubs || []).find((s) => !s.is_embedded && !s.is_image_based);
+
+        if (onlineFallback && (!state.subtitles.activeTrack || state.subtitles.activeTrack.is_embedded)) {
+          console.log('[EvoPlayer] Embedded track extracting; activating interim online subtitle:', onlineFallback.release_name);
+          applySubtitle(onlineFallback, false).catch(() => {});
+        }
+
         if (badge) badge.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-accent"></i> Extracting embedded subs…`;
-        for (let attempt = 0; attempt < 60; attempt++) {
-          await new Promise(r => setTimeout(r, 4000));
+        for (let attempt = 0; attempt < 12; attempt++) {
+          await new Promise(r => setTimeout(r, 3000));
           if (state.subtitles._subPollToken !== subPollToken) return;
           try {
             const pollRes = await fetch(rawUrl);
             if (pollRes.ok) {
-              vttText = await pollRes.text();
-              if (pollRes.headers.get('X-Evo-Sub-Pending') !== '1') break;
+              const pollText = await pollRes.text();
+              if (pollRes.headers.get('X-Evo-Sub-Pending') !== '1') {
+                vttText = pollText;
+                break;
+              }
             }
           } catch (_) { /* transient swarm hiccup — keep polling */ }
         }
@@ -3977,7 +4002,7 @@ async function applySubtitle(subItem, isAuto = false) {
         );
       }
       if (textSub) {
-        console.log('[EvoPlayer] Live swarm stream: using synchronized online subtitle:', textSub.release_name);
+        console.log('[EvoPlayer] Embedded track pending/empty; using verified online subtitle:', textSub.release_name);
         await applySubtitle(textSub, true);
         return;
       }
@@ -3999,6 +4024,9 @@ async function applySubtitle(subItem, isAuto = false) {
     }
 
     state.subtitles.rawCues = cues;
+    if (subItem.is_embedded) {
+      state.subtitles.referenceCues = cues;
+    }
     state.subtitles.activeTrack = subItem;
     state.subtitles.activeSubName = subItem.release_name || `${subItem.language} (${subItem.provider})`;
     state.subtitles.activeLang = subItem.lang_code || 'en';

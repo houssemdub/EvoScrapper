@@ -361,3 +361,8 @@ The Subtitle Sync Engine v2 (`core/subtitle_sync/`) addresses subtitle lead/lag,
    - Computes position-weighted offset using exponential timeline proximity:
      $$w_i = \exp\left(-\frac{|p_i - \text{position\_sec}|}{180.0}\right)$$
    - Calculates real-time user alignment confidence based on correction variance.
+
+5. **Resilient VAD & Cold-Swarm Embedded Delivery**:
+   - Audio speech interval extraction downmixes surround streams (`-ac 2`), establishes resilient HTTP reconnect parameters (`-reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5`), and bounds sampling to 90 seconds to prevent player buffering stalls.
+   - Cold swarms or unsupported text formats register terminal extraction failures in memory (`_sub_vtt_failed`), returning HTTP 200 with clear diagnostics and without `X-Evo-Sub-Pending` headers to terminate frontend polling loops cleanly.
+   - The Web Player HUD presents online fallback subtitles immediately while background extraction proceeds, seamlessly replacing them when embedded tracks finish.

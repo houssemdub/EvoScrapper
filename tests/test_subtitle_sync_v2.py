@@ -246,6 +246,70 @@ async def test_auto_sync_v2_and_adjust_endpoints():
             assert adj_data["confidence"] > 0.6
 
 
+@pytest.mark.asyncio
+async def test_auto_sync_with_reference_cues():
+    from unittest.mock import patch, AsyncMock
+    from httpx import AsyncClient, ASGITransport
+    from main import app
+
+    ref_cues = [
+        {"start": 10.0, "end": 15.0, "text": "Original Dialogue"},
+        {"start": 25.0, "end": 30.0, "text": "Second Dialogue"},
+    ]
+    # Target subtitles are 2.5 seconds early (advanced by -2.5s)
+    target_cues = [
+        {"start": 7.5, "end": 12.5, "text": "Spanish Dialogue"},
+        {"start": 22.5, "end": 27.5, "text": "Second Spanish"},
+    ]
+
+    with patch("core.torrent_streamer.ensure_streaming_daemon", new=AsyncMock(return_value=True)):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            res = await client.post(
+                "/api/v1/stream/subtitles/auto-sync",
+                json={
+                    "info_hash": "c" * 40,
+                    "file_idx": 0,
+                    "cues": target_cues,
+                    "reference_cues": ref_cues,
+                },
+            )
+            assert res.status_code == 200
+            data = res.json()
+            assert data["success"] is True
+            assert data["method"] == "embedded_reference"
+            # Since target was -2.5s early, offset needed is +2.5s
+            assert abs(data["offset"] - 2.5) <= 0.1
+            assert data["confidence"] >= 0.9
+
+
+def test_failed_sub_vtt_prevents_infinite_polling(tmp_path, monkeypatch):
+    """Verify failed/empty extraction is recorded and returned without X-Evo-Sub-Pending."""
+    import asyncio
+    from core import transmuxer
+
+    monkeypatch.setattr(transmuxer, "SUB_VTT_CACHE_DIR", str(tmp_path))
+
+    async def fake_extract_empty(source_url, sub_index=0, timeout=8.0):
+        return "WEBVTT\n\nNOTE Empty or unsupported embedded subtitle track\n"
+
+    async def scenario():
+        monkeypatch.setattr(transmuxer, "extract_embedded_subtitle_vtt", fake_extract_empty)
+        key = "job-empty-test"
+        transmuxer.start_sub_vtt_extraction(key, "http://source", 0)
+        while transmuxer.sub_vtt_job_running(key):
+            await asyncio.sleep(0.01)
+
+        # Must not be in disk cache (per contract)
+        assert transmuxer.load_cached_sub_vtt(key) is None
+        # But MUST be in failed registry so router serves terminal response rather than infinite pending
+        failed_res = transmuxer.get_failed_sub_vtt(key)
+        assert failed_res is not None
+        assert "NOTE Empty" in failed_res
+
+    asyncio.run(scenario())
+
+
+
 
 
 

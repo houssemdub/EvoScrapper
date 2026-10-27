@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `POST /api/v1/stream/subtitles/adjust`: Interactive playback sync adjustment endpoint receiving timeline position and millisecond offsets from the player HUD.
 - **Package Refactoring (`core/subtitle_sync/`)**: Restructured `core/subtitle_sync.py` into a modular package with 100% backward compatibility for all legacy imports.
 
+#### Fixed
+- **Embedded Subtitle Extraction Infinite Loop & Polling Terminal State**: Resolved an issue where background FFmpeg subtitle extraction on cold swarms or unsupported text formats repeatedly missed the disk cache, causing the player to get trapped in an endless "Extracting embedded subs…" polling loop. Implemented an in-memory `_sub_vtt_failed` registry (`get_failed_sub_vtt`) that records extraction termination and returns HTTP 200 with clear diagnostics without the `X-Evo-Sub-Pending` header.
+- **Interim Online Subtitle Hot-Swap**: Fixed player subtitle stalling during long background extraction jobs. The web player HUD now immediately activates an interim online subtitle matching the user's preferred language so playback starts with active subtitles right away, seamlessly hot-swapping to the embedded WebVTT track once ready.
+- **Subtitle Auto-Sync Resilience & Reconnect Handling**: Added `reference_cues` support to `SubtitleAutoSyncRequest` and the `/api/v1/stream/subtitles/auto-sync` endpoint, allowing the frontend to supply active cues for instant anchor alignment. Hardened FFmpeg Audio VAD extraction with `-ac 2` stereo downmixing, HTTP reconnect flags (`-reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5`), and shortened sample duration (90s) to prevent timeouts on high-bitrate surround-sound streams.
+
 #### Tests
 - Added `tests/test_subtitle_sync_v2.py` (9 tests) covering forced subtitle filtering, drift regression and PAL speedup detection, RANSAC consensus clustering and outlier rejection, adaptive controller temporal convergence, unified engine coordination, and endpoint contract flows.
 

@@ -1541,6 +1541,7 @@ def sanitize_webvtt_content(vtt_text: str) -> str:
 SUB_VTT_CACHE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "subtitle_vtt_cache"))
 SUB_EXTRACT_TIMEOUT = float(os.getenv("EVO_SUB_EXTRACT_TIMEOUT", "240"))
 _sub_vtt_jobs: Dict[str, "asyncio.Task"] = {}
+_sub_vtt_failed: Dict[str, str] = {}
 
 
 def _sub_vtt_cache_path(key: str) -> str:
@@ -1575,6 +1576,11 @@ def load_cached_sub_vtt(key: str) -> Optional[str]:
     return text
 
 
+def get_failed_sub_vtt(key: str) -> Optional[str]:
+    """Returns terminal failure or empty response for an extraction job to avoid infinite polling."""
+    return _sub_vtt_failed.get(key)
+
+
 def sub_vtt_job_running(key: str) -> bool:
     task = _sub_vtt_jobs.get(key)
     return task is not None and not task.done()
@@ -1584,6 +1590,8 @@ def start_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0) -> b
     """Launches a single-flight background extraction job. Returns False if one is already running."""
     if sub_vtt_job_running(key):
         return False
+    # Clear previous failure if retrying
+    _sub_vtt_failed.pop(key, None)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -1595,9 +1603,11 @@ def start_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0) -> b
 async def _run_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0) -> None:
     try:
         vtt = await extract_embedded_subtitle_vtt(source_url, sub_index, timeout=SUB_EXTRACT_TIMEOUT)
-        store_cached_sub_vtt(key, vtt)
-    except Exception:
-        pass
+        stored = store_cached_sub_vtt(key, vtt)
+        if not stored:
+            _sub_vtt_failed[key] = vtt or "WEBVTT\n\nNOTE Empty or unsupported embedded subtitle track\n"
+    except Exception as e:
+        _sub_vtt_failed[key] = f"WEBVTT\n\nNOTE Extraction error: {str(e)}\n"
     finally:
         _sub_vtt_jobs.pop(key, None)
 
@@ -1644,7 +1654,7 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             try:
-                proc.terminate()
+                proc.kill()
             except Exception:
                 pass
             stdout, stderr = await proc.communicate()
