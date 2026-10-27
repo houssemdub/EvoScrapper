@@ -66,3 +66,9 @@ def test_frontend_player_enhancement_scripts():
 
     # Section 1.2
     assert "promptResumePlayback" in js or "checkPlaybackResume" in js
+
+    # Beyond Stremio player pipelines: Quality ladder watch & trick-play
+    assert "function _startLadderWatch" in js
+    assert "function loadSpriteSheet" in js
+    assert "function loadSceneBoundaries" in js
+    assert "function openStreamExplainModal" in js

@@ -117,12 +117,16 @@ class TestPhase2HighFlaws(unittest.IsolatedAsyncioTestCase):
     # HIGH-06: Non-Atomic JSON Library Storage
     # --------------------------------------------------------------------------
     async def test_high06_library_manager_atomic_persistence(self):
+        """HIGH-06 durability contract, now on SQLite (T4.1): a committed
+        write must survive a process restart with no torn state. The old
+        os.replace-on-JSON mechanism is superseded by WAL transactions."""
         from core.library_manager import LibraryManager
         from models.library import LibraryItem
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            test_file = os.path.join(tmpdir, "library.json")
-            mgr = LibraryManager(storage_path=test_file)
+            test_db = os.path.join(tmpdir, "library.db")
+            legacy_json = os.path.join(tmpdir, "library.json")
+            mgr = LibraryManager(db_path=test_db, storage_path=legacy_json)
 
             item = LibraryItem(
                 id="tt1375666",
@@ -130,15 +134,19 @@ class TestPhase2HighFlaws(unittest.IsolatedAsyncioTestCase):
                 year="2010",
                 type="movie",
             )
-            # Verify atomic save uses os.replace
-            with patch("os.replace", wraps=os.replace) as mock_replace:
-                await mgr.upsert_item(item)
-                mock_replace.assert_called_once()
+            await mgr.upsert_item(item)
 
-            self.assertTrue(os.path.exists(test_file))
-            saved = await mgr.get_item("tt1375666")
+            # Simulated restart: a brand-new manager instance on the same DB
+            # must observe the committed row, fully intact.
+            fresh = LibraryManager(db_path=test_db, storage_path=legacy_json)
+            saved = await fresh.get_item("tt1375666")
             self.assertIsNotNone(saved)
             self.assertEqual(saved.title, "Inception")
+            self.assertEqual(saved.year, "2010")
+
+            # Release both connections so the tempdir can be cleaned up on Windows.
+            await mgr.db.close()
+            await fresh.db.close()
 
     # --------------------------------------------------------------------------
     # HIGH-07: Web CDN Score Inflation

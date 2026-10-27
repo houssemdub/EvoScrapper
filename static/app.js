@@ -2902,6 +2902,9 @@ function filterStreamCards() {
           <button class="btn btn-sm btn-ghost" onclick="searchSubtitlesForMedia('${escapeJs(state.discover.activeDetail ? state.discover.activeDetail.title : s.title)}')">
             <i class="fa-solid fa-closed-captioning"></i> Subtitles
           </button>
+          <button class="btn btn-sm btn-ghost stream-explain-btn" onclick="openStreamExplainModal('${escapeJs(s.info_hash)}', ${s.file_idx}, '${escapeJs(s.title)}')" title="Why This Stream? (Telemetry & Decision Breakdown)">
+            <i class="fa-solid fa-circle-info"></i> Why?
+          </button>
         </div>
       </div>
     `;
@@ -5286,6 +5289,8 @@ function initPlayerTimelineControls() {
 
   const container = document.getElementById('player-timeline-container');
   const hoverTime = document.getElementById('player-hover-time');
+  const previewEl = document.getElementById('player-timeline-preview');
+  const previewThumb = document.getElementById('player-timeline-preview-thumb');
   const video = document.getElementById('evo-video-player');
 
   if (video) {
@@ -5295,6 +5300,7 @@ function initPlayerTimelineControls() {
     video.addEventListener('timeupdate', () => {
       updatePlayerTimeline();
       updateSubtitleOverlay();
+      checkSceneSkip();
     });
     video.addEventListener('seeking', () => {
       updatePlayerTimeline();
@@ -5380,11 +5386,33 @@ function initPlayerTimelineControls() {
 
   container.addEventListener('mousemove', (e) => {
     const { pct, seconds } = calculateTarget(e);
+    const rect = container.getBoundingClientRect();
+    const x = Math.max(10, Math.min(rect.width - 10, e.clientX - rect.left));
+
+    if (previewEl) {
+      previewEl.classList.remove('hidden');
+      previewEl.style.left = `${x}px`;
+      if (previewThumb) {
+        const spriteUrl = state.discover.spriteSheetUrl;
+        const scanSeconds = (window.EVO_SPRITE_SCAN_SECONDS || 900.0);
+        if (spriteUrl && seconds <= scanSeconds) {
+          const grid = 5;
+          const idx = Math.min(grid * grid - 1, Math.max(0, Math.floor((seconds / scanSeconds) * (grid * grid))));
+          const col = idx % grid;
+          const row = Math.floor(idx / grid);
+          previewThumb.style.backgroundImage = `url("${spriteUrl}")`;
+          previewThumb.style.backgroundSize = `${grid * 160}px ${grid * 90}px`;
+          previewThumb.style.backgroundPosition = `-${col * 160}px -${row * 90}px`;
+          previewThumb.classList.remove('hidden');
+        } else {
+          previewThumb.classList.add('hidden');
+        }
+      }
+    }
+
     if (hoverTime) {
       hoverTime.classList.remove('hidden');
-      const rect = container.getBoundingClientRect();
-      const x = Math.max(10, Math.min(rect.width - 10, e.clientX - rect.left));
-      hoverTime.style.left = `${x}px`;
+      if (!previewEl) hoverTime.style.left = `${x}px`;
       hoverTime.innerText = formatPlayerDuration(seconds);
     }
     if (isDragging) {
@@ -5396,6 +5424,7 @@ function initPlayerTimelineControls() {
   });
 
   container.addEventListener('mouseleave', () => {
+    if (previewEl) previewEl.classList.add('hidden');
     if (hoverTime) hoverTime.classList.add('hidden');
     if (!isDragging && state.discover.activeStream) {
       state.discover.activeStream.isDraggingTimeline = false;
@@ -8040,6 +8069,181 @@ function loadSpriteSheet(infoHash, fileIdx, duration) {
     .catch(() => {});
 }
 
+// P3: Crowd Scene Boundaries & Skip
+function loadSceneBoundaries(infoHash, duration) {
+  state.discover.activeScenes = [];
+  const skipContainer = document.getElementById('player-scene-skip-container');
+  if (skipContainer) skipContainer.classList.add('hidden');
+  if (!infoHash || !duration || duration <= 0) return;
+
+  fetch(`/api/v1/cometnet/scenes?info_hash=${encodeURIComponent(infoHash)}&duration=${duration}`)
+    .then((r) => r.ok ? r.json() : null)
+    .then((data) => {
+      if (data && Array.isArray(data.scenes)) {
+        state.discover.activeScenes = data.scenes;
+      }
+    })
+    .catch(() => {});
+}
+
+function checkSceneSkip() {
+  const video = document.getElementById('evo-video-player');
+  const skipContainer = document.getElementById('player-scene-skip-container');
+  const skipText = document.getElementById('player-scene-skip-text');
+  if (!video || !skipContainer || !state.discover.activeScenes || !state.discover.activeScenes.length) {
+    if (skipContainer) skipContainer.classList.add('hidden');
+    return;
+  }
+  const cur = video.currentTime;
+  const match = state.discover.activeScenes.find((s) => s.start <= cur && cur < s.end);
+  if (match) {
+    state.discover._targetSkipEnd = match.end;
+    if (skipText) skipText.innerText = match.type === 'credits' ? 'Skip Credits' : 'Skip Intro';
+    skipContainer.classList.remove('hidden');
+  } else {
+    skipContainer.classList.add('hidden');
+  }
+}
+
+function triggerSceneSkip() {
+  const video = document.getElementById('evo-video-player');
+  const skipContainer = document.getElementById('player-scene-skip-container');
+  if (video && state.discover._targetSkipEnd !== undefined && state.discover._targetSkipEnd !== null) {
+    video.currentTime = state.discover._targetSkipEnd + 0.5;
+    if (skipContainer) skipContainer.classList.add('hidden');
+  }
+}
+
+// P10: "Why This Stream?" Telemetry & Decision Inspector
+function openStreamExplainModal(infoHash, fileIdx = 0, title = '') {
+  const modal = document.getElementById('stream-explain-modal');
+  const body = document.getElementById('stream-explain-body');
+  if (!modal || !body) return;
+
+  modal.classList.remove('hidden');
+  body.innerHTML = `
+    <div class="flex items-center justify-center p-6 text-dim">
+      <i class="fa-solid fa-circle-notch fa-spin"></i> &nbsp; Inspecting swarm telemetry & providers...
+    </div>
+  `;
+
+  fetch(`/api/v1/stream/explain?info_hash=${encodeURIComponent(infoHash)}&file_idx=${fileIdx}`)
+    .then((r) => r.ok ? r.json() : Promise.reject(new Error('Failed to fetch explanation')))
+    .then((data) => {
+      renderStreamExplain(data, title);
+    })
+    .catch((err) => {
+      body.innerHTML = `<div class="p-4 text-red">Failed to analyze stream: ${escapeHtml(err.message)}</div>`;
+    });
+}
+
+function closeStreamExplainModal() {
+  const modal = document.getElementById('stream-explain-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function renderStreamExplain(data, title) {
+  const body = document.getElementById('stream-explain-body');
+  if (!body) return;
+
+  const pred = (data.prediction && data.prediction.time_to_first_frame) || 'unknown';
+  const isInstant = pred.includes('instant');
+  const predClass = isInstant ? 'instant' : 'p2p';
+  const predIcon = isInstant ? 'fa-bolt' : 'fa-users';
+  const predLabel = isInstant ? 'Instant Playback (Cached)' : (pred === 'p2p-dependent' ? 'Swarm Download' : 'Resolving');
+
+  const debridHints = (data.debrid && data.debrid.mesh_hints) || [];
+  const engine = data.engine;
+
+  const factorsHtml = (data.factors || []).map((f) => `
+    <div class="explain-factor-item">
+      <i class="fa-solid fa-circle-check"></i>
+      <span>${escapeHtml(f)}</span>
+    </div>
+  `).join('');
+
+  body.innerHTML = `
+    <div class="explain-card flex items-center justify-between">
+      <div>
+        <div style="font-weight:700; font-size:0.95rem; margin-bottom:4px;">${escapeHtml(title || data.info_hash)}</div>
+        <div class="mono text-xs text-dim">${data.info_hash.substring(0, 16)}... &bull; File index ${data.file_idx}</div>
+      </div>
+      <span class="explain-prediction-pill ${predClass}">
+        <i class="fa-solid ${predIcon}"></i> ${predLabel}
+      </span>
+    </div>
+
+    <div class="explain-card" style="display:flex; flex-direction:column; gap:8px;">
+      <div style="font-weight:600; font-size:0.85rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em;">Telemetry Summary</div>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px;">
+        <div style="background:rgba(255,255,255,0.02); padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.05);">
+          <div class="text-xs text-dim">Debrid Mesh Hints</div>
+          <div style="font-weight:700; color:#06b6d4;">${debridHints.length ? debridHints.map(h => h.provider).join(', ') : 'None'}</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.02); padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.05);">
+          <div class="text-xs text-dim">Swarm Peers</div>
+          <div style="font-weight:700; color:#818cf8;">${engine ? (engine.numPeers || 0) : '0'}</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.02); padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.05);">
+          <div class="text-xs text-dim">Keyframe Index</div>
+          <div style="font-weight:700; color:#10b981;">${data.keyframes_cached || 0} frames</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="explain-card">
+      <div style="font-weight:600; font-size:0.85rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;">Decision Factors</div>
+      <div>${factorsHtml || '<span class="text-xs text-dim">No factors reported</span>'}</div>
+    </div>
+  `;
+}
+
+// P5: Cross-torrent quality ladder buffer health monitor
+function _startLadderWatch() {
+  if (state.discover._ladderTimer) {
+    clearInterval(state.discover._ladderTimer);
+    state.discover._ladderTimer = null;
+  }
+  let starvedStreak = 0;
+  state.discover._ladderTimer = setInterval(async () => {
+    const active = state.discover.activeStream;
+    if (!active || !active.infoHash) return;
+
+    try {
+      const res = await fetch(`/api/v1/stream/health-watch?info_hash=${encodeURIComponent(active.infoHash)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.buffer_state === 'starved') {
+        starvedStreak++;
+        if (starvedStreak >= 3) {
+          starvedStreak = 0;
+          const detail = state.discover.activeDetail;
+          const title = (detail && detail.title) || active.title;
+          const curSize = active.sizeBytes || 2000000000;
+
+          const seasonParam = (active.season !== null && active.season !== undefined) ? `&season=${active.season}` : '';
+          const epParam = (active.episode !== null && active.episode !== undefined) ? `&episode=${active.episode}` : '';
+          const lRes = await fetch(`/api/v1/stream/ladder?title=${encodeURIComponent(title)}&current_size_bytes=${curSize}${seasonParam}${epParam}&media_type=${(detail && detail.type) || 'series'}`, { method: 'POST' });
+          if (!lRes.ok) return;
+          const lData = await lRes.json();
+          if (lData && lData.enabled && lData.candidates && lData.candidates.length > 0) {
+            const nextCandidate = lData.candidates[0];
+            const video = document.getElementById('evo-video-player');
+            const curTime = video ? video.currentTime : 0;
+            showToast(`Buffering starved. Hot-swapping to lighter release: ${nextCandidate.title}...`, 'warning');
+            playStreamInBrowser(nextCandidate.info_hash, nextCandidate.file_idx, nextCandidate.title, false, nextCandidate.magnet || '', active.season, active.episode);
+            if (video && curTime > 0) {
+              setTimeout(() => { if (video) video.currentTime = curTime; }, 800);
+            }
+          }
+        }
+      } else {
+        starvedStreak = 0;
+      }
+    } catch (_) {}
+  }, 5000);
+}
+
 function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet = '', seasonOverride = null, episodeOverride = null, forceDirectIdx = false) {
   initPlayerTimelineControls();
   _startLadderWatch();
@@ -8214,6 +8418,8 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             const tEl = document.getElementById('player-total-time');
             if (tEl) tEl.innerText = formatPlayerDuration(probe.duration);
             updatePlayerTimeline();
+            loadSpriteSheet(infoHash, probeFileIdx, probe.duration);
+            loadSceneBoundaries(infoHash, probe.duration);
           }
           if (probe.audio_tracks && probe.audio_tracks.length > 0) {
             curActive.audioTracks = probe.audio_tracks;
@@ -8791,6 +8997,7 @@ async function playDebridStream(infoHash, fileIdx, title, magnet = '', provider 
       if (active && !active.useTransmux && video.duration && isFinite(video.duration) && video.duration > 30) {
         active.totalDuration = video.duration;
         loadSpriteSheet(active.infoHash, active.fileIdx || 0, video.duration);
+        loadSceneBoundaries(active.infoHash, video.duration);
       }
       const totalEl = document.getElementById('player-total-time');
       const displayDur = (active && active.totalDuration > 0) ? active.totalDuration : (video.duration > 0 && isFinite(video.duration) ? video.duration : 0);
@@ -8800,6 +9007,7 @@ async function playDebridStream(infoHash, fileIdx, title, magnet = '', provider 
     video.ontimeupdate = () => {
       updatePlayerTimeline();
       updateSubtitleOverlay();
+      checkSceneSkip();
     };
     video.onseeked = () => {
       updatePlayerTimeline();

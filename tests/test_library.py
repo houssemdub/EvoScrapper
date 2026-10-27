@@ -8,12 +8,10 @@ from core.library_manager import LibraryManager
 from models.library import LibraryItem
 
 
-async def test_library_manager():
-    test_db = "data/test_library.json"
-    if os.path.exists(test_db):
-        os.remove(test_db)
-
-    mgr = LibraryManager(storage_path=test_db)
+async def test_library_manager(tmp_path):
+    test_db = str(tmp_path / "test_library.json")
+    test_sqlite = str(tmp_path / "test_library.db")
+    mgr = LibraryManager(db_path=test_sqlite, storage_path=test_db)
 
     # 1. Add Fairy Tail to Plan to Watch
     item1 = LibraryItem(
@@ -107,9 +105,7 @@ async def test_library_manager():
     assert saved_custom.poster == "https://example.com/poster.jpg"
     assert saved_custom.year == "2025"
 
-    # Clean up test file
-    if os.path.exists(test_db):
-        os.remove(test_db)
+
 
 
 if __name__ == "__main__":

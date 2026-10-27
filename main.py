@@ -20,6 +20,7 @@ from routers import (
     torrents_router,
     cometnet_router,
     auth_router,
+    profiles_router,
 )
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -139,6 +140,7 @@ app.include_router(stremio_router)
 app.include_router(library_router)
 app.include_router(cometnet_router)
 app.include_router(auth_router)
+app.include_router(profiles_router)
 
 
 @app.get("/", tags=["Web UI"])

@@ -136,6 +136,37 @@ class SeekHeatmapStore:
         except Exception:
             pass
 
+    async def load_from_db(self, db) -> int:
+        """T4.1: Populate in-memory seek heatmap from SQLite."""
+        try:
+            rows = await db.fetch_all("SELECT info_hash, bucket, weight FROM seek_heatmaps")
+            loaded = 0
+            for r in rows:
+                h = str(r["info_hash"]).strip().lower()
+                b = int(r["bucket"])
+                w = float(r["weight"])
+                self._heat.setdefault(h, {})[b] = w
+                loaded += 1
+            return loaded
+        except Exception:
+            return 0
+
+    async def sync_to_db(self, db) -> int:
+        """T4.1: Persist in-memory seek heatmap to SQLite."""
+        count = 0
+        now = time.time()
+        for h, buckets in self._heat.items():
+            for b, w in buckets.items():
+                try:
+                    await db.execute(
+                        "INSERT OR REPLACE INTO seek_heatmaps (info_hash, bucket, weight, updated_at) VALUES (?, ?, ?, ?)",
+                        (h, b, float(w), now),
+                    )
+                    count += 1
+                except Exception:
+                    pass
+        return count
+
 
 class DebridCoverageIndex:
     """
@@ -201,6 +232,35 @@ class DebridCoverageIndex:
             _atomic_write_json(self.path, self._index)
         except Exception:
             pass
+
+    async def load_from_db(self, db) -> int:
+        """T4.1: Populate in-memory debrid coverage from SQLite."""
+        try:
+            rows = await db.fetch_all("SELECT info_hash, provider, hits, last_seen FROM debrid_coverage")
+            loaded = 0
+            for r in rows:
+                h = str(r["info_hash"]).strip().lower()
+                p = str(r["provider"]).strip().lower()
+                self._index.setdefault(h, {})[p] = {"ts": float(r["last_seen"]), "hits": float(r["hits"])}
+                loaded += 1
+            return loaded
+        except Exception:
+            return 0
+
+    async def sync_to_db(self, db) -> int:
+        """T4.1: Persist in-memory debrid coverage to SQLite."""
+        count = 0
+        for h, providers in self._index.items():
+            for p, v in providers.items():
+                try:
+                    await db.execute(
+                        "INSERT OR REPLACE INTO debrid_coverage (info_hash, provider, hits, last_seen) VALUES (?, ?, ?, ?)",
+                        (h, p, float(v["hits"]), float(v["ts"])),
+                    )
+                    count += 1
+                except Exception:
+                    pass
+        return count
 
 
 def derive_scene_boundaries(

@@ -7,7 +7,8 @@ Also allows querying external community Stremio addons via /api/v1/addons/*.
 """
 
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 
 from core.media_meta import fetch_media_details
 from core.security import verify_api_key
@@ -39,8 +40,232 @@ async def get_stremio_manifest() -> Dict[str, Any]:
         "catalogs": [],
         "idPrefixes": ["tt", "kitsu:"],
         "background": "https://images.metahub.space/background/medium/tt1375666/img",
-        "logo": "/static/favicon.ico",
+        "logo": "/static/logo.png",
+        "behaviorHints": {
+            "configurable": True,
+            "configurationRequired": False,
+        },
     }
+
+
+@router.get("/configure", response_class=HTMLResponse)
+@router.get("/stremio/configure", response_class=HTMLResponse)
+async def get_stremio_configure(request: Request) -> str:
+    """
+    T4.6: Responsive web-based configuration page for Stremio addon installation.
+    Allows users to set stream preferences, preview manifest, and 1-click install.
+    """
+    html_content = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configure EvoScrapper — Stremio Addon</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: rgba(18, 24, 38, 0.85);
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --cyan: #06b6d4;
+      --text: #f3f4f6;
+      --text-dim: #9ca3af;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-focus: rgba(99, 102, 241, 0.5);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: radial-gradient(circle at top, #1e1b4b 0%, var(--bg) 70%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .config-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      max-width: 560px;
+      width: 100%;
+      padding: 2.25rem;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.7), 0 0 30px rgba(99, 102, 241, 0.15);
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1.75rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.25rem;
+    }
+    .logo {
+      width: 48px;
+      height: 48px;
+      border-radius: 0.75rem;
+      background: linear-gradient(135deg, var(--accent), var(--cyan));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+    }
+    h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
+    p.subtitle { font-size: 0.85rem; color: var(--text-dim); margin-top: 0.2rem; }
+    .form-group { margin-bottom: 1.25rem; }
+    label { display: block; font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); margin-bottom: 0.5rem; }
+    select, input[type="text"] {
+      width: 100%;
+      background: rgba(10, 14, 23, 0.75);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      color: var(--text);
+      padding: 0.75rem 1rem;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    select:focus, input[type="text"]:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+    }
+    .features-list {
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 0.5rem;
+      padding: 0.85rem 1rem;
+      margin-bottom: 1.5rem;
+      border: 1px dashed var(--border);
+    }
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-bottom: 0.35rem;
+    }
+    .feature-item:last-child { margin-bottom: 0; }
+    .feature-item i { color: #10b981; font-size: 0.85rem; }
+    .btn-group { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1.5rem; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.85rem 1.25rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      border: none;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #4f46e5);
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #4f46e5, #4338ca);
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: rgba(255, 255, 255, 0.1); }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.75rem;
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.1);
+      padding: 0.25rem 0.6rem;
+      border-radius: 1rem;
+      margin-top: 0.5rem;
+    }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+  </style>
+</head>
+<body>
+  <div class="config-card">
+    <div class="header">
+      <div class="logo">⚡</div>
+      <div>
+        <h1>EvoScrapper Addon</h1>
+        <p class="subtitle">Decentralized P2P Swarm & 6-Provider Multi-Debrid Gateway</p>
+        <div class="status-badge"><span class="status-dot"></span> Ready for Stremio v3</div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="pref-lang">Preferred Audio/Subtitle Language</label>
+      <select id="pref-lang">
+        <option value="all" selected>All Languages (Ranked by quality & seeds)</option>
+        <option value="eng">English (eng)</option>
+        <option value="fre">French (fre)</option>
+        <option value="ger">German (ger)</option>
+        <option value="spa">Spanish (spa)</option>
+        <option value="ita">Italian (ita)</option>
+        <option value="jpn">Japanese (jpn)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="max-streams">Max Streams Per Category</label>
+      <select id="max-streams">
+        <option value="10">Top 10 Streams</option>
+        <option value="20" selected>Top 20 Streams (Recommended)</option>
+        <option value="40">Top 40 Streams</option>
+      </select>
+    </div>
+
+    <div class="features-list">
+      <div class="feature-item"><i class="fa-solid fa-check"></i> Dual-Source Racing (Instant Debrid CDN vs. High-Seed P2P)</div>
+      <div class="feature-item"><i class="fa-solid fa-check"></i> Collective Seek Forecasting & Crowd Skip Support</div>
+      <div class="feature-item"><i class="fa-solid fa-check"></i> Automatic Subtitle Aggregator (5 sources)</div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" id="btn-install">
+        <i class="fa-solid fa-download"></i> Install to Stremio
+      </button>
+      <button class="btn btn-secondary" id="btn-copy">
+        <i class="fa-regular fa-copy"></i> Copy Manifest URL
+      </button>
+    </div>
+  </div>
+
+  <script>
+    function getManifestUrl() {
+      const origin = window.location.origin;
+      return `${origin}/manifest.json`;
+    }
+    document.getElementById('btn-install').addEventListener('click', () => {
+      const manifestUrl = getManifestUrl().replace(/^https?:\\/\\//, '');
+      window.location.href = `stremio://${manifestUrl}`;
+    });
+    document.getElementById('btn-copy').addEventListener('click', () => {
+      const url = getManifestUrl();
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById('btn-copy');
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-check"></i> Copied to Clipboard!';
+        setTimeout(() => { btn.innerHTML = orig; }, 2000);
+      });
+    });
+  </script>
+</body>
+</html>"""
+    return html_content
 
 
 @router.get("/stream/{type}/{item_id}.json")

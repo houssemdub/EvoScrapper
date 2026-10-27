@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.2] - 2026-10-27
+
+### Beyond Stremio Completion: SQLite Swarm DAL, Profiles, Stremio Portal & Intelligence UI
+
+#### Added
+- **Embedded SQLite Storage (T4.1 Complete)**: Async WAL-mode SQLite DAL (`core/database.py`) absorbing library bookmarks, watch history, `SeekHeatmapStore` buckets, and `DebridCoverageIndex` records with automatic schema management (v2) and legacy JSON migration.
+- **Household Multi-User Profiles & PIN Locks (T4.4 Complete)**: Multi-profile management API (`routers/profiles.py`, `core/profile_manager.py`) with Kids mode filtering and constant-time salted SHA-256 PIN verification.
+- **Stremio Addon Configuration Web Portal (T4.6 Complete)**: `/configure` and `/stremio/configure` responsive dashboard allowing preferred language selection, max stream limit tuning, and 1-click `stremio://` addon installation; manifest now advertises `behaviorHints: { configurable: true }`.
+- **Crowd Scene Skip UI (P3 Complete)**: Player HUD overlay (`#player-scene-skip-container`) tracking `currentTime` against gossiped scene intervals and exposing seamless "Skip Intro" / "Skip Credits" chips.
+- **Trick-Play Scrubber Hover Preview (P7 Complete)**: Timeline preview tooltip (`#player-timeline-preview-thumb`) dynamically computing sprite sheet grid column/row coordinates from `--evo-sprite-sheet`.
+- **"Why This Stream?" Breakdown UI (P10 Complete)**: Stream card "Why?" action badge and inspector modal (`#stream-explain-modal`) displaying provider cache status, live swarm telemetry, keyframe inventory, and first-frame prediction.
+- **Modular Subsystems (T4.2 Started)**: Extracted `static/js/party.js` watch-party transport and state sync module.
+
+#### Tests
+- Added unit tests for SQLite swarm persistence (`tests/test_swarm_sqlite.py`), multi-user profiles (`tests/test_profiles.py`), and Stremio configuration portal (`tests/test_stremio_server.py`) — test suite now at 477 passing tests.
+
+---
+
 ## [2.3.1] - 2026-10-27
 
 ### Pipeline Completion: Failover Relay, Watch-Party UI, DHT Persistence

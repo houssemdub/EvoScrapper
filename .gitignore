@@ -59,6 +59,10 @@ yarn-error.log*
 # User Data / Watchlist
 data/library.json
 !data/.gitkeep
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.migrated
 data/keyframes/
 data/hls_cache/
 data/sprites/

@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="static/logo.png" alt="EvoScrapper Logo" width="180" style="margin-bottom: 16px;" />
+
 <img src="EvoScrapper_Banner.jpg" alt="EvoScrapper Banner" width="100%" style="border-radius: 14px; margin-bottom: 20px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);" />
 
 # ⚡ EvoScrapper
@@ -9,7 +11,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-3776AB.svg?style=flat&logo=python&logoColor=white)](https://python.org)
 [![WebTorrent](https://img.shields.io/badge/WebTorrent-Node.js%20Daemon-brightgreen.svg?style=flat&logo=webtorrent)](https://webtorrent.io)
-[![Tests](https://img.shields.io/badge/Tests-381%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-477%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
 [![Spec-Driven](https://img.shields.io/badge/Architecture-Contract--First%20(SPEC.md)-informational.svg)](SPEC.md)
 [![Security Audit](https://img.shields.io/badge/Security%20Audit-28%20Flaws%20Remediated-blueviolet.svg?style=flat)](FLAWS.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -121,6 +123,11 @@ EvoScrapper/
 ├── DOCS.md                   # Detailed architectural and operational documentation
 ├── APIDOCS.md                # Complete REST API endpoint reference and schemas
 ├── core/
+│   ├── database.py           # Async SQLite DAL (WAL mode, schema versioning)
+│   ├── profile_manager.py    # Household multi-user profiles & PIN locks
+│   ├── swarm_intelligence.py # Seek heatmaps & Debrid coverage index
+│   ├── watch_party.py        # Signed Watch-Together gossip synchronization
+│   ├── failover_stream.py    # Cross-source byte-offset failover relay
 │   ├── client.py             # HTTPX & curl_cffi stealth HTTP client
 │   ├── circuit_breaker.py    # Asynchronous circuit breaker implementation
 │   ├── cache.py              # In-memory async cache with deepcopy isolation

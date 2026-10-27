@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="icon" type="image/jpeg" href="/static/logo.jpg">
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/logo-192.png">
   <title>EvoScrapper // Terminal</title>
 
   <!-- Hallmark 2+1 Typography: Space Grotesk (display), Geist (body), JetBrains Mono (data/code) -->
@@ -28,9 +29,9 @@
 
       <!-- Logo -->
       <div class="logo" onclick="switchTab('torrents')">
-        <img src="/static/logo.jpg" alt="EvoScrapper" class="logo-img">
+        <img src="/static/logo.png" alt="EvoScrapper" class="logo-img">
         <span class="logo-text">EvoScrapper</span>
-        <span class="logo-ver">v2</span>
+        <span class="logo-ver">v2.3</span>
       </div>
 
       <!-- Desktop Nav -->
@@ -999,6 +1000,28 @@
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: P10 "Why This Stream?" Telemetry & Decision Inspector       -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="stream-explain-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeStreamExplainModal()">
+    <div class="modal-box" style="max-width: 580px;">
+      <div class="modal-header flex items-center justify-between" style="border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:12px;">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-circle-nodes text-cyan" style="font-size:1.2rem;"></i>
+          <h3 style="margin:0; font-size:1.15rem; font-weight:700;">Why This Stream?</h3>
+        </div>
+        <button class="btn btn-icon btn-ghost" onclick="closeStreamExplainModal()" title="Close">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div id="stream-explain-body" class="modal-body" style="padding:16px 0; display:flex; flex-direction:column; gap:14px;">
+        <div class="flex items-center justify-center p-6 text-dim">
+          <i class="fa-solid fa-circle-notch fa-spin"></i> &nbsp; Analyzing stream telemetry...
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
   <!-- MODAL: My Library & Watchlist Bookmarks (Power-User Overhaul)      -->
   <!-- ═══════════════════════════════════════════════════════════════════ -->
   <div id="library-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeLibraryModal()">
@@ -1291,11 +1314,22 @@
           <div class="episodes-drawer-list" id="player-episodes-drawer-list"></div>
         </div>
 
+        <!-- P3: Crowd Scene Skip (Intro/Credits) -->
+        <div id="player-scene-skip-container" class="player-scene-skip-container hidden">
+          <button id="player-scene-skip-btn" class="player-scene-skip-btn" onclick="triggerSceneSkip()">
+            <i class="fa-solid fa-forward-step"></i> <span id="player-scene-skip-text">Skip Intro</span>
+          </button>
+        </div>
+
         <!-- Netflix-Grade Custom Player Bottom Controls HUD -->
         <div id="player-bottom-controls" class="player-bottom-controls">
           <!-- Timeline Container -->
           <div class="player-timeline-container" id="player-timeline-container">
-            <div id="player-hover-time" class="player-hover-time hidden">00:00:00</div>
+            <!-- P7: Trick-Play Scrubber Hover Thumbnail Preview & Time -->
+            <div id="player-timeline-preview" class="player-timeline-preview hidden">
+              <div id="player-timeline-preview-thumb" class="player-timeline-preview-thumb hidden"></div>
+              <div id="player-hover-time" class="player-hover-time">00:00:00</div>
+            </div>
             <div class="player-timeline-track" id="player-timeline-track">
               <div class="player-timeline-buffered" id="player-buffered-bar"></div>
               <div class="player-timeline-progress" id="player-progress-bar">
@@ -2515,6 +2549,9 @@
 
   <!-- Blu-ray PGS Canvas Decoder -->
   <script src="/static/pgs-decoder.js"></script>
+
+  <!-- Modular Subsystems (T4.2) -->
+  <script src="/static/js/party.js"></script>
 
   <!-- App Logic -->
   <script src="/static/app.js?v=2.2.0"></script>

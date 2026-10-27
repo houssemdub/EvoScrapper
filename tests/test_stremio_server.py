@@ -25,6 +25,20 @@ def test_stremio_manifest_endpoint(client):
     alias_res = client.get("/stremio/manifest.json")
     assert alias_res.status_code == 200
     assert alias_res.json()["id"] == "org.evoscrapper.addon"
+    assert alias_res.json().get("behaviorHints", {}).get("configurable") is True
+
+
+def test_stremio_configure_endpoint(client):
+    res = client.get("/configure")
+    assert res.status_code == 200
+    assert "text/html" in res.headers.get("content-type", "")
+    assert "EvoScrapper" in res.text
+    assert "Install to Stremio" in res.text
+
+    # Alias /stremio/configure
+    alias_res = client.get("/stremio/configure")
+    assert alias_res.status_code == 200
+    assert "Install to Stremio" in alias_res.text
 
 
 def test_stremio_stream_endpoint(client):
