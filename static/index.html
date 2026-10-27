@@ -1666,6 +1666,32 @@
 
             <!-- TAB 2: SYNC & CALIBRATION -->
             <div id="sub-panel-sync" class="sub-drawer-panel hidden">
+              <!-- AI & VAD SUBTITLE AUTO-SYNC ENGINE -->
+              <div class="sub-card-box mb-3" style="border: 1px solid rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.05);">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="mono text-xs font-bold text-accent"><i class="fa-solid fa-wand-magic-sparkles"></i> AUTO-SYNC ENGINE (VAD & EMBEDDED):</span>
+                  <span id="sub-autosync-status" class="mono text-2xs text-dim">Ready</span>
+                </div>
+                <div class="flex items-center gap-2 mb-2 flex-wrap">
+                  <button id="btn-sub-autosync" class="btn btn-xs btn-accent" onclick="triggerAutoSyncSubtitles()" title="Analyze audio stream speech intervals via FFmpeg VAD or align with container ground-truth">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Sync to Audio
+                  </button>
+                  <button class="btn btn-xs btn-outline" onclick="syncSubtitleToCurrentTime()" title="Sync current dialogue line to video playback timestamp right now (Hotkey: Shift+S)">
+                    <i class="fa-solid fa-location-dot text-green"></i> Sync to Current Voice
+                  </button>
+                  <button class="btn btn-xs btn-ghost text-red" onclick="resetSubtitleSync()" title="Reset delay to 0.0s">Reset</button>
+                </div>
+                <div class="flex items-center gap-1 mb-1 flex-wrap">
+                  <span class="text-2xs mono text-dim mr-1">Framerate Drift:</span>
+                  <button class="btn btn-2xs btn-outline" onclick="rescaleSubtitleFramerate(23.976 / 25.0, '23.976 -> 25 fps')" title="PAL speedup correction (0.959x)">23.976 &rarr; 25 fps</button>
+                  <button class="btn btn-2xs btn-outline" onclick="rescaleSubtitleFramerate(25.0 / 23.976, '25 -> 23.976 fps')" title="Film slowdown correction (1.0427x)">25 &rarr; 23.976 fps</button>
+                  <button class="btn btn-2xs btn-outline" onclick="rescaleSubtitleFramerate(24.0 / 23.976, '24 -> 23.976 fps')" title="NTSC telecine correction (1.001x)">24 &rarr; 23.976 fps</button>
+                </div>
+                <div class="text-xs text-dim mono" style="font-size:0.68rem;">
+                  One-click speech detection cross-correlates audio voice activity with subtitle text, eliminating manual timing drift.
+                </div>
+              </div>
+
               <!-- REAL-TIME SUBTITLE SYNC CONTROLLER -->
               <div class="sub-card-box">
                 <div class="flex items-center justify-between mb-2">
@@ -1878,6 +1904,10 @@
             <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">A</kbd></td><td class="text-dim">Cycle Aspect Ratio (Fit, 21:9 Ultrawide, Fill)</td></tr>
             <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">N</kbd></td><td class="text-dim">Toggle Night Dialogue Compressor (boost voices)</td></tr>
             <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">C</kbd></td><td class="text-dim">Toggle Subtitles & Audio Calibration Drawer</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">G</kbd> / <kbd class="kbd">H</kbd></td><td class="text-dim">Nudge Subtitle Delay &plusmn;100ms</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">Z</kbd> / <kbd class="kbd">X</kbd></td><td class="text-dim">Subtitle Delay &plusmn;250ms (VLC style)</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">Shift</kbd>+<kbd class="kbd">S</kbd></td><td class="text-dim">Sync Subtitle to Current Spoken Voice ("Sync to Here")</td></tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">S</kbd></td><td class="text-dim">Auto-Sync Subtitle with Audio Stream (VAD Engine)</td></tr>
             <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">S</kbd></td><td class="text-dim">Toggle P2P Swarm & Piece Map Inspector</td></tr>
             <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">E</kbd></td><td class="text-dim">Toggle In-Player Episodes Drawer</td></tr>
             <tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.45rem 0;"><kbd class="kbd">V</kbd></td><td class="text-dim">Launch in Native External Player (VLC, MPV, MPC-HC)</td></tr>

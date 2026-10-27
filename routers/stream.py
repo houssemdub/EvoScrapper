@@ -1,7 +1,8 @@
 import asyncio
 import aiohttp
 import re
-from typing import Optional
+from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
@@ -539,6 +540,94 @@ async def get_embedded_sup_subtitles(
             "Cache-Control": "public, max-age=3600",
         },
     )
+
+
+class CueItem(BaseModel):
+    start: float
+    end: float
+    text: Optional[str] = None
+
+
+class SubtitleAutoSyncRequest(BaseModel):
+    info_hash: str
+    file_idx: int = 0
+    cues: List[CueItem]
+    reference_sub_idx: Optional[int] = None
+    magnet: Optional[str] = None
+    season: Optional[int] = None
+    episode: Optional[int] = None
+
+
+@router.post("/subtitles/auto-sync")
+async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
+    """
+    Automatic subtitle alignment engine:
+    1. If an embedded reference text track exists, aligns target cues to ground-truth container timings.
+    2. Otherwise, runs Voice Activity Detection (silencedetect) on the audio stream and computes optimal cross-correlation offset.
+    """
+    if not req.cues:
+        return {"success": False, "offset": 0.0, "confidence": 0.0, "method": "none", "message": "No cues provided"}
+
+    from core.subtitle_sync import (
+        compute_optimal_offset,
+        align_to_reference_cues,
+        extract_speech_intervals_from_stream,
+    )
+
+    await ensure_streaming_daemon()
+    source_url = get_internal_stream_url(req.info_hash, req.file_idx, magnet=req.magnet, season=req.season, episode=req.episode)
+    local_file = _find_cached_media_path(info_hash=req.info_hash, episode=req.episode)
+    target_source = local_file if local_file else source_url
+
+    cue_tuples = [(c.start, c.end) for c in req.cues]
+
+    # Mode 1: Align to container-embedded reference subtitle if available
+    ref_idx = req.reference_sub_idx
+    if ref_idx is not None:
+        try:
+            vtt = await extract_embedded_subtitle_vtt(target_source, ref_idx)
+            if vtt and not vtt.startswith("WEBVTT\n\nNOTE Empty"):
+                ref_tuples = []
+                for m in re.finditer(r"(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})", vtt):
+                    def _parse_ts(s: str) -> float:
+                        h, m_, s_ = s.split(":")
+                        return int(h) * 3600 + int(m_) * 60 + float(s_)
+                    ref_tuples.append((_parse_ts(m.group(1)), _parse_ts(m.group(2))))
+
+                if ref_tuples:
+                    offset, conf = align_to_reference_cues(cue_tuples, ref_tuples)
+                    return {
+                        "success": True,
+                        "offset": offset,
+                        "confidence": conf,
+                        "method": "embedded_reference",
+                        "reference_sub_idx": ref_idx,
+                    }
+        except Exception as e:
+            streaming_logger.warning(f"[SubtitleAutoSync] Reference alignment fallback: {e}")
+
+    # Mode 2: Audio Voice Activity Detection (VAD) via FFmpeg silencedetect
+    try:
+        speech = await extract_speech_intervals_from_stream(target_source, duration=180.0)
+        if speech:
+            offset, conf = compute_optimal_offset(cue_tuples, speech)
+            return {
+                "success": True,
+                "offset": offset,
+                "confidence": conf,
+                "method": "audio_vad",
+                "speech_intervals_detected": len(speech),
+            }
+    except Exception as e:
+        streaming_logger.warning(f"[SubtitleAutoSync] Audio VAD failed: {e}")
+
+    return {
+        "success": False,
+        "offset": 0.0,
+        "confidence": 0.0,
+        "method": "none",
+        "message": "Could not detect audio speech intervals or reference tracks",
+    }
 
 
 @router.get("/stats")

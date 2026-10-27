@@ -3500,7 +3500,152 @@ function adjustSubtitleSync(delta) {
 
 function resetSubtitleSync() {
   setSubtitleSync(0.0);
+  const statusEl = document.getElementById('sub-autosync-status');
+  if (statusEl) statusEl.innerText = 'Reset (0ms)';
   showToast('Subtitle sync reset to 0ms', 'info');
+}
+
+async function triggerAutoSyncSubtitles() {
+  const active = state.discover.activeStream;
+  const cues = state.subtitles.rawCues;
+  const statusEl = document.getElementById('sub-autosync-status');
+  const btn = document.getElementById('btn-sub-autosync');
+
+  if (!cues || cues.length === 0) {
+    showToast('No active subtitles loaded to auto-sync', 'warning');
+    return;
+  }
+  if (!active || !active.infoHash) {
+    showToast('No active media stream found for auto-sync', 'warning');
+    return;
+  }
+
+  if (statusEl) statusEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-accent"></i> Syncing...';
+  if (btn) btn.disabled = true;
+  showToast('Auto-syncing subtitles with audio stream...', 'info');
+
+  try {
+    const fileIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null)
+      ? active.playingFileIdx
+      : (active.fileIdx || 0);
+
+    const payloadCues = cues.slice(0, 150).map((c) => ({
+      start: c.start,
+      end: c.end,
+      text: (c.text || '').slice(0, 100),
+    }));
+
+    let refCues = null;
+    if (state.subtitles.referenceCues && state.subtitles.referenceCues.length > 0) {
+      refCues = state.subtitles.referenceCues.slice(0, 150).map((c) => ({
+        start: c.start,
+        end: c.end,
+        text: (c.text || '').slice(0, 100),
+      }));
+    }
+
+    const payload = {
+      info_hash: active.infoHash,
+      file_idx: fileIdx,
+      magnet: active.magnet || null,
+      season: (active.season !== undefined && active.season !== null) ? active.season : null,
+      episode: (active.episode !== undefined && active.episode !== null) ? active.episode : null,
+      cues: payloadCues,
+      reference_cues: refCues,
+      max_duration_seconds: 180.0,
+    };
+
+    const res = await fetch('/api/v1/stream/subtitles/auto-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Server returned HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    const offset = typeof data.offset === 'number' ? data.offset : 0.0;
+    const confidencePct = Math.round((data.confidence || 0) * 100);
+
+    setSubtitleSync(offset);
+
+    if (statusEl) {
+      statusEl.innerHTML = `<span class="text-green font-bold"><i class="fa-solid fa-check"></i> ${offset >= 0 ? '+' : ''}${offset.toFixed(2)}s (${confidencePct}%)</span>`;
+    }
+
+    const sign = offset >= 0 ? '+' : '';
+    showToast(
+      `🪄 Auto-sync complete! Applied ${sign}${offset.toFixed(2)}s offset (${confidencePct}% confidence · Mode: ${data.mode || 'VAD'})`,
+      'success'
+    );
+  } catch (err) {
+    console.warn('[EvoPlayer] Subtitle auto-sync error:', err);
+    if (statusEl) statusEl.innerHTML = '<span class="text-red font-bold">Failed</span>';
+    showToast(`Auto-sync failed: ${err.message}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function syncSubtitleToCurrentTime() {
+  const video = document.getElementById('evo-video-player');
+  const active = state.discover.activeStream;
+  const cues = state.subtitles.rawCues;
+
+  if (!video || !cues || cues.length === 0) {
+    showToast('No active subtitles loaded to sync', 'warning');
+    return;
+  }
+
+  const curPlayTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+  const currentOffset = state.subtitles.currentOffset || 0.0;
+
+  let bestCue = null;
+  let minDiff = Infinity;
+  for (const c of cues) {
+    const effectiveStart = c.start + currentOffset;
+    const diff = Math.abs(curPlayTime - effectiveStart);
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestCue = c;
+    }
+  }
+
+  if (!bestCue) {
+    showToast('Could not find nearby subtitle cue to sync', 'warning');
+    return;
+  }
+
+  const newOffset = curPlayTime - bestCue.start;
+  setSubtitleSync(newOffset);
+
+  const cleanText = (bestCue.text || '').replace(/<[^>]*>/g, '').trim().slice(0, 35);
+  const sign = newOffset >= 0 ? '+' : '';
+  showToast(
+    `📍 Synced to voice: "${cleanText}..." (${sign}${newOffset.toFixed(2)}s offset)`,
+    'success'
+  );
+}
+
+function rescaleSubtitleFramerate(factor, label) {
+  const cues = state.subtitles.rawCues;
+  if (!cues || cues.length === 0) {
+    showToast('No active subtitles loaded to retime', 'warning');
+    return;
+  }
+  if (!factor || isNaN(factor) || factor <= 0) return;
+
+  state.subtitles.rawCues = cues.map((c) => ({
+    ...c,
+    start: c.start * factor,
+    end: c.end * factor,
+  }));
+
+  updateSubtitleOverlay();
+  showToast(`Subtitles retimed for ${label || 'new framerate'} (${factor.toFixed(5)}x)`, 'info');
 }
 
 function disableSubtitles() {
@@ -3935,15 +4080,20 @@ function renderSubtitleTracksList(subs) {
 
     const langFlag = s.lang_code ? s.lang_code.toUpperCase() : 'SUB';
     const title = s.release_name || s.title || `${s.language} Subtitle`;
-    const formatBadge = s.is_image_based ? 'PGS Image (VLC Recommended)' : (s.format || 'SRT').toUpperCase();
+    const isContainerSynced = Boolean(s.is_embedded && !s.is_image_based);
+    const tagClass = s.is_image_based ? 'tag-orange' : (isContainerSynced ? 'tag-accent' : 'tag-green');
+    const providerBadge = isContainerSynced
+      ? '<span class="sub-provider-badge text-xs mono text-accent font-bold"><i class="fa-solid fa-bullseye"></i> Container Synced</span>'
+      : `<span class="sub-provider-badge text-xs mono text-dim">${escapeHtml(s.provider || 'Sub')}</span>`;
+    const formatBadge = s.is_image_based ? 'PGS Image (VLC Recommended)' : (s.format || (isContainerSynced ? 'EMBEDDED' : 'SRT')).toUpperCase();
 
     return `
       <div class="sub-item-card ${isItemActive ? 'active' : ''}" data-suburl="${escapeHtml(s.download_url || '')}" data-subid="${escapeHtml(s.id || '')}" onclick="selectSubtitleByIndex(${idx})">
         <div class="sub-item-top">
           <div class="flex items-center gap-2">
             <span class="sub-card-check">${isItemActive ? '<i class="fa-solid fa-circle-check text-green"></i>' : '<i class="fa-regular fa-circle text-dim"></i>'}</span>
-            <span class="tag ${s.is_image_based ? 'tag-orange' : 'tag-green'} mono font-bold" style="font-size:0.68rem;">[${escapeHtml(langFlag)}] ${escapeHtml(s.language || 'English')}</span>
-            <span class="sub-provider-badge text-xs mono text-dim">${escapeHtml(s.provider || 'Sub')}</span>
+            <span class="tag ${tagClass} mono font-bold" style="font-size:0.68rem;">[${escapeHtml(langFlag)}] ${escapeHtml(s.language || 'English')}</span>
+            ${providerBadge}
             <span class="text-2xs mono text-dim">${escapeHtml(formatBadge)}</span>
           </div>
           <button class="btn btn-xs btn-outline ${isSecActive}" style="margin-left:auto; font-size:0.65rem; padding:0.15rem 0.45rem;" onclick="event.stopPropagation(); setSecondarySubtitleByIndex(${idx})" title="Language Learning: Render at top of screen as secondary subtitle">
@@ -5507,6 +5657,12 @@ function initPlayerTimelineControls() {
     } else if (e.key === 'b' || e.key === 'B') {
       e.preventDefault();
       cycleAudioTrack();
+    } else if ((e.key === 's' || e.key === 'S') && e.ctrlKey && e.shiftKey) {
+      e.preventDefault();
+      triggerAutoSyncSubtitles();
+    } else if ((e.key === 's' || e.key === 'S') && e.shiftKey) {
+      e.preventDefault();
+      syncSubtitleToCurrentTime();
     } else if (e.key === 's' || e.key === 'S') {
       e.preventDefault();
       toggleSwarmInspectorModal();
@@ -5516,6 +5672,12 @@ function initPlayerTimelineControls() {
     } else if (e.key === 'd' || e.key === 'D') {
       e.preventDefault();
       triggerOfflineDownload();
+    } else if (e.key === 'z' || e.key === 'Z') {
+      e.preventDefault();
+      adjustSubtitleSyncMs(-250);
+    } else if (e.key === 'x' || e.key === 'X') {
+      e.preventDefault();
+      adjustSubtitleSyncMs(250);
     } else if (e.key === 'g' || e.key === 'G') {
       e.preventDefault();
       adjustSubtitleSyncMs(-100);
@@ -7968,7 +8130,21 @@ function seekTransmuxOffset(clamped) {
   const active = state.discover.activeStream;
   if (!video || !active) return;
 
-  active.playbackOffset = clamped;
+  // Keyframe Snapping Alignment:
+  // Match backend FFmpeg transmuxer snapping logic so active.playbackOffset exactly equals
+  // the snapped start PTS returned by transmuxer, preventing subtitle timing drift on seek.
+  let effectiveSeek = clamped;
+  if (active.keyframes && Array.isArray(active.keyframes) && active.keyframes.length > 0 && clamped > 0) {
+    const preceding = active.keyframes.filter((k) => k <= clamped);
+    if (preceding.length > 0) {
+      const candidate = preceding[preceding.length - 1];
+      if ((clamped - candidate) <= 15.0) {
+        effectiveSeek = candidate;
+      }
+    }
+  }
+
+  active.playbackOffset = effectiveSeek;
 
   const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
   const burnSubParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
@@ -7985,7 +8161,7 @@ function seekTransmuxOffset(clamped) {
   const durationParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
   const bufferParam = `&buffer_mb=${getActiveBufferSizeMb()}`;
 
-  const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${audioParam}&start_time=${clamped.toFixed(2)}${burnSubParam}${transcodeParam}${epParams}${magnetParam}${durationParam}${bufferParam}`;
+  const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${audioParam}&start_time=${effectiveSeek.toFixed(2)}${burnSubParam}${transcodeParam}${epParams}${magnetParam}${durationParam}${bufferParam}`;
 
   showPlayerBufferingHUD();
 
@@ -8515,15 +8691,35 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             state.subtitles.availableSubs = [...textEmbedded, ...existingOnline, ...pgsEmbedded];
             renderSubtitleTracksList(state.subtitles.availableSubs);
 
-            // Stremio-grade subtitle behavior: If an online subtitle is already active and loaded (e.g. OpenSubtitles),
-            // preserve it! Do NOT blow away working subtitles.
-            // Only auto-apply if NO subtitle track has been loaded yet.
-            if (textEmbedded.length > 0 && !state.subtitles.activeTrack && (!state.subtitles.rawCues || state.subtitles.rawCues.length === 0)) {
-              const prefLang = state.subtitles.preferredLang || 'en';
-              const matchEmbedded = textEmbedded.find(s => matchSubtitleLang(s, prefLang)) || textEmbedded[0];
-              if (matchEmbedded) {
-                console.log('[EvoPlayer] Auto-applying embedded subtitle track:', matchEmbedded.release_name);
-                applySubtitle(matchEmbedded, true);
+            // Priority Subtitle Handling:
+            // Container-embedded text subtitles (SRT/VTT) are 100% synchronized to video PTS by the release group.
+            // If the user has NOT manually chosen an online subtitle, embedded subtitles matching preferred language
+            // ALWAYS take priority over generic online guesses.
+            const prefLang = state.subtitles.preferredLang || 'en';
+            const matchEmbedded = textEmbedded.find(s => matchSubtitleLang(s, prefLang));
+
+            if (textEmbedded.length > 0) {
+              // Cache reference embedded cues for instant cross-subtitle alignment
+              const refTrack = matchEmbedded || textEmbedded[0];
+              if (refTrack && refTrack.download_url) {
+                fetch(refTrack.download_url)
+                  .then(r => r.ok ? r.text() : '')
+                  .then(txt => {
+                    if (txt && !txt.includes('NOTE Empty') && !txt.includes('Extraction error')) {
+                      state.subtitles.referenceCues = parseVttOrSrtToCues(txt);
+                    }
+                  })
+                  .catch(() => {});
+              }
+
+              // Auto-apply if no subtitle active yet, OR if the current active subtitle was an auto-loaded online guess
+              const shouldApplyEmbedded = !state.subtitles.activeTrack ||
+                (!state.subtitles.userManuallySelected && !state.subtitles.activeTrack.is_embedded && matchEmbedded);
+
+              if (shouldApplyEmbedded && (matchEmbedded || textEmbedded[0])) {
+                const targetEmbedded = matchEmbedded || textEmbedded[0];
+                console.log('[EvoPlayer] Auto-applying container-synced embedded subtitle track:', targetEmbedded.release_name);
+                applySubtitle(targetEmbedded, true);
               }
             }
           }
