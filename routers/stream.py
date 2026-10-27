@@ -623,11 +623,11 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
                 vtt = await extract_embedded_subtitle_vtt(target_source, req.reference_sub_idx, timeout=6.0)
             if vtt and not vtt.startswith("WEBVTT\n\nNOTE Empty") and "-->" in vtt:
                 ref_tuples = []
-                for m in re.finditer(r"(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})", vtt):
-                    def _parse_ts(s: str) -> float:
-                        h, m_, s_ = s.split(":")
-                        return int(h) * 3600 + int(m_) * 60 + float(s_)
-                    ref_tuples.append((_parse_ts(m.group(1)), _parse_ts(m.group(2))))
+                for m in re.finditer(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})", vtt):
+                    def _parse_ts(h, m_, s_, ms_) -> float:
+                        return int(h or 0) * 3600 + int(m_) * 60 + int(s_) + int(ms_) / 1000.0
+                    ref_tuples.append((_parse_ts(m.group(1), m.group(2), m.group(3), m.group(4)),
+                                       _parse_ts(m.group(5), m.group(6), m.group(7), m.group(8))))
         except Exception as e:
             streaming_logger.warning(f"[SubtitleAutoSync] Reference alignment fallback: {e}")
 
@@ -717,11 +717,11 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
             vtt = await extract_embedded_subtitle_vtt(target_source, req.reference_sub_idx)
             if vtt and not vtt.startswith("WEBVTT\n\nNOTE Empty"):
                 ref_tuples = []
-                for m in re.finditer(r"(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})", vtt):
-                    def _parse_ts(s: str) -> float:
-                        h, m_, s_ = s.split(":")
-                        return int(h) * 3600 + int(m_) * 60 + float(s_)
-                    ref_tuples.append((_parse_ts(m.group(1)), _parse_ts(m.group(2)), ""))
+                for m in re.finditer(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})", vtt):
+                    def _parse_ts(h, m_, s_, ms_) -> float:
+                        return int(h or 0) * 3600 + int(m_) * 60 + int(s_) + int(ms_) / 1000.0
+                    ref_tuples.append((_parse_ts(m.group(1), m.group(2), m.group(3), m.group(4)),
+                                       _parse_ts(m.group(5), m.group(6), m.group(7), m.group(8)), ""))
         except Exception as e:
             streaming_logger.warning(f"[SubtitleAutoSyncV2] Reference extraction fallback: {e}")
 

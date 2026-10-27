@@ -139,6 +139,43 @@ Second English line
             assert abs(data["offset"] - (-2.0)) <= 0.1
 
 
+@pytest.mark.asyncio
+async def test_auto_sync_endpoint_short_timestamp_vtt():
+    """Verify auto-sync parses standard 2-component mm:ss.ttt WebVTT timestamps from FFmpeg."""
+    from unittest.mock import patch, AsyncMock
+    from httpx import AsyncClient, ASGITransport
+    from main import app
+
+    ref_vtt = """WEBVTT
+
+01:10.000 --> 01:15.000
+Original English
+
+01:25.000 --> 01:30.000
+Second English line
+"""
+    # 70.0s and 85.0s
+    cues = [{"start": 72.0, "end": 77.0, "text": "Hola"}, {"start": 87.0, "end": 92.0, "text": "Segunda linea"}]
+
+    with patch("routers.stream.extract_embedded_subtitle_vtt", new=AsyncMock(return_value=ref_vtt)), \
+         patch("core.torrent_streamer.ensure_streaming_daemon", new=AsyncMock(return_value=True)):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            res = await client.post(
+                "/api/v1/stream/subtitles/auto-sync",
+                json={
+                    "info_hash": "b" * 40,
+                    "file_idx": 0,
+                    "reference_sub_idx": 0,
+                    "cues": cues,
+                },
+            )
+            assert res.status_code == 200
+            data = res.json()
+            assert data["success"] is True
+            assert data["method"] == "embedded_reference"
+            assert abs(data["offset"] - (-2.0)) <= 0.1
+
+
 def test_frontend_subtitle_sync_ui_elements():
     """Verify index.html contains auto-sync button, status indicator, voice anchor, and framerate presets."""
     import os

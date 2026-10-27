@@ -3741,11 +3741,20 @@ async function autoLoadSubtitles(title, imdbId, season, episode, releaseTitle = 
       } catch (_) {}
     }
 
-    state.subtitles.availableSubs = subs;
-    renderSubtitleTracksList(subs);
+    const existingEmbedded = (state.subtitles.availableSubs || []).filter((s) => s.is_embedded);
+    state.subtitles.availableSubs = [...existingEmbedded, ...subs];
+    renderSubtitleTracksList(state.subtitles.availableSubs);
+
+    // VLC & Stremio Parity: Container-embedded subtitles take priority over generic online guesses
+    const preferredLang = state.subtitles.preferredLang || 'en';
+    const hasActiveEmbedded = state.subtitles.activeTrack && state.subtitles.activeTrack.is_embedded;
+    const hasEmbeddedMatch = existingEmbedded.some((s) => !s.is_image_based && matchSubtitleLang(s, preferredLang));
+    if (hasActiveEmbedded || hasEmbeddedMatch) {
+      console.log('[EvoPlayer] Container-embedded subtitle active or available; prioritizing over online subs (VLC/Stremio parity)');
+      return;
+    }
 
     // Auto-select candidate: preferred language (English first), matching release if possible
-    const preferredLang = state.subtitles.preferredLang || 'en';
     const langSubs = subs.filter((s) => matchSubtitleLang(s, preferredLang));
 
     let bestMatch = null;
@@ -3955,8 +3964,23 @@ async function applySubtitle(subItem, isAuto = false) {
         ) || (state.subtitles.availableSubs || []).find((s) => !s.is_embedded && !s.is_image_based);
 
         if (onlineFallback && (!state.subtitles.activeTrack || state.subtitles.activeTrack.is_embedded)) {
-          console.log('[EvoPlayer] Embedded track extracting; activating interim online subtitle:', onlineFallback.release_name);
-          applySubtitle(onlineFallback, false).catch(() => {});
+          console.log('[EvoPlayer] Embedded track extracting; activating interim online cues:', onlineFallback.release_name);
+          const fbUrl = onlineFallback.download_url || '';
+          if (fbUrl) {
+            const vUrl = fbUrl.startsWith('/api/') ? fbUrl : `/api/v1/subtitles/vtt?url=${encodeURIComponent(fbUrl)}&offset=0`;
+            fetch(vUrl)
+              .then(r => r.ok ? r.text() : '')
+              .then(fbTxt => {
+                if (fbTxt && state.subtitles._subPollToken === subPollToken) {
+                  const interimCues = parseVttOrSrtToCues(fbTxt);
+                  if (interimCues && interimCues.length > 0 && (!state.subtitles.rawCues || state.subtitles.rawCues.length === 0)) {
+                    state.subtitles.rawCues = interimCues;
+                    renderCuesToVideo(interimCues, state.subtitles.currentOffset || 0.0);
+                  }
+                }
+              })
+              .catch(() => {});
+          }
         }
 
         if (badge) badge.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-accent"></i> Extracting embedded subs…`;

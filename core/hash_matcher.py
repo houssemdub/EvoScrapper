@@ -54,6 +54,41 @@ def compute_file_hash(filepath: str) -> Optional[str]:
         return None
 
 
+async def compute_stream_opensubtitles_hash(stream_url: str) -> Optional[tuple[str, int]]:
+    """
+    Computes 64-bit OpenSubtitles hash for an HTTP stream using Range requests (first 64KB + last 64KB).
+    Matches Stremio/VLC file hashing for byte-perfect online subtitle synchronization.
+    """
+    if not stream_url or not stream_url.startswith("http"):
+        return None
+    try:
+        timeout = aiohttp.ClientTimeout(total=4.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(stream_url, headers={"Range": "bytes=0-65535"}) as resp:
+                if resp.status not in (200, 206):
+                    return None
+                cr = resp.headers.get("Content-Range", "")
+                if "/" in cr:
+                    file_size = int(cr.split("/")[-1])
+                else:
+                    cl = resp.headers.get("Content-Length")
+                    file_size = int(cl) if cl else 0
+                if file_size < 131072:
+                    return None
+                head_bytes = await resp.read()
+
+            tail_start = file_size - 65536
+            async with session.get(stream_url, headers={"Range": f"bytes={tail_start}-{file_size - 1}"}) as resp2:
+                if resp2.status not in (200, 206):
+                    return None
+                tail_bytes = await resp2.read()
+
+            h = compute_opensubtitles_hash(head_bytes, tail_bytes, file_size)
+            return (h, file_size)
+    except Exception:
+        return None
+
+
 async def search_subtitles_by_hash(
     movie_hash: str,
     file_size: int,
