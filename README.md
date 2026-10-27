@@ -44,9 +44,13 @@
 - **Native VLC Launcher**: Seamless one-click desktop streaming directly to VLC media player with tracked child process PID lifecycle management.
 
 ### 📝 4. Precision Subtitle Engine ("EvoSubs")
-- **Multi-Modal Subtitle Sync Engine v2**: Multi-signal temporal alignment fusing Audio Voice Activity Detection (FFmpeg silencedetect), container-embedded reference tracks, and multi-source external timing consensus.
-- **Forced Subtitles & Signs Isolation**: Automatically detects and filters bracketed signs, song lyrics, title cards, and credits before alignment to prevent artificial timing skew.
-- **Framerate & Non-Linear Drift Modeling**: Pure-Python Ordinary Least Squares (OLS) regression resolving framerate speedup/slowdown drift (e.g. 23.976 fps vs 24.0/25.0 fps PAL) without heavy scientific library overhead.
+- **Multi-Modal Subtitle Sync Engine v2**: Multi-signal temporal alignment fusing Audio Voice Activity Detection (FFmpeg silencedetect), container-embedded reference tracks, multi-source external timing consensus, and forced subtitle / sign filtering.
+- **Dominant-Cluster Reference Alignment**: Reference tracks are matched by all-pairs start-delta voting across ±120s, a densest-cluster median, and an ambiguity guard that rejects dense/regular cue grids where many offsets look plausible.
+- **Self-Reference Guard**: A reference that matches the active subtitles (≥85% of cue starts within 0.15s) is ignored in both backend and player, so alignment falls back to audio VAD instead of reporting a misleading `0s / 100%` match.
+- **Speech-Pattern VAD**: Zero-normalised cross-correlation over a coarse-to-fine ±180s search rejects flat or uninformative speech and snaps corrections below 0.6s to zero, preventing random jumps on silent or cold-swarm streams.
+- **Framerate & Non-Linear Drift Modeling**: Pure-Python OLS regression with discrete PAL/NTSC scale candidates (23.976 ↔ 24 ↔ 25 fps), anchored on the reference constant term so short VAD windows cannot bias the drift fit.
+- **Drift-Aware Overlay & Persistence**: The player applies `corrected = cue + a*cue + b` live, rejects auto-sync results below 0.35 confidence, and persists offset + drift per `info_hash/file_idx/season/episode/track` in localStorage, including embedded tracks.
+- **Seek-Safe Timing & Opt-In HLS Subtitles**: Copy-mode seeks snap to the preceding keyframe using the same 15s contract as backend `/transmux` (transcode/burn-in keeps exact seeks), and `include_subtitles=true` optionally advertises text tracks via HLS `EXT-X-MEDIA` without slowing the default manifest path.
 - **Real-Time Adaptive Playback Learning**: Live session controller with `/api/v1/stream/subtitles/adjust` that coalesces user hotkey nudges (`H`/`J` delay keys) and applies exponential timeline proximity weighting.
 - **Multi-Source Aggregation**: Simultaneous lookups across **OpenSubtitles (v1 & Stremio v3)**, **Gestdown** (zero-auth Addic7ed proxy), **SubDL** (with ZIP extraction and language disambiguation), **SubSource**, **AnimeTosho** (SHA-1 hash softsub extraction), and **YIFY Subtitles**.
 - **Word-Tokenized Language Isolation**: Implements strict language boundary checks preventing substring collisions (e.g. isolating Arabic `ar` from `hungARian` and `bulgARian`) across 20+ language families.

@@ -207,3 +207,22 @@ def test_frontend_subtitle_sync_scripts():
     assert "triggerAutoSyncSubtitles" in js
     assert "syncSubtitleToCurrentTime" in js
 
+    # Auto-sync v2 (drift-aware) endpoint is used by the player.
+    assert "/api/v1/stream/subtitles/auto-sync-v2" in js
+    assert "function applySubtitleSyncResult" in js
+    assert "function subtitleDriftOffsetAt" in js
+    assert "function subtitleOffsetAt" in js
+    assert "function subtitleCueWindow" in js
+    assert "subtitleCueWindow(c)" in js
+
+    # Per-media/track sync persistence helpers.
+    assert "function saveCurrentSubtitleSync" in js
+    assert "function loadSavedSubtitleSync" in js
+    assert "evo_sub_sync:" in js
+    assert "function isSameSubtitleTrack" in js
+
+    # Seek snapping must exactly mirror the backend's copy-mode keyframe seek.
+    assert "function snapTransmuxSeekTime" in js
+    assert "snapTransmuxSeekTime(active, clamped)" in js
+    assert "snapTransmuxSeekTime(active, curTime)" in js
+

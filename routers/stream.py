@@ -33,7 +33,9 @@ from core.transmuxer import (
     start_sub_vtt_extraction,
     stream_hls_fmp4_init,
     stream_hls_ts_segment,
+    stream_hls_subtitle_segment,
     stream_transmuxed_video,
+    probe_media_stream,
 )
 from core.logger import debrid_logger, streaming_logger
 from models.stream import LaunchVlcRequest, StreamResolveResponse
@@ -98,6 +100,24 @@ async def list_torrent_files(
     """
     files = await get_torrent_files(info_hash, magnet=magnet)
     return {"info_hash": info_hash, "files": files, "total": len(files)}
+
+
+@router.get("/stream-info")
+async def get_stream_info(
+    info_hash: str = Query(..., description="Torrent info hash"),
+    file_idx: int = Query(0, description="File index inside torrent"),
+    magnet: Optional[str] = Query(None, description="Optional magnet URI"),
+    season: Optional[int] = Query(None, description="Season number"),
+    episode: Optional[int] = Query(None, description="Episode number"),
+):
+    """
+    Returns media stream information (video, audio, subtitle tracks) for a specific file.
+    Used by frontend to select subtitle/audio tracks.
+    """
+    await ensure_streaming_daemon()
+    source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+    probe = await probe_media_stream(source_url)
+    return probe
 
 
 @router.get("/warm")
@@ -489,12 +509,12 @@ async def get_embedded_subtitles(
     magnet: Optional[str] = Query(None),
     season: Optional[int] = Query(None),
     episode: Optional[int] = Query(None),
+    fast: bool = Query(False, description="Extract only first 5 minutes for instant preview"),
 ):
     """
-    Extracts embedded Matroska/MP4 subtitles on the fly into WebVTT format using FFmpeg.
-    Full-file extraction over a cold swarm takes minutes, so the response is served
-    from a disk cache when ready and marked X-Evo-Sub-Pending while a background
-    extraction job runs — clients poll until the marker disappears.
+    Extracts embedded Matroska/MP4 subtitles into WebVTT format.
+    - With fast=true: extracts only first 5 minutes for instant preview (no cache wait)
+    - Without fast: full extraction with disk caching (clients poll until ready)
     """
     if info_hash.startswith("cdn_"):
         return Response(
@@ -524,6 +544,18 @@ async def get_embedded_subtitles(
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
     local_file = _find_cached_media_path(info_hash=info_hash, episode=episode)
     target_source = local_file if local_file else source_url
+
+    if fast is True:
+        # Fast extraction: only first 5 minutes, no caching, immediate response
+        from core.transmuxer import extract_embedded_subtitle_vtt
+        vtt = await extract_embedded_subtitle_vtt(target_source, sub_index, timeout=10.0, duration=300.0)
+        return Response(
+            content=vtt,
+            media_type="text/vtt; charset=utf-8",
+            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
+        )
+
+    # Full extraction with caching (background job)
     start_sub_vtt_extraction(cache_key, target_source, sub_index)
     return Response(
         content="WEBVTT\n\nNOTE Extraction pending\n",
@@ -575,6 +607,51 @@ class CueItem(BaseModel):
     text: Optional[str] = None
 
 
+def _parse_vtt_cue_times(vtt: str) -> List[tuple]:
+    """Parses WebVTT/SRT timestamps into (start, end) tuples."""
+    cue_times: List[tuple] = []
+    if not vtt or "-->" not in vtt:
+        return cue_times
+    for m in re.finditer(
+        r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})",
+        vtt,
+    ):
+        def _parse_ts(h, m_, s_, ms_) -> float:
+            return int(h or 0) * 3600 + int(m_) * 60 + int(s_) + int(ms_) / 1000.0
+
+        cue_times.append((
+            _parse_ts(m.group(1), m.group(2), m.group(3), m.group(4)),
+            _parse_ts(m.group(5), m.group(6), m.group(7), m.group(8)),
+        ))
+    return cue_times
+
+
+def _cues_look_identical(target: List["CueItem"], reference: List["CueItem"]) -> bool:
+    """
+    Detects a reference track that is actually the same track as the target.
+    Aligning a subtitle file against itself always yields offset 0 and would
+    otherwise mask the real (audio) misalignment.
+    """
+    if not target or not reference:
+        return False
+    import bisect
+
+    t = sorted(float(c.start) for c in target)
+    r = sorted(float(c.start) for c in reference)
+    if len(r) > len(t) * 3 or len(t) > len(r) * 3:
+        return False
+    matches = 0
+    for start in t[:400]:
+        idx = bisect.bisect_left(r, start)
+        best = min(
+            (abs(r[j] - start) for j in (idx - 1, idx, idx + 1) if 0 <= j < len(r)),
+            default=1e9,
+        )
+        if best <= 0.15:
+            matches += 1
+    return (matches / max(1, min(len(t), 400))) >= 0.85
+
+
 class SubtitleAutoSyncRequest(BaseModel):
     info_hash: str
     file_idx: int = 0
@@ -586,6 +663,7 @@ class SubtitleAutoSyncRequest(BaseModel):
     episode: Optional[int] = None
     preferred_lang: Optional[str] = "en"
     external_cues: Optional[List[List[CueItem]]] = None
+    max_duration_seconds: Optional[float] = 90.0
 
 
 @router.post("/subtitles/auto-sync")
@@ -610,24 +688,36 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
     target_source = local_file if local_file else source_url
 
     cue_tuples = [(c.start, c.end) for c in req.cues]
+    analysed_seconds = max(20.0, min(float(req.max_duration_seconds or 90.0), 240.0))
 
-    # Mode 1: Align to container-embedded reference subtitle or provided reference cues
+    # Mode 1: Align to container-embedded reference subtitle or provided reference cues.
+    # A reference identical to the target (same embedded track) is ignored: it can
+    # only ever return "0s / 100%" and hides the real audio misalignment.
     ref_tuples = None
+    reference_is_self = False
     if req.reference_cues:
-        ref_tuples = [(c.start, c.end) for c in req.reference_cues]
+        if _cues_look_identical(req.cues, req.reference_cues):
+            reference_is_self = True
+        else:
+            ref_tuples = [(c.start, c.end) for c in req.reference_cues]
     elif req.reference_sub_idx is not None:
         try:
             cache_key = f"vtt|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
             vtt = load_cached_sub_vtt(cache_key)
             if not vtt:
-                vtt = await extract_embedded_subtitle_vtt(target_source, req.reference_sub_idx, timeout=6.0)
-            if vtt and not vtt.startswith("WEBVTT\n\nNOTE Empty") and "-->" in vtt:
-                ref_tuples = []
-                for m in re.finditer(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})", vtt):
-                    def _parse_ts(h, m_, s_, ms_) -> float:
-                        return int(h or 0) * 3600 + int(m_) * 60 + int(s_) + int(ms_) / 1000.0
-                    ref_tuples.append((_parse_ts(m.group(1), m.group(2), m.group(3), m.group(4)),
-                                       _parse_ts(m.group(5), m.group(6), m.group(7), m.group(8))))
+                vtt = await extract_embedded_subtitle_vtt(
+                    target_source, req.reference_sub_idx, timeout=8.0, duration=analysed_seconds + 60.0
+                )
+            if vtt and not vtt.startswith("WEBVTT\n\nNOTE Empty"):
+                parsed = _parse_vtt_cue_times(vtt)
+                if parsed:
+                    # The extracted embedded track is likewise a self-reference
+                    # when it matches the active cues.
+                    ref_as_items = [CueItem(start=s, end=e) for s, e in parsed]
+                    if _cues_look_identical(req.cues, ref_as_items):
+                        reference_is_self = True
+                    else:
+                        ref_tuples = parsed
         except Exception as e:
             streaming_logger.warning(f"[SubtitleAutoSync] Reference alignment fallback: {e}")
 
@@ -644,7 +734,7 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
 
     # Mode 2: Audio Voice Activity Detection (VAD) via FFmpeg silencedetect
     try:
-        speech = await extract_speech_intervals_from_stream(target_source, duration=90.0)
+        speech = await extract_speech_intervals_from_stream(target_source, duration=analysed_seconds)
         if speech:
             offset, conf = compute_optimal_offset(cue_tuples, speech)
             return {
@@ -654,6 +744,11 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
                 "method": "audio_vad",
                 "mode": "audio_vad",
                 "speech_intervals_detected": len(speech),
+                "max_duration_seconds": analysed_seconds,
+                "message": (
+                    "Reference track matches the active subtitles; aligned against the audio stream."
+                    if reference_is_self else None
+                ),
             }
     except Exception as e:
         streaming_logger.warning(f"[SubtitleAutoSync] Audio VAD failed: {e}")
@@ -673,11 +768,13 @@ class SubtitleAutoSyncV2Request(BaseModel):
     file_idx: int = 0
     cues: List[CueItem]
     reference_sub_idx: Optional[int] = None
+    reference_cues: Optional[List[CueItem]] = None
     magnet: Optional[str] = None
     season: Optional[int] = None
     episode: Optional[int] = None
     preferred_lang: Optional[str] = "en"
     external_cues: Optional[List[List[CueItem]]] = None
+    max_duration_seconds: Optional[float] = 90.0
 
 
 class SubtitleAdjustRequest(BaseModel):
@@ -709,19 +806,26 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
     target_source = local_file if local_file else source_url
 
     cue_tuples = [(c.start, c.end, c.text or "") for c in req.cues]
+    analysed_seconds = max(20.0, min(float(req.max_duration_seconds or 90.0), 240.0))
 
-    # Extract embedded reference track if specified
+    # Reference cues supplied by the client (preferred: avoids re-extraction).
     ref_tuples = None
-    if req.reference_sub_idx is not None:
+    if req.reference_cues:
+        ref_tuples = [(c.start, c.end, c.text or "") for c in req.reference_cues]
+
+    # Otherwise extract the embedded reference track (cached VTT first).
+    if ref_tuples is None and req.reference_sub_idx is not None:
         try:
-            vtt = await extract_embedded_subtitle_vtt(target_source, req.reference_sub_idx)
+            cache_key = f"vtt|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
+            vtt = load_cached_sub_vtt(cache_key)
+            if not vtt:
+                vtt = await extract_embedded_subtitle_vtt(
+                    target_source, req.reference_sub_idx, timeout=10.0, duration=analysed_seconds + 60.0
+                )
             if vtt and not vtt.startswith("WEBVTT\n\nNOTE Empty"):
-                ref_tuples = []
-                for m in re.finditer(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})", vtt):
-                    def _parse_ts(h, m_, s_, ms_) -> float:
-                        return int(h or 0) * 3600 + int(m_) * 60 + int(s_) + int(ms_) / 1000.0
-                    ref_tuples.append((_parse_ts(m.group(1), m.group(2), m.group(3), m.group(4)),
-                                       _parse_ts(m.group(5), m.group(6), m.group(7), m.group(8)), ""))
+                parsed = _parse_vtt_cue_times(vtt)
+                if parsed:
+                    ref_tuples = [(s, e, "") for s, e in parsed]
         except Exception as e:
             streaming_logger.warning(f"[SubtitleAutoSyncV2] Reference extraction fallback: {e}")
 
@@ -738,6 +842,7 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
         external_cues_list=ext_cues_list,
         embedded_ref_idx=req.reference_sub_idx,
         preferred_lang=req.preferred_lang,
+        vad_duration=analysed_seconds,
     )
 
     session_id = f"{req.info_hash}:{req.file_idx}:{req.episode or 0}"
@@ -756,6 +861,7 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
         "drift_model": result.drift_model,
         "session_id": session_id,
         "cues_analyzed": result.cues_analyzed,
+        "max_duration_seconds": analysed_seconds,
         "message": result.message,
     }
 
@@ -992,12 +1098,43 @@ async def get_hls_playlist(
     season: Optional[int] = Query(None, description="Season number"),
     episode: Optional[int] = Query(None, description="Episode number"),
     format: str = Query("ts", pattern="^(ts|fmp4)$", description="Segment format: 'ts' or 'fmp4'"),
+    include_subtitles: bool = Query(
+        False,
+        description="Probe and advertise embedded text subtitle tracks (adds a probe round-trip)",
+    ),
 ):
     """
     Returns an RFC 8216 compliant HLS VOD playlist with virtual segment references.
     Powers the P2P Media Loader browser WebRTC mesh.
+    Optionally advertises out-of-band subtitle tracks via EXT-X-MEDIA.
     """
     from core.transmuxer import generate_hls_manifest
+    from core.torrent_streamer import get_internal_stream_url
+
+    subtitle_tracks = []
+    if include_subtitles:
+        await ensure_streaming_daemon()
+        source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+        # HLS playlists are on a latency-sensitive path: never let a cold or
+        # swarm-starved ffprobe delay/break the manifest.
+        probe = {}
+        try:
+            probe = await asyncio.wait_for(probe_media_stream(source_url), timeout=3.0)
+        except Exception as exc:
+            streaming_logger.warning(f"[HLS] Subtitle track probe skipped: {exc}")
+        if probe.get("success") and probe.get("subtitle_tracks"):
+            for track in probe["subtitle_tracks"]:
+                # Only include text-based subtitles (not bitmap PGS/DVD/VobSub)
+                if not track.get("is_bitmap", False):
+                    subtitle_tracks.append({
+                        # Relative subtitle-stream ordinal: what FFmpeg's -map 0:s:N expects
+                        "sub_idx": track.get("sub_idx", len(subtitle_tracks)),
+                        "stream_idx": track["stream_idx"],
+                        "language": track["language"],
+                        "title": track["title"],
+                        "codec": track["codec"],
+                    })
+
     manifest = generate_hls_manifest(
         info_hash=info_hash,
         total_duration_sec=duration,
@@ -1007,6 +1144,7 @@ async def get_hls_playlist(
         season=season,
         episode=episode,
         prefer_fmp4=(format == "fmp4"),
+        subtitle_tracks=subtitle_tracks,
     )
     return Response(
         content=manifest,
@@ -1062,6 +1200,38 @@ async def get_hls_segment(
             segment_format=format,
         ),
         media_type="video/mp4" if format == "fmp4" else "video/mp2t",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=300, immutable",
+        },
+    )
+
+
+@router.get("/hls/subtitles")
+async def get_hls_subtitle_segment(
+    info_hash: str = Query(..., description="Torrent info hash"),
+    file_idx: int = Query(0, description="File index inside torrent"),
+    sub_idx: int = Query(0, description="Subtitle stream index"),
+    start: float = Query(0.0, ge=0, allow_inf_nan=False, description="Segment start timestamp in seconds"),
+    segment_duration: float = Query(6.0, gt=0, allow_inf_nan=False, description="Segment duration in seconds"),
+    magnet: Optional[str] = Query(None, description="Optional magnet URI"),
+    season: Optional[int] = Query(None, description="Season number"),
+    episode: Optional[int] = Query(None, description="Episode number"),
+):
+    """
+    Generates a WebVTT subtitle segment for HLS EXT-X-MEDIA:TYPE=SUBTITLES.
+    Extracts embedded subtitle track with precise PTS timing preserved.
+    """
+    await ensure_streaming_daemon()
+    source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+    return StreamingResponse(
+        stream_hls_subtitle_segment(
+            source_url,
+            sub_stream_index=sub_idx,
+            start_seconds=start,
+            duration_seconds=segment_duration,
+        ),
+        media_type="text/vtt; charset=utf-8",
         headers={
             "Access-Control-Allow-Origin": "*",
             "Cache-Control": "public, max-age=300, immutable",

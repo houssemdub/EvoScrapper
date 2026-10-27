@@ -1103,6 +1103,64 @@ async def stream_hls_ts_segment(
         _trigger_hls_prefetch(source_url_or_path, start_seconds, duration_seconds, segment_format)
 
 
+async def stream_hls_subtitle_segment(
+    source_url_or_path: str,
+    sub_stream_index: int = 0,
+    start_seconds: float = 0.0,
+    duration_seconds: float = 6.0,
+    chunk_size: int = 65536,
+) -> AsyncGenerator[bytes, None]:
+    """
+    Extracts a WebVTT subtitle segment for HLS.
+    Uses FFmpeg to extract and convert embedded subtitles to WebVTT with precise PTS timing.
+    """
+    ffmpeg_bin = find_ffmpeg() or "ffmpeg"
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel", "error",
+    ]
+    if source_url_or_path.startswith("http"):
+        cmd.extend([
+            "-reconnect", "1",
+            "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_delay_max", "15",
+        ])
+    cmd.extend([
+        "-ss", f"{start_seconds:.3f}",
+        "-t", f"{duration_seconds:.3f}",
+        "-i", source_url_or_path,
+        "-vn", "-an",
+        "-map", f"0:s:{sub_stream_index}",
+        "-c:s", "webvtt",
+        "-f", "webvtt",
+        "pipe:1",
+    ])
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        while True:
+            chunk = await proc.stdout.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+    except (asyncio.CancelledError, GeneratorExit):
+        pass
+    finally:
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+                await proc.wait()
+            except Exception:
+                pass
+
+
 SPRITES_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "sprites")
 SPRITE_SCAN_SECONDS = int(os.getenv("EVO_SPRITE_SCAN_SECONDS", "900"))  # v1: contact sheet covers the opening window; extending scans more P2P bytes
 SPRITE_GRID = 5
@@ -1396,6 +1454,7 @@ def generate_hls_manifest(
     episode: Optional[int] = None,
     keyframes: Optional[List[float]] = None,
     prefer_fmp4: bool = False,
+    subtitle_tracks: Optional[List[dict]] = None,
 ) -> str:
     """Generates an RFC 8216 compliant HLS VOD playlist with virtual segment references and keyframe snapping."""
     import urllib.parse
@@ -1464,6 +1523,24 @@ def generate_hls_manifest(
         if magnet:
             init_url += f"&magnet={urllib.parse.quote(magnet)}"
         lines.append(f'#EXT-X-MAP:URI="{init_url}"')
+
+    # Add subtitle tracks to manifest
+    if subtitle_tracks:
+        for idx, track in enumerate(subtitle_tracks):
+            lang = track.get("language", "und")
+            name = track.get("title", f"Subtitle {idx+1}")
+            # Use sub_idx (subtitle stream index 0,1,2...) for -map parameter, not global stream_idx
+            sub_idx = track.get("sub_idx", idx)
+            sub_url = f"/api/v1/stream/hls/subtitles?info_hash={info_hash}&file_idx={file_idx}&sub_idx={sub_idx}&segment_duration={segment_duration_sec}"
+            if magnet:
+                sub_url += f"&magnet={urllib.parse.quote(magnet)}"
+            if season is not None:
+                sub_url += f"&season={season}"
+            if episode is not None:
+                sub_url += f"&episode={episode}"
+            # DEFAULT=YES for first subtitle track, AUTOSELECT=YES for all
+            default = "YES" if idx == 0 else "NO"
+            lines.append(f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="{name}",LANGUAGE="{lang}",DEFAULT={default},AUTOSELECT=YES,URI="{sub_url}"')
 
     for i, (start_time, seg_dur) in enumerate(segments):
         lines.append(f"#EXTINF:{seg_dur:.1f},")
@@ -1612,10 +1689,11 @@ async def _run_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0)
         _sub_vtt_jobs.pop(key, None)
 
 
-async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int = 0, timeout: float = 8.0) -> str:
+async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int = 0, timeout: float = 8.0, duration: Optional[float] = None) -> str:
     """
     Extracts an embedded subtitle stream from MKV/MP4 using FFmpeg and converts it to WebVTT format on stdout.
     Background jobs pass a long timeout (SUB_EXTRACT_TIMEOUT); direct callers keep the legacy 8s budget.
+    If duration is specified, only extracts subtitles up to that timestamp (for fast preview).
     """
     ffmpeg_bin = find_ffmpeg()
     if not ffmpeg_bin:
@@ -1641,8 +1719,10 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
         "-vn", "-an",
         "-map", f"0:s:{sub_stream_index}",
         "-f", "webvtt",
-        "-",
     ])
+    if duration is not None and duration > 0:
+        cmd.extend(["-t", f"{duration:.1f}"])
+    cmd.append("-")
 
     try:
         proc = await asyncio.create_subprocess_exec(

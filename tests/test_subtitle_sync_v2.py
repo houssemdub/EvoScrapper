@@ -309,6 +309,174 @@ def test_failed_sub_vtt_prevents_infinite_polling(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+def test_reference_alignment_regular_spacing_no_alias():
+    """Regularly spaced cues must not alias to a neighbouring line (±one cue)."""
+    from core.subtitle_sync import align_to_reference_cues
+
+    ref = [(4.0 + i * 3.0, 6.0 + i * 3.0) for i in range(500)]
+    target = [(s + 7.0, e + 7.0) for s, e in ref]
+
+    offset, confidence = align_to_reference_cues(target, ref)
+    assert abs(offset + 7.0) <= 0.05
+    assert confidence >= 0.9
+
+
+def test_reference_alignment_dense_regular_track_is_not_overconfident():
+    """A 2s-spaced regular track matches almost any offset; confidence must say so."""
+    from core.subtitle_sync import align_to_reference_cues
+
+    ref = [(4.0 + i * 2.0, 5.5 + i * 2.0) for i in range(1500)]
+    target = [(s + 7.0, e + 7.0) for s, e in ref[:600]]
+
+    offset, confidence = align_to_reference_cues(target, ref)
+    assert abs(offset + 7.0) <= 0.1
+    # Multiple offsets explain this track equally well; never report 100%.
+    assert confidence < 0.35
+
+
+def test_reference_alignment_recovers_large_shift_with_dense_cues():
+    """A >1 minute shift must not be lost to the dense candidate-window cap."""
+    from core.subtitle_sync import align_to_reference_cues
+
+    ref = [(4.0 + i * 3.0, 6.0 + i * 3.0) for i in range(500)]
+    target = [(s + 115.0, e + 115.0) for s, e in ref]
+
+    offset, confidence = align_to_reference_cues(target, ref)
+    assert abs(offset + 115.0) <= 0.1
+    assert confidence >= 0.9
+
+
+def test_reference_alignment_detects_framerate_drift():
+    """PAL 23.976 -> 25 fps drift is modelled instead of returning a rigid 0s."""
+    import random
+    from core.subtitle_sync import align_to_reference_cues_ex
+
+    random.seed(11)
+    starts = []
+    t = 4.0
+    for _ in range(600):
+        starts.append(round(t, 3))
+        t += random.uniform(1.2, 9.5)
+    ref = [(s, s + random.uniform(1.0, 4.0)) for s in starts]
+
+    scale = 0.95904
+    offset = 2.5
+    target = [(s / scale + offset, e / scale + offset) for s, e in ref]
+
+    result = align_to_reference_cues_ex(target, ref)
+    assert result["drift_model"] is not None
+    assert abs(result["drift_model"]["params"][0] + 0.04096) < 1e-4
+    # corrected(t) = ref = (t - 2.5) * scale  ->  b = -2.5 * scale
+    assert abs(result["offset"] + 2.5 * scale) <= 0.1
+    assert result["confidence"] >= 0.9
+
+
+def test_vad_detects_large_constant_offset():
+    """A subtitle file offset by >1 minute must still be recovered."""
+    import random
+    from core.subtitle_sync import compute_optimal_offset
+
+    random.seed(3)
+    speech = []
+    t = 1.0
+    while t < 118.0:
+        t += random.uniform(0.8, 3.0)
+        length = random.uniform(1.0, 4.0)
+        if t + length > 120.0:
+            break
+        speech.append((round(t, 2), round(t + length, 2)))
+        t += length
+
+    target = [(s + 95.0, e + 95.0) for s, e in speech]
+    offset, confidence = compute_optimal_offset(target, speech)
+    assert abs(offset + 95.0) <= 0.6
+    assert confidence >= 0.4
+
+
+@pytest.mark.asyncio
+async def test_v2_self_reference_is_ignored_and_vad_used():
+    """Passing the active embedded track as its own reference must not fake 0s/100%."""
+    from unittest.mock import patch, AsyncMock
+    from httpx import AsyncClient, ASGITransport
+    from main import app
+
+    cues = [
+        {"start": 10.0 + i * 8.0, "end": 14.0 + i * 8.0, "text": "Dialogue line"}
+        for i in range(12)
+    ]
+    speech = [(c["start"], c["end"]) for c in cues]
+
+    with patch("core.subtitle_sync.engine.extract_speech_intervals_from_stream", new=AsyncMock(return_value=speech)), \
+         patch("core.torrent_streamer.ensure_streaming_daemon", new=AsyncMock(return_value=True)):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            res = await client.post(
+                "/api/v1/stream/subtitles/auto-sync-v2",
+                json={
+                    "info_hash": "d" * 40,
+                    "file_idx": 0,
+                    "cues": cues,
+                    "reference_cues": cues,
+                },
+            )
+            assert res.status_code == 200
+            data = res.json()
+            assert data["success"] is True
+            assert data["method"] == "audio_vad"
+            assert abs(data["offset"]) <= 0.5
+
+
+@pytest.mark.asyncio
+async def test_engine_anchors_drift_offset_to_reference_constant():
+    """Framerate drift fits must anchor the constant term, not a mid-window VAD blend."""
+    import random
+    from core.subtitle_sync.engine import SubtitleSyncEngine
+
+    random.seed(17)
+    starts = []
+    t = 4.0
+    for _ in range(240):
+        starts.append(round(t, 3))
+        t += random.uniform(2.0, 9.0)
+    ref = [(s, s + random.uniform(1.0, 4.0), "Dialogue line") for s in starts]
+
+    scale = 0.95904
+    shift = 2.5
+    target = [((s / scale) + shift, (e / scale) + shift, txt) for s, e, txt in ref]
+
+    engine = SubtitleSyncEngine()
+    result = await engine.sync(subtitle_cues=target, reference_cues=ref)
+
+    assert result.success is True
+    assert result.drift_model is not None
+    assert abs(result.drift_model["params"][0] + 0.04096) < 1e-4
+    # corrected(t) = ref = (t - shift) * scale  ->  constant b = -shift * scale
+    assert abs(result.offset + shift * scale) <= 0.1
+    assert result.method == "embedded_ref_drift"
+    assert result.confidence >= 0.8
+
+
+@pytest.mark.asyncio
+async def test_engine_skips_vad_when_reference_is_authoritative():
+    """A confident embedded reference must answer instantly instead of decoding audio."""
+    from unittest.mock import patch, AsyncMock
+    from core.subtitle_sync.engine import SubtitleSyncEngine
+
+    ref = [(10.0 + i * 10.0, 14.0 + i * 10.0, "Dialogue line") for i in range(20)]
+    target = [(s + 3.0, e + 3.0, txt) for s, e, txt in ref]
+
+    vad = AsyncMock(return_value=[(10.0, 14.0)])
+    with patch("core.subtitle_sync.engine.extract_speech_intervals_from_stream", new=vad):
+        result = await SubtitleSyncEngine().sync(
+            video_source="http://mock-stream",
+            subtitle_cues=target,
+            reference_cues=ref,
+        )
+
+    assert result.success is True
+    assert abs(result.offset + 3.0) <= 0.1
+    vad.assert_not_called()
+
+
 
 
 

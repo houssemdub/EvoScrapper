@@ -136,6 +136,12 @@ Debrid download URLs often expose private user tokens or expire quickly. EvoScra
 ### 2.6. Subtitle Engine ("EvoSubs")
 Subtitle synchronization supports multiple lookup and alignment strategies:
 - **Subtitle Sync Engine v2 (`core/subtitle_sync/`)**: Multi-modal alignment fusing Audio Voice Activity Detection (silencedetect), container-embedded reference tracks, external subtitle provider consensus, forced subtitle / sign filtering, and framerate drift modeling.
+- **Dominant-Cluster Reference Alignment (`vad.py`)**: Aligns target cues to reference cues by voting on all pairwise start deltas within ±120s, taking the median of the densest 0.5s cluster, and rejecting ambiguous dense/regular cue grids via decoy-offset support checks.
+- **Self-Reference & Authoritative-Reference Guards (`engine.py`)**: A reference whose cue starts match the active track (≥85% within 0.15s) is discarded and audio VAD is used instead. Conversely, a reference with ≥0.85 confidence pins the timeline immediately and skips the slow VAD pass.
+- **Speech-Pattern VAD**: Coarse-to-fine zero-normalised cross-correlation (not overlap-only scoring) over ±180s, with uninformative-speech rejection and a 0.6s deadband so small perceptual offsets are not "corrected" randomly.
+- **Drift-Aware Player Overlay & Persistence**: The web player applies the linear/quadratic model as `corrected = cue + a*cue + b`, rejects results below 0.35 confidence, and persists offset/drift per `info_hash/file_idx/season/episode/track` in `localStorage` (embedded tracks included).
+- **Seek-Safe Timing**: Copy-mode seeks snap to the preceding keyframe with the same 15s backend contract as `/transmux`; transcode and burn-in sessions use exact seeks, keeping subtitle delivery stable across seeks.
+- **Opt-In HLS Subtitle Advertising**: `include_subtitles=true` probes text tracks (3s budget) and emits `EXT-X-MEDIA` plus `/api/v1/stream/hls/subtitles` WebVTT segments; the default playlist path remains probe-free.
 - **Real-Time Adaptive Playback Controller**: Stateful session engine allowing interactive user sync adjustments (`H`/`J` keypress deltas) that dynamically converge across playback timestamps with exponential proximity decay weighting.
 - **Hash Matching**: 64-bit uint64 OpenSubtitles checksum and Shooter MD5 hashing against local or streamed media files.
 - **Multi-Provider Search**: Queries OpenSubtitles, Gestdown, SubDL, SubSource, AnimeTosho, and YIFY Subtitles.
@@ -345,24 +351,44 @@ The Subtitle Sync Engine v2 (`core/subtitle_sync/`) addresses subtitle lead/lag,
    - Matches regex patterns for bracketed signs (`[Sign: ...]`, `(Music ...)`), title cards (`Sign: Hospital`), credits headers (`Credits: ...`), and ultra-short cues ($\le 1.0$s duration with $\le 2$ words).
    - Strips non-dialogue cues from target cues prior to cross-track alignment to eliminate artificial skew.
 
-2. **Multi-Source RANSAC Consensus (`consensus.py`)**:
+2. **Dominant-Cluster Reference Alignment (`vad.py`)**:
+   - Builds all-pairs deltas between target and reference cue starts within ±120s (capped to ±60 neighbours per cue in very dense windows), votes for the densest 0.5s delta cluster, and uses its median as the rigid offset.
+   - Inliers are deltas within ±0.6s; their support ratio is the raw confidence. A decoy-offset check (11.11s, 23.33s, 37.77s, 71.19s, 103.03s and negative equivalents) collapses confidence to 0 when dense/regular tracks match almost any offset, preventing false 100% alignments.
+   - **Self-reference guard**: when ≥85% of active cue starts match the reference within 0.15s, the reference is ignored in both router and engine; audio VAD becomes the signal instead of returning a misleading `0s / 100%`.
+   - **Authoritative reference**: a reference alignment reaching ≥0.85 confidence skips VAD entirely, avoiding tens of seconds of swarm audio analysis when the timeline is already pinned.
+
+3. **Multi-Source RANSAC Consensus (`consensus.py`)**:
    - Collects sync candidate offsets from embedded reference tracks, audio VAD speech intervals, and external subtitle releases (OpenSubtitles, SubDL, AnimeTosho).
    - Applies RANSAC clustering with a configurable maximum outlier threshold (`max_outlier_sec = 1.5s`) to group agreeing timings and compute a confidence-weighted average offset.
    - Calibrates confidence with multi-signal agreement boosts up to 0.99.
 
-3. **Framerate Drift Modeling (`drift.py`)**:
+4. **Framerate Drift Modeling (`drift.py`)**:
    - Detects linear framerate conversion drift (e.g., 23.976 fps NTSC vs 24.0 fps Film vs 25.0 fps PAL) using pure Python closed-form Ordinary Least Squares regression:
      $$\text{offset}(t) = a \cdot t + b$$
-   - Solves for $a$ (drift rate) and $b$ (initial lead/lag). When $|a| > 0.0005$ and RMSE is low, attaches the drift model to dynamically adjust subtitles across long playback durations.
+   - Tests discrete PAL/NTSC scale candidates (`0.95904`, `1.04271`, `0.96`, `1.041667`, `0.999`, `1.001`) and keeps a scale only when it materially improves cluster support over the rigid fit.
+   - Refits matched pairs iteratively with outlier trimming; a model is attached only with ≥6 pairs spanning ≥45s. The constant term is anchored to the reference offset, never averaged with a short VAD window (which would bias it by slope × window midpoint).
 
-4. **Real-Time Adaptive Playback Controller (`adaptive.py`)**:
+5. **Speech-Pattern VAD Alignment (`vad.py`)**:
+   - Builds binary cue/speech occupancy signals and scores candidate offsets by zero-normalised cross-correlation over a coarse 0.25s sweep of ±180s, followed by a 0.02-0.05s fine search around the peak.
+   - Rejects uninformative results: speech coverage ≥0.97, peak ZNCC ≤0.08, or a flat/weak correlation yield low confidence instead of a random jump; corrections below 0.6s snap to zero.
+   - Confidence blends peak prominence over the background median (0.50) and cue-on-speech support (0.30), with hard caps for weak peaks.
+   - FFmpeg partial runs are clamped to the last reported `time=` position so a timeout cannot invent speech. `max_duration_seconds` is clamped to 20-240s (default 90s; the player requests 120s).
+
+6. **Real-Time Adaptive Playback Controller (`adaptive.py`)**:
    - Bounded session controller (`ADAPTIVE_CONTROLLERS`) updated in real time via `POST /api/v1/stream/subtitles/adjust`.
    - Coalesces rapid sequential keypresses (e.g. repeated `H` delay taps) into the current cumulative offset.
    - Computes position-weighted offset using exponential timeline proximity:
      $$w_i = \exp\left(-\frac{|p_i - \text{position\_sec}|}{180.0}\right)$$
    - Calculates real-time user alignment confidence based on correction variance.
 
-5. **Resilient VAD & Cold-Swarm Embedded Delivery**:
-   - Audio speech interval extraction downmixes surround streams (`-ac 2`), establishes resilient HTTP reconnect parameters (`-reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5`), and bounds sampling to 90 seconds to prevent player buffering stalls.
+7. **Drift-Aware Client Overlay & Persistence (`static/app.js`)**:
+   - Applies the model as `corrected = cue + a*cue + b`; the linear slope lives in `driftModel` while the constant term is the active offset, matching the backend convention exactly.
+   - Rejects `confidence < 0.35`, keeping the current sync and prompting for a matching release instead of applying a low-confidence jump.
+   - Persists offset/drift per `info_hash/file_idx/season/episode/track` under `evo_sub_sync:...` and restores it on track and episode switches, including `embedded:<sub_index>` tracks.
+   - Copy-mode seeking uses `snapTransmuxSeekTime` to mirror `/transmux`'s preceding-keyframe snapping within 15s; transcode and burn-in sessions use exact seeks.
+
+8. **Resilient VAD, Embedded Delivery & HLS Track Advertising**:
+   - Audio speech interval extraction downmixes surround streams (`-ac 2`), establishes resilient HTTP reconnect parameters (`-reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5`), and bounds sampling to the request-controlled 20-240s window (90s default, 120s from the player) to prevent buffering stalls.
    - Cold swarms or unsupported text formats register terminal extraction failures in memory (`_sub_vtt_failed`), returning HTTP 200 with clear diagnostics and without `X-Evo-Sub-Pending` headers to terminate frontend polling loops cleanly.
    - The Web Player HUD presents online fallback subtitles immediately while background extraction proceeds, seamlessly replacing them when embedded tracks finish.
+   - `include_subtitles=true` adds a 3s-bounded, text-only probe and emits `EXT-X-MEDIA` entries backed by `/api/v1/stream/hls/subtitles` (WebVTT with `-ss/-t` PTS-preserving extraction). Caveat: the current URI serves the opening VTT window, not a full segmented WebVTT media playlist, and `EXT-X-MEDIA` is emitted in the media playlist rather than a separate master playlist. Strict external HLS players may therefore ignore the subtitle rendition; the web player does not rely on this path.

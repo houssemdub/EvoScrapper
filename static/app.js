@@ -81,7 +81,10 @@ const state = {
     activeSubName: 'Auto',
     activeLang: 'en',
     currentOffset: 0.0,
+    driftModel: null,
     rawCues: [],
+    referenceCues: [],
+    referenceTrack: null,
     availableSubs: [],
     activeLangFilter: 'all',
     preferredLang: 'en',
@@ -3236,6 +3239,132 @@ function formatMmSs(seconds) {
 
 let activeSubtitleUpdateListener = null;
 
+// ── Subtitle timing model (constant offset + framerate drift) ────────────────
+// driftModel is stored in the same convention as the backend:
+//   corrected_time = cue_time + a * cue_time + b        (linear)
+// The constant b is folded into state.subtitles.currentOffset so manual
+// adjustments and the slider stay intuitive; only the slope lives here.
+function subtitleDriftOffsetAt(t) {
+  const model = state.subtitles.driftModel;
+  if (!model || !Array.isArray(model.params)) return 0;
+  if (model.model === 'quadratic') {
+    const [a, b, c] = model.params;
+    return (a || 0) * t * t + (b || 0) * t + (c || 0);
+  }
+  return (model.params[0] || 0) * t;
+}
+
+function subtitleOffsetAt(t) {
+  return (state.subtitles.currentOffset || 0) + subtitleDriftOffsetAt(t);
+}
+
+function subtitleCueWindow(c) {
+  return {
+    start: c.start + subtitleOffsetAt(c.start),
+    end: c.end + subtitleOffsetAt(c.end),
+  };
+}
+
+function isSameSubtitleTrack(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.is_embedded || b.is_embedded) {
+    return Boolean(
+      a.is_embedded && b.is_embedded &&
+      (a.sub_index ?? 0) === (b.sub_index ?? 0) &&
+      String(a.file_idx ?? '') === String(b.file_idx ?? '')
+    );
+  }
+  const aId = a.id || a.download_url || '';
+  const bId = b.id || b.download_url || '';
+  return Boolean(aId && bId && aId === bId);
+}
+
+function _shortHash(text) {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) - h + text.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h).toString(36);
+}
+
+function subtitleSyncStorageKeyFor(active, track) {
+  if (!active || !active.infoHash || !track) return null;
+  const fileIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null)
+    ? active.playingFileIdx
+    : (active.fileIdx ?? 0);
+  const trackKey = track.is_embedded
+    ? `embedded:${track.sub_index ?? 0}`
+    : (track.id || track.download_url || track.release_name || 'external');
+  return `evo_sub_sync:${active.infoHash}:${fileIdx}:${active.season ?? ''}:${active.episode ?? ''}:${_shortHash(String(trackKey))}`;
+}
+
+function subtitleSyncStorageKey() {
+  return subtitleSyncStorageKeyFor(state.discover.activeStream, state.subtitles.activeTrack);
+}
+
+function loadSavedSubtitleSync(track) {
+  try {
+    const active = state.discover.activeStream;
+    if (!active || !active.infoHash || !track) return null;
+    const key = subtitleSyncStorageKeyFor(active, track);
+    if (!key) return null;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      offset: Number.isFinite(parsed.offset) ? parsed.offset : 0,
+      driftA: Number.isFinite(parsed.driftA) ? parsed.driftA : 0,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveCurrentSubtitleSync() {
+  try {
+    const key = subtitleSyncStorageKey();
+    const active = state.discover.activeStream;
+    if (!key || !active) return;
+    if (active.infoHash && active.infoHash.startsWith('cdn_')) return;
+    const model = state.subtitles.driftModel;
+    const driftA = (model && model.model === 'linear' && Array.isArray(model.params))
+      ? (Number(model.params[0]) || 0)
+      : 0;
+    localStorage.setItem(key, JSON.stringify({
+      offset: Math.round((state.subtitles.currentOffset || 0) * 1000) / 1000,
+      driftA: Math.round(driftA * 1000000) / 1000000,
+      savedAt: Date.now(),
+    }));
+  } catch (_) {}
+}
+
+function setSubtitleDrift(driftA) {
+  const slope = Number.isFinite(driftA) ? driftA : 0;
+  state.subtitles.driftModel = Math.abs(slope) > 0.00005
+    ? { model: 'linear', params: [slope, 0] }
+    : null;
+}
+
+function applySubtitleSyncResult(offsetSeconds, driftModel) {
+  let baseOffset = Number.isFinite(offsetSeconds) ? offsetSeconds : 0;
+  let slope = 0;
+  if (driftModel && Array.isArray(driftModel.params)) {
+    if (driftModel.model === 'quadratic') {
+      // Keep the full quadratic model; manual slider applies on top.
+      state.subtitles.driftModel = driftModel;
+      setSubtitleSync(baseOffset);
+      return;
+    }
+    slope = Number(driftModel.params[0]) || 0;
+    const modelConstant = Number(driftModel.params[1]);
+    if (Number.isFinite(modelConstant)) baseOffset = modelConstant;
+  }
+  setSubtitleDrift(slope);
+  setSubtitleSync(baseOffset);
+}
+
 function updateSubtitleOverlay() {
   const video = document.getElementById('evo-video-player');
   const cueBox = document.getElementById('player-active-cue');
@@ -3244,14 +3373,16 @@ function updateSubtitleOverlay() {
 
   const active = state.discover.activeStream;
   const cur = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
-  const offset = state.subtitles.currentOffset || 0;
 
   // 1. Primary Subtitles
   const rawCues = state.subtitles.rawCues;
   if (!rawCues || rawCues.length === 0 || !cueBox) {
     if (cueBox) cueBox.classList.add('hidden');
   } else {
-    const activeCues = rawCues.filter((c) => cur >= (c.start + offset) && cur <= (c.end + offset));
+    const activeCues = rawCues.filter((c) => {
+      const win = subtitleCueWindow(c);
+      return cur >= win.start && cur <= win.end;
+    });
     if (activeCues.length > 0) {
       const uniqueLines = [];
       const seen = new Set();
@@ -3283,7 +3414,10 @@ function updateSubtitleOverlay() {
   if (!secCues || secCues.length === 0 || !secBox) {
     if (secBox) secBox.classList.add('hidden');
   } else {
-    const activeSec = secCues.filter((c) => cur >= (c.start + offset) && cur <= (c.end + offset));
+    const activeSec = secCues.filter((c) => {
+      const win = subtitleCueWindow(c);
+      return cur >= win.start && cur <= win.end;
+    });
     if (activeSec.length > 0) {
       const secLines = activeSec.map((c) => (c.text || '').replace(/\{[^}]*\}/g, '').replace(/<[^>]*>/g, '').trim()).filter(Boolean);
       if (secLines.length > 0) {
@@ -3342,8 +3476,7 @@ function jumpToFirstCue() {
   const active = state.discover.activeStream;
   if (!video || !cues || cues.length === 0) return;
   const first = cues[0];
-  const offset = state.subtitles.currentOffset || 0;
-  const target = Math.max(0, first.start + offset - 0.5);
+  const target = Math.max(0, first.start + subtitleOffsetAt(first.start) - 0.5);
   if (active && active.useTransmux) {
     seekPlayer(target);
   } else {
@@ -3361,10 +3494,9 @@ function jumpToNextCue() {
   const active = state.discover.activeStream;
   if (!video || !cues || cues.length === 0) return;
   const cur = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
-  const offset = state.subtitles.currentOffset || 0;
-  const next = cues.find((c) => (c.start + offset) > (cur + 0.6));
+  const next = cues.find((c) => (c.start + subtitleOffsetAt(c.start)) > (cur + 0.6));
   if (next) {
-    const target = Math.max(0, (next.start + offset) - 0.2);
+    const target = Math.max(0, (next.start + subtitleOffsetAt(next.start)) - 0.2);
     if (active && active.useTransmux) {
       seekPlayer(target);
     } else {
@@ -3381,10 +3513,9 @@ function jumpToPrevCue() {
   const active = state.discover.activeStream;
   if (!video || !cues || cues.length === 0) return;
   const cur = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
-  const offset = state.subtitles.currentOffset || 0;
-  const prev = [...cues].reverse().find((c) => (c.end + offset) < (cur - 0.6));
+  const prev = [...cues].reverse().find((c) => (c.end + subtitleOffsetAt(c.end)) < (cur - 0.6));
   if (prev) {
-    const target = Math.max(0, (prev.start + offset) - 0.2);
+    const target = Math.max(0, (prev.start + subtitleOffsetAt(prev.start)) - 0.2);
     if (active && active.useTransmux) {
       seekPlayer(target);
     } else {
@@ -3474,12 +3605,18 @@ function setSubtitleSync(seconds) {
   const sign = clamped > 0 ? '+' : '';
   const ms = Math.round(clamped * 1000);
   const text = `${sign}${ms}ms (${sign}${clamped.toFixed(2)}s)`;
+  const driftSlope = (state.subtitles.driftModel && state.subtitles.driftModel.model === 'linear')
+    ? (state.subtitles.driftModel.params?.[0] || 0)
+    : 0;
+  const driftSuffix = driftSlope ? ` · drift ${(driftSlope * 100).toFixed(1)}%` : '';
 
-  if (badge) badge.innerText = `${sign}${clamped.toFixed(1)}s`;
+  if (badge) badge.innerText = `${sign}${clamped.toFixed(1)}s${driftSuffix}`;
   if (slider) slider.value = clamped;
   if (syncVal) {
-    syncVal.innerText = clamped === 0 ? '0ms (In Sync)' : `${text} ${clamped > 0 ? '(Delayed)' : '(Advanced)'}`;
-    syncVal.className = clamped === 0 ? 'mono text-xs font-bold text-green' : 'mono text-xs font-bold text-accent';
+    syncVal.innerText = clamped === 0 && !driftSlope
+      ? '0ms (In Sync)'
+      : `${text} ${clamped > 0 ? '(Delayed)' : (clamped < 0 ? '(Advanced)' : '')}${driftSuffix}`;
+    syncVal.className = (clamped === 0 && !driftSlope) ? 'mono text-xs font-bold text-green' : 'mono text-xs font-bold text-accent';
   }
 
   // Update on-screen subtitle cues in real-time
@@ -3489,17 +3626,21 @@ function setSubtitleSync(seconds) {
 function adjustSubtitleSyncMs(msDelta) {
   const current = state.subtitles.currentOffset || 0;
   setSubtitleSync(current + (msDelta / 1000));
+  saveCurrentSubtitleSync();
   const nowMs = Math.round((state.subtitles.currentOffset || 0) * 1000);
   showToast(`Subtitle sync: ${(nowMs > 0 ? '+' : '')}${nowMs}ms`, 'info');
 }
 
 function adjustSubtitleSync(delta) {
   setSubtitleSync((state.subtitles.currentOffset || 0) + delta);
+  saveCurrentSubtitleSync();
   showToast(`Subtitle sync: ${(state.subtitles.currentOffset > 0 ? '+' : '')}${state.subtitles.currentOffset.toFixed(1)}s`, 'info');
 }
 
 function resetSubtitleSync() {
+  setSubtitleDrift(0);
   setSubtitleSync(0.0);
+  saveCurrentSubtitleSync();
   const statusEl = document.getElementById('sub-autosync-status');
   if (statusEl) statusEl.innerText = 'Reset (0ms)';
   showToast('Subtitle sync reset to 0ms', 'info');
@@ -3510,6 +3651,7 @@ async function triggerAutoSyncSubtitles() {
   const cues = state.subtitles.rawCues;
   const statusEl = document.getElementById('sub-autosync-status');
   const btn = document.getElementById('btn-sub-autosync');
+  const activeTrack = state.subtitles.activeTrack;
 
   if (!cues || cues.length === 0) {
     showToast('No active subtitles loaded to auto-sync', 'warning');
@@ -3529,25 +3671,30 @@ async function triggerAutoSyncSubtitles() {
       ? active.playingFileIdx
       : (active.fileIdx || 0);
 
-    const payloadCues = cues.slice(0, 150).map((c) => ({
-      start: c.start,
-      end: c.end,
-      text: (c.text || '').slice(0, 100),
+    const buildCuePayload = (list) => list.slice(0, 2000).map((c) => ({
+      start: Number(c.start.toFixed(3)),
+      end: Number(c.end.toFixed(3)),
+      text: (c.text || '').slice(0, 80),
     }));
 
-    let refCues = null;
-    if (state.subtitles.referenceCues && state.subtitles.referenceCues.length > 0) {
-      refCues = state.subtitles.referenceCues.slice(0, 150).map((c) => ({
-        start: c.start,
-        end: c.end,
-        text: (c.text || '').slice(0, 100),
-      }));
-    }
+    const payloadCues = buildCuePayload(cues);
 
-    const embeddedSub = (state.subtitles.availableSubs || []).find(
-      (s) => s.is_embedded && !s.is_image_based
-    );
-    const refSubIdx = embeddedSub ? (embeddedSub.sub_index ?? 0) : null;
+    // Only use a reference track when it is genuinely a different track.
+    // Aligning a track against itself always yields "0s / 100%" and hides the
+    // real misalignment (the classic "auto-sync does nothing" symptom).
+    let refCues = null;
+    let refSubIdx = null;
+    const refTrack = state.subtitles.referenceTrack;
+    const refIsActive = isSameSubtitleTrack(refTrack, activeTrack) || Boolean(activeTrack && activeTrack.is_embedded);
+    if (!refIsActive && state.subtitles.referenceCues && state.subtitles.referenceCues.length > 0) {
+      refCues = buildCuePayload(state.subtitles.referenceCues);
+    }
+    if (!refCues && !refIsActive) {
+      const embeddedSub = (state.subtitles.availableSubs || []).find(
+        (s) => s.is_embedded && !s.is_image_based && !isSameSubtitleTrack(s, activeTrack)
+      );
+      if (embeddedSub) refSubIdx = embeddedSub.sub_index ?? 0;
+    }
 
     const payload = {
       info_hash: active.infoHash,
@@ -3558,10 +3705,10 @@ async function triggerAutoSyncSubtitles() {
       cues: payloadCues,
       reference_cues: refCues,
       reference_sub_idx: refSubIdx,
-      max_duration_seconds: 90.0,
+      max_duration_seconds: 120.0,
     };
 
-    const res = await fetch('/api/v1/stream/subtitles/auto-sync', {
+    const res = await fetch('/api/v1/stream/subtitles/auto-sync-v2', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3578,18 +3725,43 @@ async function triggerAutoSyncSubtitles() {
     }
 
     const offset = typeof data.offset === 'number' ? data.offset : 0.0;
-    const confidencePct = Math.round((data.confidence || 0) * 100);
+    const confidence = typeof data.confidence === 'number' ? data.confidence : 0.0;
+    const confidencePct = Math.round(confidence * 100);
+    const driftModel = data.drift_model || null;
+    const modeName = data.method || data.mode || 'VAD';
 
-    setSubtitleSync(offset);
-
-    if (statusEl) {
-      statusEl.innerHTML = `<span class="text-green font-bold"><i class="fa-solid fa-check"></i> ${offset >= 0 ? '+' : ''}${offset.toFixed(2)}s (${confidencePct}%)</span>`;
+    // Weak matches must not move the subtitles: a random jump is worse than
+    // leaving them untouched. Even a 0s result is untrustworthy at low
+    // confidence, so never claim "already in sync" from a weak signal.
+    if (confidence < 0.35) {
+      if (statusEl) statusEl.innerHTML = '<span class="text-orange font-bold">Low confidence</span>';
+      showToast(
+        `Auto-sync could not verify the timing (${confidencePct}% confidence). Keeping current sync - try selecting a matching release or use manual sync.`,
+        'warning'
+      );
+      return;
     }
 
-    const sign = offset >= 0 ? '+' : '';
-    const modeName = data.method || data.mode || 'VAD';
+    applySubtitleSyncResult(offset, driftModel);
+    saveCurrentSubtitleSync();
+
+    const applied = state.subtitles.currentOffset || 0;
+    const sign = applied >= 0 ? '+' : '';
+    const driftTag = driftModel ? ' + framerate drift correction' : '';
+    const statusText = `${sign}${applied.toFixed(2)}s (${confidencePct}%)${driftModel ? ' ↝drift' : ''}`;
+
+    if (statusEl) {
+      statusEl.innerHTML = `<span class="text-green font-bold"><i class="fa-solid fa-check"></i> ${statusText}</span>`;
+    }
+
+    // A zero/negligible correction is a valid result.
+    if (Math.abs(offset) < 0.2 && !driftModel) {
+      showToast(`Subtitles are already in sync (${confidencePct}% confidence · ${modeName})`, 'success');
+      return;
+    }
+
     showToast(
-      `🪄 Auto-sync complete! Applied ${sign}${offset.toFixed(2)}s offset (${confidencePct}% confidence · Mode: ${modeName})`,
+      `🪄 Auto-sync complete! Applied ${sign}${applied.toFixed(2)}s offset (${confidencePct}% confidence · ${modeName})${driftTag}`,
       'success'
     );
   } catch (err) {
@@ -3612,12 +3784,11 @@ function syncSubtitleToCurrentTime() {
   }
 
   const curPlayTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
-  const currentOffset = state.subtitles.currentOffset || 0.0;
 
   let bestCue = null;
   let minDiff = Infinity;
   for (const c of cues) {
-    const effectiveStart = c.start + currentOffset;
+    const effectiveStart = c.start + subtitleOffsetAt(c.start);
     const diff = Math.abs(curPlayTime - effectiveStart);
     if (diff < minDiff) {
       minDiff = diff;
@@ -3630,8 +3801,10 @@ function syncSubtitleToCurrentTime() {
     return;
   }
 
-  const newOffset = curPlayTime - bestCue.start;
+  // Keep any detected framerate drift; only the constant offset is adjusted.
+  const newOffset = curPlayTime - bestCue.start - subtitleDriftOffsetAt(bestCue.start);
   setSubtitleSync(newOffset);
+  saveCurrentSubtitleSync();
 
   const cleanText = (bestCue.text || '').replace(/<[^>]*>/g, '').trim().slice(0, 35);
   const sign = newOffset >= 0 ? '+' : '';
@@ -3655,6 +3828,12 @@ function rescaleSubtitleFramerate(factor, label) {
     end: c.end * factor,
   }));
 
+  // Any previously fitted drift applies to the old timeline; clear it and
+  // scale the constant offset alongside the cues.
+  setSubtitleDrift(0);
+  setSubtitleSync((state.subtitles.currentOffset || 0) * factor);
+  saveCurrentSubtitleSync();
+
   updateSubtitleOverlay();
   showToast(`Subtitles retimed for ${label || 'new framerate'} (${factor.toFixed(5)}x)`, 'info');
 }
@@ -3675,13 +3854,21 @@ function disableSubtitles() {
     if (video.src && video.src.includes('burn_sub_idx=')) {
       const active = state.discover.activeStream;
       const infoHash = active ? active.infoHash : '';
-      const fileIdx = (active && active.effectiveFileIdx !== undefined) ? active.effectiveFileIdx : ((active && active.fileIdx !== undefined) ? active.fileIdx : 0);
-      const curTime = video.currentTime || 0;
+      const fileIdx = (active && active.fileIdx !== undefined) ? active.fileIdx : 0;
+      // Absolute media position (burn-in streams may have been seeked).
+      const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
       const wasPaused = video.paused;
       const epParam = (active && active.episode !== undefined && active.episode !== null) ? `&episode=${active.episode}` : '';
       const sParam = (active && active.season !== undefined && active.season !== null) ? `&season=${active.season}` : '';
       const magParam = (active && active.magnet) ? `&magnet=${encodeURIComponent(active.magnet)}` : '';
+      if (active) {
+        active.burnSubIdx = null;
+        active.useTransmux = false;
+        active.transcodeVideo = false;
+        active.playbackOffset = 0;
+      }
       video.src = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
+      video.load();
       video.currentTime = curTime;
       if (!wasPaused) video.play().catch(() => {});
     }
@@ -3689,6 +3876,8 @@ function disableSubtitles() {
   state.subtitles.rawCues = [];
   state.subtitles.activeTrack = null;
   state.subtitles.activeSubName = null;
+  state.subtitles.driftModel = null;
+  state.subtitles.currentOffset = 0.0;
   const badge = document.getElementById('player-active-sub-badge');
   if (badge) badge.innerText = 'Subs: Off';
   renderSubtitleTracksList(state.subtitles.availableSubs || []);
@@ -3866,10 +4055,12 @@ async function applySubtitle(subItem, isAuto = false) {
           const audioTrack = active ? (active.audioTrack || 0) : 0;
           let cleanUrl;
           if (audioTrack > 0 || (active && (active.isMkv || active.transcodeVideo))) {
-            cleanUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&audio_track=${audioTrack}&audio_boost=1.25&start_time=${curTime.toFixed(2)}${active && active.transcodeVideo ? '&transcode_video=true' : ''}${epParam}${sParam}${magParam}`;
+            const isTranscode = Boolean(active && active.transcodeVideo);
+            const cleanStart = isTranscode ? curTime : snapTransmuxSeekTime(active, curTime);
+            cleanUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&audio_track=${audioTrack}&audio_boost=1.25&start_time=${cleanStart.toFixed(2)}${isTranscode ? '&transcode_video=true' : ''}${epParam}${sParam}${magParam}`;
             if (active) {
               active.useTransmux = true;
-              active.playbackOffset = curTime;
+              active.playbackOffset = cleanStart;
             }
           } else {
             cleanUrl = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
@@ -3928,10 +4119,12 @@ async function applySubtitle(subItem, isAuto = false) {
 
       let cleanUrl;
       if (audioTrack > 0 || (active && (active.isMkv || active.transcodeVideo))) {
-        cleanUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&audio_track=${audioTrack}&audio_boost=1.25&start_time=${curTime.toFixed(2)}${active && active.transcodeVideo ? '&transcode_video=true' : ''}${epParam}${sParam}${magParam}`;
+        const isTranscode = Boolean(active && active.transcodeVideo);
+        const cleanStart = isTranscode ? curTime : snapTransmuxSeekTime(active, curTime);
+        cleanUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${fileIdx}&audio_track=${audioTrack}&audio_boost=1.25&start_time=${cleanStart.toFixed(2)}${isTranscode ? '&transcode_video=true' : ''}${epParam}${sParam}${magParam}`;
         if (active) {
           active.useTransmux = true;
-          active.playbackOffset = curTime;
+          active.playbackOffset = cleanStart;
         }
       } else {
         cleanUrl = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
@@ -4006,6 +4199,10 @@ async function applySubtitle(subItem, isAuto = false) {
       vttText = await res.text();
     }
 
+    // A newer subtitle/media request superseded this one while it was fetching
+    // (e.g. the user switched episodes) - never apply stale cues.
+    if (state.subtitles._subPollToken !== subPollToken) return;
+
     // Check for bitmap PGS tracks returned by transmuxer that require the PGS engine
     if (vttText.includes('NOTE Codec: hdmv_pgs') || vttText.includes('Bitmap PGS Subtitle')) {
       subItem.is_image_based = true;
@@ -4050,13 +4247,23 @@ async function applySubtitle(subItem, isAuto = false) {
     state.subtitles.rawCues = cues;
     if (subItem.is_embedded) {
       state.subtitles.referenceCues = cues;
+      state.subtitles.referenceTrack = subItem;
     }
     state.subtitles.activeTrack = subItem;
     state.subtitles.activeSubName = subItem.release_name || `${subItem.language} (${subItem.provider})`;
     state.subtitles.activeLang = subItem.lang_code || 'en';
 
-    setSubtitleSync(0.0);
-    renderCuesToVideo(cues, 0.0);
+    // Restore a previously saved offset/drift for this exact media + track.
+    // Container-embedded tracks normally need no correction, but an explicit
+    // earlier adjustment is restored just like online subtitles.
+    const savedSync = loadSavedSubtitleSync(subItem);
+    const restoredOffset = savedSync && Number.isFinite(savedSync.offset) ? savedSync.offset : 0.0;
+    const restoredDrift = savedSync && Number.isFinite(savedSync.driftA) && Math.abs(savedSync.driftA) > 0.00005
+      ? { model: 'linear', params: [savedSync.driftA, 0] }
+      : null;
+    state.subtitles.driftModel = restoredDrift;
+    renderCuesToVideo(cues, restoredOffset);
+    setSubtitleSync(restoredOffset);
 
     const firstCue = cues[0];
     const firstMmSs = firstCue ? formatMmSs(firstCue.start) : '00:00';
@@ -8193,28 +8400,43 @@ function searchDiscoverCatalogByTitle(title) {
 
 let _seekDebounceTimer = null;
 
+// Snaps a requested seek to the nearest preceding keyframe (within 15s) so the
+// client-side playbackOffset matches the backend /transmux snapping contract
+// (routers/stream.py uses the same 15s window). Any mismatch here shifts every
+// subtitle by the GOP length.
+function snapTransmuxSeekTime(active, seconds) {
+  const clamped = Math.max(0, Number(seconds) || 0);
+  if (!active || !Array.isArray(active.keyframes) || active.keyframes.length === 0 || clamped <= 0) {
+    return clamped;
+  }
+  let candidate = null;
+  for (const k of active.keyframes) {
+    if (typeof k !== 'number') continue;
+    if (k <= clamped) candidate = k;
+    else break;
+  }
+  if (candidate !== null && (clamped - candidate) <= 15.0) {
+    return candidate;
+  }
+  return clamped;
+}
+
 function seekTransmuxOffset(clamped) {
   const video = document.getElementById('evo-video-player');
   const active = state.discover.activeStream;
   if (!video || !active) return;
 
+  const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
   // Keyframe Snapping Alignment:
-  // Match backend FFmpeg transmuxer snapping logic so active.playbackOffset exactly equals
-  // the snapped start PTS returned by transmuxer, preventing subtitle timing drift on seek.
-  let effectiveSeek = clamped;
-  if (active.keyframes && Array.isArray(active.keyframes) && active.keyframes.length > 0 && clamped > 0) {
-    const preceding = active.keyframes.filter((k) => k <= clamped);
-    if (preceding.length > 0) {
-      const candidate = preceding[preceding.length - 1];
-      if ((clamped - candidate) <= 15.0) {
-        effectiveSeek = candidate;
-      }
-    }
-  }
+  // Copy mode is served from the preceding keyframe so active.playbackOffset must equal that
+  // keyframe's PTS (backend /transmux uses the same 15s snapping contract). Transcode and
+  // burn-in streams honour exact seeks, so use the requested time unchanged.
+  const effectiveSeek = (active.transcodeVideo || hasBurnSub)
+    ? Math.max(0, Number(clamped) || 0)
+    : snapTransmuxSeekTime(active, clamped);
 
   active.playbackOffset = effectiveSeek;
 
-  const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
   const burnSubParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
   const transcodeParam = (active.transcodeVideo || hasBurnSub) ? '&transcode_video=true' : '';
   const epParams = (active.season !== null && active.episode !== null && active.season !== undefined && active.episode !== undefined)
@@ -8275,14 +8497,8 @@ function seekPlayer(targetSeconds, immediate = false) {
   // In copy mode, snap seek to the preceding keyframe container boundary so video, audio, and subtitles remain sample-accurate
   let targetTime = clamped;
   const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
-  if (!active.transcodeVideo && !hasBurnSub && active.keyframes && active.keyframes.length > 1) {
-    const preceding = active.keyframes.filter((k) => k <= clamped);
-    if (preceding.length > 0) {
-      const candidate = preceding[preceding.length - 1];
-      if (clamped - candidate <= 15.0) {
-        targetTime = candidate;
-      }
-    }
+  if (!active.transcodeVideo && !hasBurnSub) {
+    targetTime = snapTransmuxSeekTime(active, clamped);
   }
 
   // Update UI timeline immediately for smooth dragging feedback
@@ -8565,6 +8781,18 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     showRemainingTime: false,
   };
   state.subtitles.userManuallySelected = false;
+  // New media: drop every subtitle timeline artefact so a previous episode's
+  // cues or cached embedded reference can never leak into this playback.
+  state.subtitles.rawCues = [];
+  state.subtitles.activeTrack = null;
+  state.subtitles.activeSubName = null;
+  state.subtitles.driftModel = null;
+  state.subtitles.currentOffset = 0.0;
+  state.subtitles.referenceCues = [];
+  state.subtitles.referenceTrack = null;
+  state.subtitles.secondaryTrack = null;
+  state.subtitles.secondaryCues = [];
+  state.subtitles._subPollToken = (state.subtitles._subPollToken || 0) + 1;
   fetchKeyframes(infoHash, effectiveFileIdx, magnet);
 
   if (titleEl) {
@@ -8655,6 +8883,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
       .then((probe) => {
         const curActive = state.discover.activeStream;
         if (!curActive || curActive.infoHash !== infoHash) return;
+        // The torrent may contain several episodes; a stale probe for a
+        // different file must never populate this episode's tracks/subs.
+        if (String(curActive.playingFileIdx ?? effectiveFileIdx) !== String(probeFileIdx)) return;
 
         if (probe && probe.success) {
           if (probe.duration > 0) {
@@ -8707,12 +8938,17 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             curActive.useTransmux = true;
             if (videoNeedsTranscode) curActive.transcodeVideo = true;
             const curPlayTime = (video.currentTime && !isNaN(video.currentTime)) ? video.currentTime : 0;
-            curActive.playbackOffset = curPlayTime;
+            // Copy-mode seeks land on the preceding keyframe; keep the subtitle
+            // clock identical to what the backend will actually serve.
+            const upgradeStart = curActive.transcodeVideo
+              ? curPlayTime
+              : snapTransmuxSeekTime(curActive, curPlayTime);
+            curActive.playbackOffset = upgradeStart;
             const modeBadge = document.getElementById('player-hud-mode-label');
             if (modeBadge) modeBadge.innerText = curActive.transcodeVideo ? 'Transcode' : 'Transmux';
             updateAudioHudButtons();
 
-            const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(1)}` : '';
+            const startParam = upgradeStart > 0 ? `&start_time=${upgradeStart.toFixed(2)}` : '';
             const tcParam = curActive.transcodeVideo ? '&transcode_video=true' : '';
             const durParam = curActive.totalDuration > 0 ? `&duration=${curActive.totalDuration}` : '';
             const targetIdx = (curActive.playingFileIdx !== undefined && curActive.playingFileIdx !== null) ? curActive.playingFileIdx : effectiveFileIdx;
@@ -8727,7 +8963,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             curActive.playbackOffset = curPlayTime;
             const modeBadge = document.getElementById('player-hud-mode-label');
             if (modeBadge) modeBadge.innerText = 'Transcode';
-            const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(1)}` : '';
+            const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(2)}` : '';
             const durParam = curActive.totalDuration > 0 ? `&duration=${curActive.totalDuration}` : '';
             const targetIdx = (curActive.playingFileIdx !== undefined && curActive.playingFileIdx !== null) ? curActive.playingFileIdx : effectiveFileIdx;
             const upgradedUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${targetIdx}&audio_track=${curActive.audioTrack || 0}&audio_boost=1.25&transcode_video=true${startParam}${epParams}${magnetParam}${durParam}`;
@@ -8770,11 +9006,16 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
               // Cache reference embedded cues for instant cross-subtitle alignment
               const refTrack = matchEmbedded || textEmbedded[0];
               if (refTrack && refTrack.download_url) {
+                state.subtitles.referenceTrack = refTrack;
                 fetch(refTrack.download_url)
                   .then(r => r.ok ? r.text() : '')
                   .then(txt => {
+                    const stillActive = state.discover.activeStream;
+                    if (stillActive !== curActive) return;
+                    if (String(stillActive.playingFileIdx ?? effectiveFileIdx) !== String(probeFileIdx)) return;
                     if (txt && !txt.includes('NOTE Empty') && !txt.includes('Extraction error') && !txt.includes('NOTE Extraction pending')) {
                       state.subtitles.referenceCues = parseVttOrSrtToCues(txt);
+                      state.subtitles.referenceTrack = refTrack;
                     }
                   })
                   .catch(() => {});
@@ -8917,12 +9158,16 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
       console.log('[EvoPlayer] Direct play failed; falling back to FFmpeg transmuxer...');
       showToast('Unsupported browser codec; switching to real-time compatibility player...', 'info');
       active.useTransmux = true;
-      active.playbackOffset = video.currentTime || 0;
-      const mBadge = document.getElementById('player-hud-mode-label');
-      if (mBadge) mBadge.innerText = 'Transmux';
+      const resumeTime = (video.currentTime && !isNaN(video.currentTime)) ? video.currentTime : 0;
       const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
+      // Burn-in transcodes honour exact seeks; copy mode snaps to a keyframe.
+      const snappedSeek = hasBurnSub ? resumeTime : snapTransmuxSeekTime(active, resumeTime);
+      active.playbackOffset = snappedSeek;
+      const mBadge = document.getElementById('player-hud-mode-label');
+      if (mBadge) mBadge.innerText = hasBurnSub ? 'PGS Burn-In' : 'Transmux';
       const burnParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
-      const fallbackUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${burnParam}${epParams}${magnetParam}${durationParam}`;
+      const startParam = snappedSeek > 0.5 ? `&start_time=${snappedSeek.toFixed(2)}` : '';
+      const fallbackUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${burnParam}${startParam}${epParams}${magnetParam}${durationParam}`;
       video.src = fallbackUrl;
       video.load();
       video.play().catch(() => {});
@@ -8933,7 +9178,11 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
       const mBadge = document.getElementById('player-hud-mode-label');
       if (mBadge) mBadge.innerText = 'Transcode';
       const curPlayTime = (active.playbackOffset || 0) + (video.currentTime || 0);
-      const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(1)}` : '';
+      // The new transcode stream is seeked to curPlayTime and its timestamps
+      // restart at zero, so playbackOffset must be updated or every subtitle
+      // (and the timeline) shifts by the elapsed video time.
+      active.playbackOffset = curPlayTime;
+      const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(2)}` : '';
       const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
       const burnParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
       const fallbackUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${active.playingFileIdx || active.fileIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25&transcode_video=true${burnParam}${startParam}${epParams}${magnetParam}${durationParam}`;
@@ -9008,7 +9257,13 @@ function toggleStreamPipelineMode() {
   showPlayerBufferingHUD();
 
   if (active.useTransmux) {
-    active.playbackOffset = curTime;
+    // Copy-mode streams can only start at a keyframe; transcode/burn-in streams
+    // honour an exact seek. Keep playbackOffset identical to what the backend
+    // will actually serve so subtitle timestamps stay aligned.
+    const startTime = (!active.transcodeVideo && (active.burnSubIdx === null || active.burnSubIdx === undefined))
+      ? snapTransmuxSeekTime(active, curTime)
+      : curTime;
+    active.playbackOffset = startTime;
     const tcParam = active.transcodeVideo ? '&transcode_video=true' : '';
     if (modeBadge) modeBadge.innerText = active.transcodeVideo ? 'Transcode' : 'Transmux';
     showToast(
@@ -9017,7 +9272,7 @@ function toggleStreamPipelineMode() {
         : 'Switched to Compatibility Transmuxer (Stereo AAC)',
       'info'
     );
-    const startParam = curTime > 0 ? `&start_time=${curTime.toFixed(1)}` : '';
+    const startParam = startTime > 0 ? `&start_time=${startTime.toFixed(2)}` : '';
     const burnParam = (active.burnSubIdx !== null && active.burnSubIdx !== undefined) ? `&burn_sub_idx=${active.burnSubIdx}` : '';
     const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${startParam}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${burnParam}${tcParam}${epParams}${magnetParam}${durationParam}`;
     video.src = newUrl;
@@ -9036,6 +9291,7 @@ function toggleStreamPipelineMode() {
 
   updateAudioHudButtons();
   updatePlayerTimeline();
+  updateSubtitleOverlay();
 }
 
 function closePlayerModal() {

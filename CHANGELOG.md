@@ -30,6 +30,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Tests
 - Added `tests/test_subtitle_sync_v2.py` (9 tests) covering forced subtitle filtering, drift regression and PAL speedup detection, RANSAC consensus clustering and outlier rejection, adaptive controller temporal convergence, unified engine coordination, and endpoint contract flows.
 
+### Subtitle Sync Reliability: Reference Alignment, Drift & Player Persistence
+
+#### Fixed
+- **Bogus 100% reference alignments**: replaced nearest-neighbour matching with dominant-cluster voting over all pairwise cue-start deltas (±120s), a densest-0.5s-cluster median, ±0.6s inliers, and a decoy-offset ambiguity guard. Dense or regularly spaced tracks now report low confidence instead of a false match.
+- **Self-reference false positives**: the router and engine both detect a reference that matches the active cues (≥85% of starts within 0.15s), ignore it, and fall back to audio VAD. Aligning a track against itself no longer reports `0s / 100%`.
+- **Random VAD jumps**: overlap-only scoring was replaced with coarse-to-fine zero-normalised cross-correlation over ±180s, uninformative-speech rejection, partial-FFmpeg clamping to the last reported `time=` position, and a 0.6s deadband. Weak peaks are confidence-capped, and the player rejects results below 0.35 confidence.
+- **Drift anchor bias**: framerate detection now tests discrete PAL/NTSC ratios and anchors the constant term to the reference offset instead of averaging it with a short VAD window (which biased the result by slope × window midpoint).
+- **Desync after seeks**: client copy-mode seeks now snap to the preceding keyframe using the same 15s contract as backend `/transmux`; transcode and burn-in sessions keep exact seeks.
+
+#### Added
+- **Authoritative-reference fast path**: a ≥0.85-confidence embedded reference skips slow VAD and answers immediately; reference extraction is bounded to the analysed window plus 60s.
+- **Offset/drift persistence**: sync state is stored per `info_hash/file_idx/season/episode/track` in `localStorage` (`evo_sub_sync:...`) and restored across track/episode changes, including embedded tracks.
+- **Opt-in HLS subtitle advertising**: `include_subtitles=true` adds a 3s-bounded text-track probe and `EXT-X-MEDIA` entries, with a new `/api/v1/stream/hls/subtitles` WebVTT endpoint. The default playlist path remains probe-free, and `/api/v1/stream/stream-info` exposes audio/subtitle metadata to the player.
+- **V2 VAD window control**: `max_duration_seconds` is accepted by both auto-sync endpoints and clamped to 20-240s (the player sends 120s).
+
+#### Tests
+- Expanded `tests/test_subtitle_sync.py` and `tests/test_subtitle_sync_v2.py` for self-reference detection, dominant-cluster and decoy ambiguity handling, drift anchoring, ZNCC VAD behavior, and the v2 request contract. Full suite verified at 514 passing tests.
+
 ### Embedded Subtitle Delivery Overhaul
 
 #### Fixed

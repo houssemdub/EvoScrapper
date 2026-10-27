@@ -173,6 +173,46 @@ Direct HTTP video stream with HTTP 206 Partial Content byte-range support. Direc
 
 ---
 
+#### `GET /api/v1/stream/stream-info`
+Probes the active stream with ffprobe and returns duration, size, bitrate, codecs, audio tracks, and embedded subtitle tracks. Used by the player to populate audio/subtitle selectors.
+- **Query Parameters**: `info_hash` (required), `file_idx` (default: 0), `magnet` (optional), `season` (optional), `episode` (optional).
+- `subtitle_tracks[].sub_idx` is the subtitle-stream ordinal used by `-map 0:s:N` / `reference_sub_idx`; `stream_idx` is the container-global index. `is_bitmap=true` tracks (PGS/DVD/VobSub) cannot be converted to WebVTT.
+
+**Example Response (200 OK):**
+```json
+{
+  "success": true,
+  "duration": 8871.42,
+  "size": 1825361100,
+  "bit_rate": 1645000,
+  "video_codec": "h264",
+  "audio_codec": "aac",
+  "audio_tracks": [
+    {
+      "track_idx": 0,
+      "stream_idx": 1,
+      "codec": "aac",
+      "channels": 2,
+      "channel_layout": "stereo",
+      "language": "eng",
+      "title": "Track 1 (ENG)"
+    }
+  ],
+  "subtitle_tracks": [
+    {
+      "sub_idx": 0,
+      "stream_idx": 2,
+      "codec": "subrip",
+      "is_bitmap": false,
+      "language": "eng",
+      "title": "Sub 1 (ENG)"
+    }
+  ]
+}
+```
+
+---
+
 #### `GET /api/v1/stream/status`
 Returns real-time telemetry from the P2P streaming daemon for a specific active torrent or global swarm metrics.
 
@@ -200,9 +240,20 @@ Returns real-time telemetry from the P2P streaming daemon for a specific active 
 ---
 
 #### `GET /api/v1/stream/hls/playlist.m3u8`
-Generates an RFC 8216 compliant virtual HLS master manifest for a torrent stream with keyframe boundary snapping.
-- **Query Parameters**: `info_hash`, `file_idx`, `duration`, `segment_duration` (default: 6.0), `format` (`ts` or `fmp4`).
+Generates an RFC 8216 compliant virtual HLS media manifest for a torrent stream with keyframe boundary snapping.
+- **Query Parameters**: `info_hash`, `file_idx`, `magnet` (optional), `duration`, `segment_duration` (default: 6.0), `season`, `episode`, `format` (`ts` or `fmp4`), `include_subtitles` (default: `false`).
 - Supports fMP4 `#EXT-X-MAP:URI` when `format=fmp4`.
+- `include_subtitles=true` adds a text-only track probe capped at 3s and emits `EXT-X-MEDIA:TYPE=SUBTITLES` entries backed by `/api/v1/stream/hls/subtitles`. Probe failures are non-fatal and the manifest is still served.
+- The default (`false`) path performs no probe, keeping playback startup fast. Note that subtitle `EXT-X-MEDIA` entries currently live in the media playlist rather than a separate master playlist; strict HLS clients may ignore them.
+
+---
+
+#### `GET /api/v1/stream/hls/subtitles`
+Serves a WebVTT subtitle window extracted from an embedded text track for HLS `EXT-X-MEDIA`.
+- **Query Parameters**: `info_hash`, `file_idx` (default: 0), `sub_idx` (default: 0, subtitle-stream ordinal), `start` (default: 0.0, seconds), `segment_duration` (default: 6.0, seconds), `magnet` (optional), `season`, `episode`.
+- **Response**: `text/vtt; charset=utf-8` with `Cache-Control: public, max-age=300, immutable` and permissive CORS.
+- Extraction uses `-ss <start> -t <segment_duration>` and preserves source PTS timestamps.
+- **Limitation**: playlists currently point this URI at the opening subtitle window only. A full segmented WebVTT media playlist (`EXT-X-TARGETDURATION` + per-segment VTT) is not yet emitted, so external players may not render a complete subtitle track. The web player loads subtitles directly via `/api/v1/stream/subtitles` and is unaffected.
 
 ---
 
@@ -284,9 +335,14 @@ Standard automatic subtitle alignment matching target subtitle cues against cont
   "reference_cues": [
     { "start": 10.0, "end": 13.4, "text": "Hello world" }
   ],
-  "preferred_lang": "en"
+  "preferred_lang": "en",
+  "max_duration_seconds": 90
 }
 ```
+
+`max_duration_seconds` bounds audio VAD analysis and embedded-reference extraction. The backend clamps it to 20-240s (default 90s) and extracts reference subtitles for the analysed window plus 60s.
+
+If `reference_cues` (or the extracted embedded track) match the active `cues` (≥85% of starts within 0.15s), the reference is treated as a self-reference and ignored so it cannot return a bogus `0s / 100%`; alignment falls back to audio VAD and `message` explains why.
 
 **Response (JSON):**
 ```json
@@ -296,6 +352,7 @@ Standard automatic subtitle alignment matching target subtitle cues against cont
   "confidence": 0.88,
   "method": "embedded_reference",
   "cues_analyzed": 45,
+  "max_duration_seconds": 90.0,
   "message": null
 }
 ```
@@ -322,9 +379,14 @@ Automatic multi-modal subtitle alignment fusing Audio VAD (FFmpeg silencedetect)
   "season": 1,
   "episode": 3,
   "preferred_lang": "en",
-  "external_cues": null
+  "external_cues": null,
+  "max_duration_seconds": 120
 }
 ```
+
+`max_duration_seconds` is clamped to 20-240s. The player sends 120s; the endpoint default is 90s. Longer windows improve low-dialogue VAD accuracy at the cost of swarm read time. A high-confidence embedded reference (≥0.85) answers immediately without running VAD.
+
+Self-references are ignored: if supplied/extracted reference cues match the active cues (≥85% of starts within 0.15s), the engine discards the reference and reports the reason in `message` rather than returning a false `0s / 100%`.
 
 **Response (JSON):**
 ```json
@@ -341,9 +403,12 @@ Automatic multi-modal subtitle alignment fusing Audio VAD (FFmpeg silencedetect)
   },
   "session_id": "c1205d5e6834f89d...:0:3",
   "cues_analyzed": 45,
+  "max_duration_seconds": 120.0,
   "message": null
 }
 ```
+
+**Drift convention**: `drift_model.params` is `[a, b]` for `corrected = cue + a*cue + b`. The constant term `b` is the same value returned in `offset`. `method` is one of `embedded_ref`, `embedded_ref_drift`, `external_ref_<n>`, `audio_vad`, `consensus`, or `none`; `drift_model` is `null` when no reliable framerate scale is detected. The web player rejects responses with `confidence < 0.35` and keeps its current sync; clients should do the same rather than applying a low-confidence jump. Dense, regularly spaced cue grids intentionally produce lower confidence when multiple offsets are plausible.
 
 ---
 
