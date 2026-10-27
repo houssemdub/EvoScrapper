@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="static/logo.png" alt="EvoScrapper Logo" width="180" style="margin-bottom: 16px;" />
-
 <img src="EvoScrapper_Banner.jpg" alt="EvoScrapper Banner" width="100%" style="border-radius: 14px; margin-bottom: 20px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);" />
 
 # ⚡ EvoScrapper
@@ -227,3 +225,9 @@ EvoScrapper implements enterprise-grade defense-in-depth:
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+<div align="center">
+  <img src="/houssemdub/EvoScrapper/raw/main/static/logo.png" alt="EvoScrapper Logo" width="160" />
+</div>
