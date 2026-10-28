@@ -3549,6 +3549,20 @@ function renderCuesToVideo(rawCues, offsetSeconds) {
     console.warn('[EvoPlayer] Subtitle track cleanup warning:', err);
   }
 
+  // Bind direct event handlers for instantaneous overlay updates & timeline tracking
+  video.ontimeupdate = () => {
+    updatePlayerTimeline();
+    updateSubtitleOverlay();
+  };
+  video.onseeking = () => {
+    updatePlayerTimeline();
+    updateSubtitleOverlay();
+  };
+  video.onseeked = () => {
+    updatePlayerTimeline();
+    updateSubtitleOverlay();
+  };
+
   // Native track rendering when in zero offset without drift/secondary cues (exact VLC media-clock sync)
   const useNativeTrack = Boolean(
     (offsetSeconds || 0) === 0 &&
@@ -3594,20 +3608,6 @@ function renderCuesToVideo(rawCues, offsetSeconds) {
       }
     });
   }
-
-  // Bind direct event handlers for instantaneous overlay updates & timeline tracking
-  video.ontimeupdate = () => {
-    updatePlayerTimeline();
-    updateSubtitleOverlay();
-  };
-  video.onseeking = () => {
-    updatePlayerTimeline();
-    updateSubtitleOverlay();
-  };
-  video.onseeked = () => {
-    updatePlayerTimeline();
-    updateSubtitleOverlay();
-  };
 
   // Force immediate update & start loop if already playing
   updateSubtitleOverlay();
