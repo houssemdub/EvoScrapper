@@ -3927,6 +3927,12 @@ async function triggerAutoSyncSubtitles() {
     }
 
     const curPlayTime = getPlayerCurrentTime();
+    let effectiveStartTime = Math.max(0, curPlayTime);
+    if (effectiveStartTime < 10 && payloadCues.length > 0 && payloadCues[0].start > 30) {
+      // If player is at the beginning but first dialogue starts later (e.g. after studio intro),
+      // sample audio around the first dialogue cue to guarantee speech detection
+      effectiveStartTime = Math.max(0, payloadCues[0].start - 5.0);
+    }
 
     const payload = {
       info_hash: active.infoHash,
@@ -3938,7 +3944,7 @@ async function triggerAutoSyncSubtitles() {
       reference_cues: refCues,
       reference_sub_idx: refSubIdx,
       max_duration_seconds: 120.0,
-      start_time: Math.max(0, curPlayTime),
+      start_time: effectiveStartTime,
     };
 
     const res = await fetch('/api/v1/stream/subtitles/auto-sync-v2', {
@@ -4510,7 +4516,12 @@ async function applySubtitle(subItem, isAuto = false) {
     // Container-embedded tracks normally need no correction, but an explicit
     // earlier adjustment is restored just like online subtitles.
     const savedSync = loadSavedSubtitleSync(subItem);
-    const restoredOffset = savedSync && Number.isFinite(savedSync.offset) ? savedSync.offset : 0.0;
+    let restoredOffset = savedSync && Number.isFinite(savedSync.offset) ? savedSync.offset : 0.0;
+    const active = state.discover.activeStream;
+    if (!savedSync && subItem.is_embedded && active && active.useTransmux && active.containerStartTime > 0.05) {
+      // Container has non-zero start time (e.g. 3.174s) shifted to 0 by FFmpeg transmux; auto-compensate to match VLC!
+      restoredOffset = active.containerStartTime;
+    }
     const restoredDrift = (savedSync && savedSync.driftModel && typeof savedSync.driftModel === 'object')
       ? savedSync.driftModel
       : (savedSync && Number.isFinite(savedSync.driftA) && Math.abs(savedSync.driftA) > 0.00005
@@ -9203,6 +9214,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
         if (String(curActive.playingFileIdx ?? effectiveFileIdx) !== String(probeFileIdx)) return;
 
         if (probe && probe.success) {
+          if (probe.start_time !== undefined && probe.start_time !== null && probe.start_time > 0) {
+            curActive.containerStartTime = Number(probe.start_time) || 0;
+          }
           if (probe.duration > 0) {
             curActive.totalDuration = probe.duration;
             const tEl = document.getElementById('player-total-time');

@@ -192,7 +192,7 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
         ])
 
     cmd.extend([
-        "-show_entries", "format=duration,size,bit_rate:stream=index,codec_name,codec_type,channels,channel_layout,disposition:stream_tags=language,title",
+        "-show_entries", "format=duration,size,bit_rate,start_time:stream=index,codec_name,codec_type,channels,channel_layout,start_time,disposition:stream_tags=language,title",
         "-of", "json",
         source_url_or_path,
     ])
@@ -223,6 +223,9 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
         fmt = data.get("format", {})
         raw_duration = fmt.get("duration")
         duration = float(raw_duration) if raw_duration else 0.0
+        raw_fmt_start = fmt.get("start_time")
+        container_start = float(raw_fmt_start) if raw_fmt_start else 0.0
+        video_start = 0.0
 
         audio_tracks = []
         subtitle_tracks = []
@@ -249,6 +252,12 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
                 if not has_primary_video:
                     video_codec = cname
                     has_primary_video = True
+                    s_start = s.get("start_time")
+                    if s_start:
+                        try:
+                            video_start = float(s_start)
+                        except ValueError:
+                            pass
             elif stype == "audio":
                 audio_tracks.append({
                     "track_idx": len(audio_tracks),
@@ -275,9 +284,11 @@ async def probe_media_stream(source_url_or_path: str) -> dict:
         if not has_primary_video and first_video_codec:
             video_codec = first_video_codec
 
+        start_offset = container_start or video_start
         return {
             "success": True,
             "duration": round(duration, 2),
+            "start_time": round(start_offset, 3),
             "size": int(fmt.get("size") or 0),
             "bit_rate": int(fmt.get("bit_rate") or 0),
             "video_codec": video_codec,
