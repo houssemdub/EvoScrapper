@@ -85,6 +85,7 @@ class SubtitleSyncEngine:
         preferred_lang: Optional[str] = None,
         vad_duration: float = 90.0,
         start_time: float = 0.0,
+        audio_track: int = 0,
     ) -> SyncResult:
         """
         Coordinates full multi-signal alignment pipeline.
@@ -186,15 +187,15 @@ class SubtitleSyncEngine:
 
                 if multi_window:
                     tasks = [
-                        extract_speech_intervals_from_stream(video_source, duration=vad_duration, start_time=effective_start),
-                        extract_speech_intervals_from_stream(video_source, duration=min(60.0, vad_duration), start_time=w2_start),
+                        extract_speech_intervals_from_stream(video_source, duration=vad_duration, start_time=effective_start, audio_track=audio_track),
+                        extract_speech_intervals_from_stream(video_source, duration=min(60.0, vad_duration), start_time=w2_start, audio_track=audio_track),
                     ]
                     results = await asyncio.gather(*tasks, return_exceptions=True)
                     speech = results[0] if not isinstance(results[0], Exception) else []
                     speech2 = results[1] if multi_window and not isinstance(results[1], Exception) else []
                 else:
                     speech = await extract_speech_intervals_from_stream(
-                        video_source, duration=vad_duration, start_time=effective_start
+                        video_source, duration=vad_duration, start_time=effective_start, audio_track=audio_track
                     )
                     speech2 = []
 

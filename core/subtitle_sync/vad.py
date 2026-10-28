@@ -397,6 +397,7 @@ async def extract_speech_intervals_from_stream(
     duration: float = 90.0,
     noise_db: int = -34,
     start_time: float = 0.0,
+    audio_track: int = 0,
 ) -> List[Tuple[float, float]]:
     """
     Runs fast FFmpeg silencedetect on the audio stream and parses active speech intervals.
@@ -420,13 +421,14 @@ async def extract_speech_intervals_from_stream(
             "-reconnect_delay_max", "5",
         ])
     cmd.extend([
-        "-ss", f"{start_time:.2f}",
+        "-ss", f"{start_time:.3f}",
         "-t", str(duration),
         "-i", source_url,
         "-vn",
-        "-map", "0:a:0?",
+        "-map", f"0:a:{max(0, int(audio_track))}?",
         "-ac", "2",
-        "-af", f"highpass=f=200,lowpass=f=3500,silencedetect=noise={noise_db}dB:d=0.35",
+        "-af", f"aresample=async=1:first_pts=0,highpass=f=200,lowpass=f=3500,silencedetect=noise={noise_db}dB:d=0.35",
+        "-avoid_negative_ts", "make_zero",
         "-f", "null",
         "-",
     ])

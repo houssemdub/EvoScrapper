@@ -3859,12 +3859,26 @@ function adjustSubtitleSyncMs(msDelta) {
   saveCurrentSubtitleSync();
   const nowMs = Math.round((state.subtitles.currentOffset || 0) * 1000);
   showToast(`Subtitle sync: ${(nowMs > 0 ? '+' : '')}${nowMs}ms`, 'info');
+
+  const active = state.discover.activeStream;
+  if (active && active.infoHash) {
+    const fileIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null) ? active.playingFileIdx : (active.fileIdx ?? 0);
+    const sessionId = `${active.infoHash}:${fileIdx}:${active.episode || 0}`;
+    const pos = getPlayerCurrentTime();
+    fetch('/api/v1/stream/subtitles/adjust', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        position_sec: pos,
+        delta_ms: Math.round(msDelta),
+      }),
+    }).catch(() => {});
+  }
 }
 
 function adjustSubtitleSync(delta) {
-  setSubtitleSync((state.subtitles.currentOffset || 0) + delta);
-  saveCurrentSubtitleSync();
-  showToast(`Subtitle sync: ${(state.subtitles.currentOffset > 0 ? '+' : '')}${state.subtitles.currentOffset.toFixed(1)}s`, 'info');
+  adjustSubtitleSyncMs(Math.round(delta * 1000));
 }
 
 function resetSubtitleSync() {
@@ -4282,7 +4296,7 @@ async function applySubtitle(subItem, isAuto = false) {
         showToast('Activating real-time Blu-ray PGS Burn-in (100% video-frame sync)...', 'info');
         if (active) {
           active.burnSubIdx = subIdx;
-          active.playbackOffset = curTime;
+          setTransmuxClockAnchor(active, curTime);
           active.useTransmux = true;
         }
         if (video) {
@@ -4520,7 +4534,7 @@ async function applySubtitle(subItem, isAuto = false) {
     const active = state.discover.activeStream;
     if (!savedSync && subItem.is_embedded && active && active.useTransmux && active.containerStartTime > 0.05) {
       // Container has non-zero start time (e.g. 3.174s) shifted to 0 by FFmpeg transmux; auto-compensate to match VLC!
-      restoredOffset = active.containerStartTime;
+      restoredOffset = -active.containerStartTime;
     }
     const restoredDrift = (savedSync && savedSync.driftModel && typeof savedSync.driftModel === 'object')
       ? savedSync.driftModel
@@ -8676,6 +8690,14 @@ function searchDiscoverCatalogByTitle(title) {
 
 let _seekDebounceTimer = null;
 
+function setTransmuxClockAnchor(active, timeSeconds) {
+  if (!active) return;
+  const t = Math.max(0, Number(timeSeconds) || 0);
+  active.playbackOffset = t;
+  active.anchorTime = t;
+  active.anchorStreamStartTime = 0;
+}
+
 // Snaps a requested seek to the nearest preceding keyframe (within 15s) so the
 // client-side playbackOffset matches the backend /transmux snapping contract
 // (routers/stream.py uses the same 15s window). Any mismatch here shifts every
@@ -8711,9 +8733,7 @@ function seekTransmuxOffset(clamped) {
     ? Math.max(0, Number(clamped) || 0)
     : snapTransmuxSeekTime(active, clamped);
 
-  active.playbackOffset = effectiveSeek;
-  active.anchorTime = effectiveSeek;
-  active.anchorStreamStartTime = 0;
+  setTransmuxClockAnchor(active, effectiveSeek);
 
   const burnSubParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
   const transcodeParam = (active.transcodeVideo || hasBurnSub) ? '&transcode_video=true' : '';
@@ -8780,13 +8800,16 @@ function triggerSeekMicroSync(seekTime) {
           cues: payloadCues,
           start_time: Math.max(0, seekTime),
           max_duration_seconds: 30.0,
+          audio_track: active.audioTrack || 0,
         }),
       });
       if (!res.ok) return;
       const data = await res.json();
       if (data && data.success && data.confidence >= 0.70) {
         const offset = Number(data.offset);
-        if (Number.isFinite(offset) && Math.abs(offset - (state.subtitles.currentOffset || 0)) <= 2.0) {
+        const curOff = state.subtitles.currentOffset || 0;
+        const maxJump = (Math.abs(curOff) < 0.05) ? 30.0 : 2.5;
+        if (Number.isFinite(offset) && Math.abs(offset - curOff) <= maxJump) {
           setSubtitleSync(offset);
           saveCurrentSubtitleSync();
           showToast(`Micro-sync re-aligned (${offset >= 0 ? '+' : ''}${offset.toFixed(2)}s)`, 'info');
@@ -9152,13 +9175,16 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
           if (fileIncompatible && !active.useTransmux) {
             console.log('[EvoPlayer] Swarm warmup discovered MKV/multi-audio container; switching to transmuxer...');
             active.useTransmux = true;
+            const upgradeStart = getPlayerCurrentTime();
+            setTransmuxClockAnchor(active, upgradeStart);
             const modeBadge = document.getElementById('player-hud-mode-label');
             if (modeBadge) modeBadge.innerText = 'Transmux';
             updateAudioHudButtons();
             const transcodeParam = active.transcodeVideo ? '&transcode_video=true' : '';
             const durParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
+            const startParam = upgradeStart > 0.1 ? `&start_time=${upgradeStart.toFixed(2)}` : '';
             const targetIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null) ? active.playingFileIdx : effectiveFileIdx;
-            const tUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${targetIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${transcodeParam}${epParams}${magnetParam}${durParam}`;
+            const tUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${targetIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${startParam}${transcodeParam}${epParams}${magnetParam}${durParam}`;
             video.src = tUrl;
             video.load();
             video.play().catch(() => {});
@@ -9216,6 +9242,14 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
         if (probe && probe.success) {
           if (probe.start_time !== undefined && probe.start_time !== null && probe.start_time > 0) {
             curActive.containerStartTime = Number(probe.start_time) || 0;
+            if (
+              curActive.useTransmux &&
+              state.subtitles.activeTrack?.is_embedded &&
+              !loadSavedSubtitleSync(state.subtitles.activeTrack) &&
+              (state.subtitles.currentOffset || 0) === 0
+            ) {
+              setSubtitleSync(-curActive.containerStartTime);
+            }
           }
           if (probe.duration > 0) {
             curActive.totalDuration = probe.duration;
@@ -9272,7 +9306,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             const upgradeStart = curActive.transcodeVideo
               ? curPlayTime
               : snapTransmuxSeekTime(curActive, curPlayTime);
-            curActive.playbackOffset = upgradeStart;
+            setTransmuxClockAnchor(curActive, upgradeStart);
             const modeBadge = document.getElementById('player-hud-mode-label');
             if (modeBadge) modeBadge.innerText = curActive.transcodeVideo ? 'Transcode' : 'Transmux';
             updateAudioHudButtons();
@@ -9289,7 +9323,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             console.log(`[EvoPlayer] Probe detected unsupported video codec (${vCodecLower}); enabling H.264 transcode...`);
             curActive.transcodeVideo = true;
             const curPlayTime = (curActive.playbackOffset || 0) + ((video.currentTime && !isNaN(video.currentTime)) ? video.currentTime : 0);
-            curActive.playbackOffset = curPlayTime;
+            setTransmuxClockAnchor(curActive, curPlayTime);
             const modeBadge = document.getElementById('player-hud-mode-label');
             if (modeBadge) modeBadge.innerText = 'Transcode';
             const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(2)}` : '';

@@ -373,11 +373,8 @@ async def stream_transmuxed_video(
     ])
 
     # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes.
-    # In video copy mode, -noaccurate_seek forces both audio and video demuxers to seek together to the nearest preceding keyframe container boundary, eliminating GOP asymmetry A/V desync.
     if start_seconds and start_seconds > 0:
-        if not transcode_video and burn_sub_idx is None:
-            cmd.append("-noaccurate_seek")
-        cmd.extend(["-ss", f"{start_seconds:.2f}"])
+        cmd.extend(["-ss", f"{start_seconds:.3f}"])
 
     if duration_seconds and duration_seconds > 0:
         cmd.extend(["-t", f"{duration_seconds:.2f}"])

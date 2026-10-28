@@ -279,22 +279,8 @@ async def stream_transmuxed_torrent(
     await ensure_streaming_daemon()
     b_mb = buffer_mb if isinstance(buffer_mb, int) else None
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode, buffer_mb=b_mb)
+    # Backend matches the frontend's requested anchor time directly so player and transmux clocks stay 1:1 in sync
     snapped_start = start_time
-    if start_time and start_time > 0:
-        from core.transmuxer import load_cached_keyframes
-        cached_kfs = load_cached_keyframes(info_hash, file_idx)
-        if not cached_kfs:
-            try:
-                from core.transmuxer import probe_keyframes
-                cached_kfs = await probe_keyframes(source_url, info_hash, file_idx, timeout=2.0)
-            except Exception:
-                cached_kfs = None
-        if cached_kfs and len(cached_kfs) > 1:
-            preceding = [k for k in cached_kfs if k <= start_time]
-            if preceding:
-                candidate = preceding[-1]
-                if (start_time - candidate) <= 15.0:
-                    snapped_start = candidate
 
     if snapped_start and snapped_start > 0:
         dur_val = duration if (duration and isinstance(duration, (int, float)) and duration > 0) else None
@@ -670,6 +656,7 @@ class SubtitleAutoSyncRequest(BaseModel):
     external_cues: Optional[List[List[CueItem]]] = None
     max_duration_seconds: Optional[float] = 90.0
     start_time: Optional[float] = 0.0
+    audio_track: Optional[int] = 0
 
 
 @router.post("/subtitles/auto-sync")
@@ -743,7 +730,12 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
         eff_start = req.start_time or 0.0
         if eff_start <= 0.0 and req.cues and req.cues[0].start > 60.0:
             eff_start = max(0.0, req.cues[0].start - 10.0)
-        speech = await extract_speech_intervals_from_stream(target_source, duration=analysed_seconds, start_time=eff_start)
+        speech = await extract_speech_intervals_from_stream(
+            target_source,
+            duration=analysed_seconds,
+            start_time=eff_start,
+            audio_track=req.audio_track or 0,
+        )
         if speech:
             offset, conf = compute_optimal_offset(cue_tuples, speech)
             return {
@@ -785,6 +777,7 @@ class SubtitleAutoSyncV2Request(BaseModel):
     external_cues: Optional[List[List[CueItem]]] = None
     max_duration_seconds: Optional[float] = 90.0
     start_time: Optional[float] = 0.0
+    audio_track: Optional[int] = 0
 
 
 class SubtitleAdjustRequest(BaseModel):
@@ -854,6 +847,7 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
         preferred_lang=req.preferred_lang,
         vad_duration=analysed_seconds,
         start_time=req.start_time or 0.0,
+        audio_track=req.audio_track or 0,
     )
 
     session_id = f"{req.info_hash}:{req.file_idx}:{req.episode or 0}"

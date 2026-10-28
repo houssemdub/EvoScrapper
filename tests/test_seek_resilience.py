@@ -41,11 +41,7 @@ async def test_transmux_seek_av_alignment_flags():
     assert captured_cmd is not None
     assert "-copyts" not in captured_cmd
     assert "-avoid_negative_ts" in captured_cmd
-    assert "-noaccurate_seek" in captured_cmd
-    # -noaccurate_seek must come before -i
-    noacc_idx = captured_cmd.index("-noaccurate_seek")
-    i_idx = captured_cmd.index("-i")
-    assert noacc_idx < i_idx
+    assert "-noaccurate_seek" not in captured_cmd
     # asetpts=PTS-STARTPTS must NOT be present as it injects gaps before packet 1
     af_idx = captured_cmd.index("-af")
     assert "asetpts=PTS-STARTPTS" not in captured_cmd[af_idx + 1]
@@ -107,7 +103,7 @@ def test_keyframe_snapping_on_transmux_seek():
                 headers=AUTH_HEADERS,
             )
             assert resp.status_code == 200
-            assert resp.headers.get("X-Evo-Seek-Keyframe") == "354.2"
+            assert resp.headers.get("X-Evo-Seek-Keyframe") == "360.0"
     finally:
         from core.transmuxer import get_keyframes_cache_path
         p = get_keyframes_cache_path(test_hash, 0)
