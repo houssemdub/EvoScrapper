@@ -4,7 +4,8 @@ core/subtitle_sync/alass_engine.py — Sequence Alignment & Interval Dynamic Tim
 Inspired by the alass (Automatic Language-Agnostic Subtitle Synchronization) paradigm:
 Replaces unnormalized sliding correlations with exact two-pointer interval intersection
 with mismatch penalties, pairwise delta clustering, multi-scale discrete framerate voting,
-parabolic peak refinement, decoy ambiguity filtering, and piecewise scene-cut detection.
+parabolic peak refinement, decoy ambiguity filtering, window observation clipping, and
+piecewise scene-cut detection.
 """
 import bisect
 import math
@@ -28,16 +29,25 @@ def score_intervals_penalized(
     offset: float,
     scale: float = 1.0,
     mismatch_penalty: float = 0.6,
+    clip_to_reference_span: bool = True,
 ) -> Tuple[float, float, float]:
     """
     Computes exact continuous overlap duration between target cues and reference cues
     under transformation t -> t * scale + offset.
+
+    When clip_to_reference_span is True, only interval segments falling inside the active
+    reference observation window [min(ref), max(ref)] are evaluated. This allows accurate
+    local audio VAD windows (e.g. 90-120s around playback position) to be scored against
+    2-hour movie subtitle tracks without incurring false mismatch penalties for unmeasured time.
 
     Returns:
         (penalized_score, total_overlap_sec, total_target_dur_sec)
     """
     if not target_cues or not reference_cues:
         return 0.0, 0.0, 0.0
+
+    ref_min = reference_cues[0][0] if clip_to_reference_span else -1e12
+    ref_max = reference_cues[-1][1] if clip_to_reference_span else 1e12
 
     total_overlap = 0.0
     total_target_dur = 0.0
@@ -47,10 +57,15 @@ def score_intervals_penalized(
     for s, e in target_cues:
         ts = s * scale + offset
         te = e * scale + offset
+
+        if clip_to_reference_span:
+            ts = max(ref_min, ts)
+            te = min(ref_max, te)
+
         dur = max(0.0, te - ts)
-        total_target_dur += dur
         if dur <= 0.0:
             continue
+        total_target_dur += dur
 
         while j < m and reference_cues[j][1] <= ts:
             j += 1
@@ -74,19 +89,31 @@ def find_candidate_offsets(
     reference_cues: List[Tuple[float, float]],
     scale: float = 1.0,
     max_delta: float = 180.0,
-    max_candidates: int = 35,
+    max_candidates: int = 40,
 ) -> List[float]:
     """
     Extracts high-probability candidate offsets from the pairwise start delta distribution.
     Clusters deltas into 0.25s histogram bins to identify salient shift peaks in O(N log M).
+    Restricts search to cues that can temporally intersect the reference observation span.
     """
     if not target_cues or not reference_cues:
         return [0.0]
 
-    # Sample evenly across cues to maintain sub-10ms candidate generation even on 2000-line tracks
-    step = max(1, len(target_cues) // 160)
-    t_sample = target_cues[::step]
+    ref_min = reference_cues[0][0]
+    ref_max = reference_cues[-1][1]
     r_starts = [r[0] for r in reference_cues]
+
+    # Filter target cues to those that can temporally intersect the reference observation window
+    relevant_targets = [
+        c for c in target_cues
+        if (ref_min - max_delta) <= (c[0] * scale) <= (ref_max + max_delta)
+    ]
+    if not relevant_targets:
+        relevant_targets = target_cues
+
+    # Sample evenly across relevant cues to maintain sub-10ms candidate generation
+    step = max(1, len(relevant_targets) // 160)
+    t_sample = relevant_targets[::step]
 
     deltas: List[float] = []
     for s, _ in t_sample:
@@ -147,7 +174,12 @@ def detect_piecewise_breakpoints(
     Evaluates temporal segments across the timeline to detect scene cuts, commercial insertions,
     or director's cut discontinuities where a single rigid/linear model fails.
     """
-    if len(target_cues) < 40:
+    if len(target_cues) < 40 or len(reference_cues) < 40:
+        return None
+
+    # Only run piecewise analysis if reference track spans substantial time (>= 5 minutes)
+    ref_span = reference_cues[-1][1] - reference_cues[0][0]
+    if ref_span < 300.0:
         return None
 
     block_size = len(target_cues) // num_blocks
@@ -257,10 +289,20 @@ def alass_align_intervals(
         clean_target, clean_ref, refined_offset, scale=best_scale
     )
 
-    # Count matched cues
+    # Observation window support normalization
+    ref_min = clean_ref[0][0]
+    ref_max = clean_ref[-1][1]
+    observed_cues = [
+        (s, e) for s, e in clean_target
+        if ref_min <= (s * best_scale + refined_offset) <= ref_max
+        or ref_min <= (e * best_scale + refined_offset) <= ref_max
+    ]
+    denom_cues = len(observed_cues) if observed_cues else len(clean_target)
+
+    # Count matched cues within the observation window
     matched_count = 0
     ref_starts = [r[0] for r in clean_ref]
-    for s, _ in clean_target:
+    for s, _ in (observed_cues or clean_target):
         ts = s * best_scale + refined_offset
         idx = bisect.bisect_left(ref_starts, ts - 0.5)
         if idx < len(ref_starts) and abs(ref_starts[idx] - ts) <= 0.6:
@@ -268,7 +310,7 @@ def alass_align_intervals(
 
     # Ambiguity check: decoy shifts to guard against hyper-dense regular tracks (dialogue every 2s)
     # where virtually every offset hits a dialogue line.
-    t_sample = [s * best_scale for s, _ in clean_target[:400]]
+    t_sample = [s * best_scale for s, _ in (observed_cues[:400] if observed_cues else clean_target[:400])]
     tolerance = 0.6
     decoy_support = 0.0
     for decoy in (11.11, 23.33, 37.77, 71.19, 103.03, -13.37, -41.41, -83.83):
@@ -281,7 +323,7 @@ def alass_align_intervals(
                 hits += 1
         decoy_support = max(decoy_support, hits / max(1, len(t_sample)))
 
-    raw_support = matched_count / max(1, len(clean_target))
+    raw_support = matched_count / max(1, denom_cues)
     if decoy_support >= 0.98:
         # Ambiguous track — decoy shifts match at >=98%, impossible to distinguish
         confidence = 0.0
@@ -290,6 +332,9 @@ def alass_align_intervals(
         # Margin above decoy support
         decoy_margin = (raw_support - decoy_support) / max(1e-6, 1.0 - decoy_support)
         confidence = round(max(0.0, min(1.0, overlap_ratio * 0.6 + max(0.0, decoy_margin) * 0.4)), 2)
+        # Small sample penalty if window had fewer than 3 dialogue lines out of a larger track
+        if denom_cues < 3 and len(clean_target) > 10:
+            confidence = min(confidence, 0.4)
     else:
         confidence = 0.0
 

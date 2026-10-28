@@ -395,7 +395,7 @@ def align_to_reference_cues_ex(
 async def extract_speech_intervals_from_stream(
     source_url: str,
     duration: float = 90.0,
-    noise_db: int = -30,
+    noise_db: int = -34,
     start_time: float = 0.0,
 ) -> List[Tuple[float, float]]:
     """

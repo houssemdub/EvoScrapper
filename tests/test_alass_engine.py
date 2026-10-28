@@ -134,3 +134,28 @@ def test_ambiguity_decoy_guard():
     assert abs(res["offset"] + 7.0) <= 0.1
     # Ambiguous track cannot report high confidence
     assert res["confidence"] < 0.35
+
+
+def test_movie_two_hours_vs_ninety_seconds_audio_window():
+    # Full 2-hour movie subtitle track (1000+ cues)
+    random.seed(1)
+    movie_cues = []
+    t = 10.0
+    while t < 7000.0:
+        movie_cues.append((round(t, 2), round(t + random.uniform(1.5, 4.0), 2)))
+        t += random.uniform(3.0, 10.0)
+
+    # Subtitles in MKV delayed by 5.5s
+    delay = 5.5
+    target_cues = [(round(s + delay, 2), round(e + delay, 2)) for s, e in movie_cues]
+
+    # Live playback at minute 15: audio VAD extracts 90 seconds [900s .. 990s]
+    speech_window = [(s, e) for s, e in movie_cues if 900.0 <= s <= 990.0]
+    assert len(speech_window) >= 10
+
+    res = alass_align_intervals(target_cues, speech_window, allow_framerate_drift=False)
+    # Must recover the exact -5.5s offset with high confidence (> 0.85), NOT 0.0% confidence!
+    assert abs(res["offset"] - (-delay)) <= 0.08
+    assert res["confidence"] >= 0.85
+    assert res["matched_cues"] == len(speech_window)
+
