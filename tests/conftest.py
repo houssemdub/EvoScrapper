@@ -20,3 +20,22 @@ def isolate_swarm_intelligence_stores(tmp_path):
     yield
     si._heatmap_store = original_heatmap
     si._coverage_store = original_coverage
+
+
+def pytest_sessionfinish(session, exitstatus):
+    session.config._evo_exitstatus = exitstatus
+
+
+def pytest_unconfigure(config):
+    """
+    Terminates the pytest process cleanly. Bypasses Python runtime shutdown
+    deadlock from unjoined background worker threads (aiosqlite/httpx/etc.)
+    after all tests and reports have fully completed.
+    """
+    import os
+    import sys
+    sys.stdout.flush()
+    sys.stderr.flush()
+    code = getattr(config, "_evo_exitstatus", 0)
+    os._exit(int(code) if isinstance(code, int) else 0)
+

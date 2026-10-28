@@ -182,7 +182,7 @@ def _score_offsets(
     """
     speech_end = max((s[1] for s in speech_intervals), default=0.0)
     speech_start = 0.0
-    if speech_end <= 0.0:
+    if speech_end <= 0.0 or not offsets:
         return [], [], 0.0
 
     n_bins = int(math.ceil(speech_end / bin_size)) + 1
@@ -194,21 +194,20 @@ def _score_offsets(
 
     speech_coverage = sum(speech_signal) / max(1, len(speech_signal))
 
-    # Cue signal must cover every original cue time that can land inside the
-    # analysed window for any of the candidate offsets.
+    # At candidate offset `off`, speech dialogue at time `t` corresponds to
+    # subtitle cue time (t - off). Across all candidate offsets, the required
+    # cue timeline is [speech_start - max_offset, speech_end - min_offset].
     min_offset = min(offsets)
     max_offset = max(offsets)
-    range_start = speech_start + min_offset
-    range_end = speech_end + max_offset + bin_size
+    range_start = speech_start - max_offset
+    range_end = speech_end - min_offset + bin_size
     cue_signal = _intervals_to_signal(cues, range_start, range_end, bin_size)
-
-    k_min = int(round(min_offset / bin_size))
-    k_max = int(round(max_offset / bin_size))
 
     scores: List[float] = []
     overlaps: List[float] = []
-    for k in range(k_min, k_max + 1):
-        start_index = k_max - k
+    for off in offsets:
+        start_index = int(round((speech_start - off - range_start) / bin_size))
+        start_index = max(0, min(start_index, max(0, len(cue_signal) - n_bins)))
         window = cue_signal[start_index:start_index + n_bins]
         if len(window) < n_bins:
             window = window + [0.0] * (n_bins - len(window))
@@ -315,11 +314,9 @@ def compute_optimal_offset(
         best_overlap = overlaps[best_i]
 
     best_offset = max(min_offset, min(max_offset, best_offset))
-    # Subtitle cues are normally rendered slightly before/after the spoken
-    # line, which introduces a small (~0.2-0.4s) bias in pattern correlation.
-    # Treat anything inside that perceptual window as "already in sync" so we
-    # don't apply a pointless correction.
-    if abs(best_offset) < 0.6:
+    # Subtitle cues within 150ms are perceptually imperceptible;
+    # treat anything inside that narrow window as "already in sync".
+    if abs(best_offset) < 0.15:
         best_offset = 0.0
 
     # Peak-to-background prominence. A correct alignment produces one sharp
@@ -364,13 +361,6 @@ def _dominant_delta(
     for t in sampled:
         lo = bisect.bisect_left(refs, t - max_delta)
         hi = bisect.bisect_left(refs, t + max_delta)
-        # Cap very dense candidate windows around the closest cue. The cap is
-        # wide enough (±60 cues) to keep the true delta reachable even when a
-        # whole season/recap shifts the track by more than a minute.
-        if hi - lo > 120:
-            mid = bisect.bisect_left(refs, t)
-            lo = max(lo, mid - 60)
-            hi = min(hi, mid + 60)
         row = [refs[j] - t for j in range(lo, hi)]
         deltas_by_target.append(row)
         flat.extend(row)
@@ -612,13 +602,16 @@ async def extract_speech_intervals_from_stream(
     source_url: str,
     duration: float = 90.0,
     noise_db: int = -30,
+    start_time: float = 0.0,
 ) -> List[Tuple[float, float]]:
     """
     Runs fast FFmpeg silencedetect on the audio stream and parses active speech intervals.
     Includes network reconnect resilience and stereo downmix for robust surround detection.
+    When start_time > 0, seeks to start_time and shifts parsed intervals to absolute stream PTS.
     """
     ffmpeg_bin = find_ffmpeg() or "ffmpeg"
     duration = max(5.0, float(duration))
+    start_time = max(0.0, float(start_time or 0.0))
     cmd = [
         ffmpeg_bin,
         "-hide_banner",
@@ -633,7 +626,7 @@ async def extract_speech_intervals_from_stream(
             "-reconnect_delay_max", "5",
         ])
     cmd.extend([
-        "-ss", "0",
+        "-ss", f"{start_time:.2f}",
         "-t", str(duration),
         "-i", source_url,
         "-vn",
@@ -665,7 +658,10 @@ async def extract_speech_intervals_from_stream(
                 stderr_data = b""
 
         stderr_text = stderr_data.decode("utf-8", errors="replace") if stderr_data else ""
-        return parse_silencedetect_output(stderr_text, total_duration=duration)
+        raw_intervals = parse_silencedetect_output(stderr_text, total_duration=duration)
+        if start_time > 0:
+            return [(round(s + start_time, 3), round(e + start_time, 3)) for s, e in raw_intervals]
+        return raw_intervals
     except Exception as e:
         app_logger.warning(f"[SubtitleSync] Speech extraction failed: {e}")
         return []

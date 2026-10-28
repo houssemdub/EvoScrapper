@@ -667,6 +667,7 @@ class SubtitleAutoSyncRequest(BaseModel):
     preferred_lang: Optional[str] = "en"
     external_cues: Optional[List[List[CueItem]]] = None
     max_duration_seconds: Optional[float] = 90.0
+    start_time: Optional[float] = 0.0
 
 
 @router.post("/subtitles/auto-sync")
@@ -737,7 +738,10 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
 
     # Mode 2: Audio Voice Activity Detection (VAD) via FFmpeg silencedetect
     try:
-        speech = await extract_speech_intervals_from_stream(target_source, duration=analysed_seconds)
+        eff_start = req.start_time or 0.0
+        if eff_start <= 0.0 and req.cues and req.cues[0].start > 60.0:
+            eff_start = max(0.0, req.cues[0].start - 10.0)
+        speech = await extract_speech_intervals_from_stream(target_source, duration=analysed_seconds, start_time=eff_start)
         if speech:
             offset, conf = compute_optimal_offset(cue_tuples, speech)
             return {
@@ -778,6 +782,7 @@ class SubtitleAutoSyncV2Request(BaseModel):
     preferred_lang: Optional[str] = "en"
     external_cues: Optional[List[List[CueItem]]] = None
     max_duration_seconds: Optional[float] = 90.0
+    start_time: Optional[float] = 0.0
 
 
 class SubtitleAdjustRequest(BaseModel):
@@ -846,6 +851,7 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
         embedded_ref_idx=req.reference_sub_idx,
         preferred_lang=req.preferred_lang,
         vad_duration=analysed_seconds,
+        start_time=req.start_time or 0.0,
     )
 
     session_id = f"{req.info_hash}:{req.file_idx}:{req.episode or 0}"

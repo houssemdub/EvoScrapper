@@ -477,6 +477,65 @@ async def test_engine_skips_vad_when_reference_is_authoritative():
     vad.assert_not_called()
 
 
+def test_score_offsets_asymmetric_stage2():
+    """Stage 2 fine search uses an asymmetric offset window and must peak at the exact shift."""
+    from core.subtitle_sync.vad import _score_offsets
+
+    speech = [(50.0, 55.0), (70.0, 75.0), (90.0, 95.0)]
+    # Cues are advanced by 5.0s (starting at 45.0, 65.0, 85.0) -> optimal offset is +5.0s
+    cues = [(s - 5.0, e - 5.0) for s, e in speech]
+    fine_offsets = [4.75, 4.80, 4.85, 4.90, 4.95, 5.00, 5.05, 5.10, 5.15, 5.20, 5.25]
+
+    scores, overlaps, _ = _score_offsets(cues, speech, fine_offsets, 0.05)
+    assert len(scores) == len(fine_offsets)
+    best_idx = max(range(len(scores)), key=lambda i: scores[i])
+    assert fine_offsets[best_idx] == 5.00
+    assert scores[best_idx] > 0.95
+
+
+def test_compute_optimal_offset_subsecond_accuracy():
+    """Perceptual offsets between 0.2s and 0.5s must be retained, not clamped to 0.0s."""
+    from core.subtitle_sync.vad import compute_optimal_offset
+
+    speech = [(10.0, 15.0), (30.0, 35.0), (60.0, 65.0)]
+    # Cues delayed by 0.35s -> offset should be -0.35s
+    cues = [(s + 0.35, e + 0.35) for s, e in speech]
+
+    offset, conf = compute_optimal_offset(cues, speech, min_offset=-5.0, max_offset=5.0, step=0.05)
+    assert abs(offset - (-0.35)) <= 0.05
+    assert conf > 0.7
+
+
+def test_srt_to_webvtt_formats_and_offsets():
+    """srt_to_webvtt must shift both hh:mm:ss.ttt and mm:ss.ttt without duplicating WEBVTT."""
+    from routers.subtitles import srt_to_webvtt
+
+    vtt_raw = "WEBVTT\n\n00:04.500 --> 00:08.500\nHello\n\n1:02:03.000 --> 1:02:06.000\nWorld\n"
+    shifted = srt_to_webvtt(vtt_raw, offset_seconds=2.0)
+    assert shifted.count("WEBVTT") == 1
+    # 00:04.500 + 2s = 00:00:06.500
+    assert "00:00:06.500 --> 00:00:10.500" in shifted
+    # 1:02:03.000 + 2s = 01:02:05.000
+    assert "01:02:05.000 --> 01:02:08.000" in shifted
+
+
+def test_dominant_delta_dense_large_shift():
+    """A dense track with 50s shift must not be clipped by cue count windowing."""
+    from core.subtitle_sync.vad import _dominant_delta
+
+    # Reference cues every 1s from 0 to 200
+    refs = [float(i) for i in range(200)]
+    # Target shifted by +50s (so target starts at 50, refs[j] - t = -50 or +50)
+    # Suppose target is delayed: starts at 50.0..250.0. delta = ref - target = -50.0
+    shift = -50.0
+    targets = [r - shift for r in refs[:100]]
+
+    median_offset, inliers, supported = _dominant_delta(targets, refs, max_delta=120.0)
+    assert abs(median_offset - shift) <= 0.2
+    assert supported >= 90
+
+
+
 
 
 

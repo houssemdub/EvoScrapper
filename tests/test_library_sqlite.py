@@ -13,11 +13,14 @@ from models.library import LibraryItem
 
 
 @pytest.fixture
-def manager(tmp_path):
-    return LibraryManager(
+async def manager(tmp_path):
+    mgr = LibraryManager(
         db_path=str(tmp_path / "library.db"),
         storage_path=str(tmp_path / "library.json"),
     )
+    yield mgr
+    if mgr.db is not None:
+        await mgr.db.close()
 
 
 def _item(item_id: str, **kwargs) -> LibraryItem:
@@ -129,6 +132,7 @@ class TestLegacyJsonMigration:
         assert (tmp_path / "library.json.migrated").exists()
         res = await mgr.get_items()
         assert res.total == 1
+        await mgr.db.close()
 
     @pytest.mark.asyncio
     async def test_no_reimport_when_db_already_populated(self, tmp_path):
@@ -146,6 +150,8 @@ class TestLegacyJsonMigration:
         res = await second.get_items()
         assert res.total == 1 and res.items[0].id == "tt2"
         assert json_path.exists()  # never consumed
+        await first.db.close()
+        await second.db.close()
 
     @pytest.mark.asyncio
     async def test_corrupt_json_is_ignored(self, tmp_path):
@@ -154,6 +160,7 @@ class TestLegacyJsonMigration:
         mgr = LibraryManager(db_path=str(tmp_path / "library.db"), storage_path=str(json_path))
         res = await mgr.get_items()
         assert res.total == 0
+        await mgr.db.close()
 
 
 class TestConcurrency:
@@ -215,3 +222,4 @@ class TestRouterFlow:
         removed = client.delete("/api/v1/library/tt1375666")
         assert removed.status_code == 200
         assert client.get("/api/v1/library/").json()["total"] == 0
+        await isolated.db.close()

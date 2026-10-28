@@ -3700,6 +3700,9 @@ async function triggerAutoSyncSubtitles() {
       if (embeddedSub) refSubIdx = embeddedSub.sub_index ?? 0;
     }
 
+    const videoEl = document.getElementById('evo-video-player');
+    const curPlayTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (videoEl ? (videoEl.currentTime || 0) : 0);
+
     const payload = {
       info_hash: active.infoHash,
       file_idx: fileIdx,
@@ -3710,6 +3713,7 @@ async function triggerAutoSyncSubtitles() {
       reference_cues: refCues,
       reference_sub_idx: refSubIdx,
       max_duration_seconds: 120.0,
+      start_time: Math.max(0, curPlayTime),
     };
 
     const res = await fetch('/api/v1/stream/subtitles/auto-sync-v2', {
@@ -3942,9 +3946,17 @@ async function autoLoadSubtitles(title, imdbId, season, episode, releaseTitle = 
     const preferredLang = state.subtitles.preferredLang || 'en';
     const hasActiveEmbedded = state.subtitles.activeTrack && state.subtitles.activeTrack.is_embedded;
     const hasEmbeddedMatch = existingEmbedded.some((s) => !s.is_image_based && matchSubtitleLang(s, preferredLang));
-    if (hasActiveEmbedded || hasEmbeddedMatch) {
-      console.log('[EvoPlayer] Container-embedded subtitle active or available; prioritizing over online subs (VLC/Stremio parity)');
+    if (hasActiveEmbedded) {
+      console.log('[EvoPlayer] Container-embedded subtitle active; prioritizing over online subs');
       return;
+    }
+    if (hasEmbeddedMatch) {
+      const match = existingEmbedded.find((s) => !s.is_image_based && matchSubtitleLang(s, preferredLang));
+      if (match) {
+        console.log('[EvoPlayer] Container-embedded subtitle available; activating over online subs:', match.release_name);
+        await applySubtitle(match, true);
+        return;
+      }
     }
 
     // Auto-select candidate: preferred language (English first), matching release if possible

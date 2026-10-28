@@ -83,6 +83,7 @@ class SubtitleSyncEngine:
         embedded_ref_idx: Optional[int] = None,
         preferred_lang: Optional[str] = None,
         vad_duration: float = 90.0,
+        start_time: float = 0.0,
     ) -> SyncResult:
         """
         Coordinates full multi-signal alignment pipeline.
@@ -166,7 +167,15 @@ class SubtitleSyncEngine:
         reference_is_authoritative = reference_offset is not None and reference_conf >= 0.85
         if video_source and not reference_is_authoritative:
             try:
-                speech = await extract_speech_intervals_from_stream(video_source, duration=vad_duration)
+                # If start_time not provided, but dialogue only starts later (e.g. after intro),
+                # sample audio around the dialogue onset to prevent empty silence matching.
+                effective_start = start_time
+                if effective_start <= 0.0 and clean_cues and clean_cues[0][0] > 60.0:
+                    effective_start = max(0.0, clean_cues[0][0] - 10.0)
+
+                speech = await extract_speech_intervals_from_stream(
+                    video_source, duration=vad_duration, start_time=effective_start
+                )
                 if speech:
                     offset, conf = compute_optimal_offset(target_cue_times, speech)
                     if conf > 0.2:

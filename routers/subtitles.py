@@ -359,14 +359,14 @@ def ass_to_webvtt(ass_text: str, offset_seconds: float = 0.0) -> str:
 
 
 def srt_to_webvtt(srt_text: str, offset_seconds: float = 0.0) -> str:
-    """Converts SRT subtitle string to WebVTT format, applying optional time shift."""
+    """Converts SRT or raw WebVTT subtitle string to WebVTT format, applying optional time shift."""
     text = srt_text.replace("\r\n", "\n").replace("\r", "\n")
     lines = text.split("\n")
     out_lines = ["WEBVTT", ""]
-    time_pattern = re.compile(r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})")
+    time_pattern = re.compile(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})")
 
     def shift_time(h, m, s, ms, delta):
-        total_sec = int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0 + delta
+        total_sec = int(h or 0) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0 + delta
         if total_sec < 0:
             total_sec = 0.0
         nh = int(total_sec // 3600)
@@ -375,7 +375,12 @@ def srt_to_webvtt(srt_text: str, offset_seconds: float = 0.0) -> str:
         nms = int(round((total_sec - int(total_sec)) * 1000))
         return f"{nh:02d}:{nm:02d}:{ns:02d}.{nms:03d}"
 
-    for line in lines:
+    # Strip existing initial WEBVTT header line if present to avoid duplication
+    start_idx = 0
+    while start_idx < len(lines) and (lines[start_idx].strip() == "" or lines[start_idx].strip().startswith("WEBVTT")):
+        start_idx += 1
+
+    for line in lines[start_idx:]:
         m = time_pattern.search(line)
         if m:
             h1, m1, s1, ms1, h2, m2, s2, ms2 = m.groups()
