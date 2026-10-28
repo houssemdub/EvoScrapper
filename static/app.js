@@ -3430,24 +3430,11 @@ function updateSubtitleOverlay() {
   const secBox = document.getElementById('player-secondary-cue');
   if (!video) return;
 
-  // When native text track is active and in exact sync, let browser render on video PTS
-  if (video._nativeSubTrack) {
-    if ((state.subtitles.currentOffset || 0) === 0 && !state.subtitles.driftModel) {
-      if (cueBox && !cueBox.classList.contains('hidden')) {
-        cueBox.classList.add('hidden');
-        cueBox._lastHtml = '';
-      }
-    } else {
-      try { video._nativeSubTrack.mode = 'disabled'; } catch (_) {}
-      video._nativeSubTrack = null;
-    }
-  }
-
   const cur = getPlayerCurrentTime();
 
   // 1. Primary Subtitles
   const rawCues = state.subtitles.rawCues;
-  if (!rawCues || rawCues.length === 0 || !cueBox || video._nativeSubTrack) {
+  if (!rawCues || rawCues.length === 0 || !cueBox) {
     if (cueBox && !cueBox.classList.contains('hidden')) {
       cueBox.classList.add('hidden');
       cueBox._lastHtml = '';
@@ -3553,6 +3540,10 @@ function renderCuesToVideo(rawCues, offsetSeconds) {
   video.ontimeupdate = () => {
     updatePlayerTimeline();
     updateSubtitleOverlay();
+    const unmuteOverlay = document.getElementById('player-unmute-overlay');
+    if (video && !video.muted && video.volume > 0 && unmuteOverlay && !unmuteOverlay.classList.contains('hidden')) {
+      unmuteOverlay.classList.add('hidden');
+    }
   };
   video.onseeking = () => {
     updatePlayerTimeline();
@@ -3562,36 +3553,6 @@ function renderCuesToVideo(rawCues, offsetSeconds) {
     updatePlayerTimeline();
     updateSubtitleOverlay();
   };
-
-  // Native track rendering when in zero offset without drift/secondary cues (exact VLC media-clock sync)
-  const useNativeTrack = Boolean(
-    (offsetSeconds || 0) === 0 &&
-    !state.subtitles.driftModel &&
-    (!state.subtitles.secondaryCues || state.subtitles.secondaryCues.length === 0) &&
-    typeof VTTCue !== 'undefined' &&
-    typeof video.addTextTrack === 'function' &&
-    rawCues && rawCues.length > 0 && rawCues.length < 5000
-  );
-
-  if (useNativeTrack) {
-    try {
-      const nativeTrack = video.addTextTrack('subtitles', 'EvoSubtitles', state.subtitles.activeLang || 'en');
-      nativeTrack.mode = 'showing';
-      for (const c of rawCues) {
-        if (c.end > c.start) {
-          const clean = (c.text || '').replace(/\{[^}]*\}/g, '').replace(/<[^>]*>/g, '').trim();
-          if (clean) {
-            nativeTrack.addCue(new VTTCue(c.start, c.end, clean));
-          }
-        }
-      }
-      video._nativeSubTrack = nativeTrack;
-    } catch (_) {
-      video._nativeSubTrack = null;
-    }
-  } else {
-    video._nativeSubTrack = null;
-  }
 
   // Bind rAF loop listeners once per video element
   if (!video._subRafBound) {
@@ -8995,6 +8956,8 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     burnSubIdx: null,
     audioTrack: 0,
     playbackOffset: 0,
+    anchorTime: 0,
+    anchorStreamStartTime: 0,
     totalDuration: initialDuration,
     season,
     episode,
