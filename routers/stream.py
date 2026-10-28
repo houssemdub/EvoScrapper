@@ -874,6 +874,7 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
         "cues_analyzed": result.cues_analyzed,
         "max_duration_seconds": analysed_seconds,
         "message": result.message,
+        "piecewise": result.piecewise,
     }
 
 

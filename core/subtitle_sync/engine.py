@@ -62,6 +62,7 @@ class SyncResult:
     adaptive_controller: Optional[AdaptiveSyncController] = None
     cues_analyzed: int = 0
     message: Optional[str] = None
+    piecewise: Optional[List[Dict[str, Any]]] = None
 
 
 class SubtitleSyncEngine:
@@ -117,6 +118,7 @@ class SubtitleSyncEngine:
 
         candidates: List[SyncCandidate] = []
         reference_drift: Optional[Dict[str, Any]] = None
+        reference_piecewise: Optional[List[Dict[str, Any]]] = None
         reference_offset: Optional[float] = None
         reference_conf = 0.0
 
@@ -140,6 +142,7 @@ class SubtitleSyncEngine:
                     )
                 )
                 reference_drift = aligned.get("drift_model")
+                reference_piecewise = aligned.get("piecewise")
 
         # 3. Signal B: External Subtitles Consensus (SubDL, OpenSubtitles, AnimeTosho, etc.)
         if external_cues_list:
@@ -309,4 +312,5 @@ class SubtitleSyncEngine:
             adaptive_controller=adaptive_ctrl,
             cues_analyzed=len(clean_cues),
             message=message,
+            piecewise=reference_piecewise,
         )

@@ -14,6 +14,7 @@ import statistics
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import app_logger
+from core.subtitle_sync.alass_engine import alass_align_intervals
 from core.transmuxer import find_ffmpeg
 
 # Candidate framerate ratios (PAL/NTSC conversions) used to recover from
@@ -233,108 +234,33 @@ def compute_optimal_offset(
     """
     Finds the time shift delta_t in [min_offset, max_offset] that maximizes
     the correlation between the subtitle dialogue pattern and detected audio
-    speech intervals.
-
-    Uses a coarse-to-fine normalised cross-correlation search so that dense
-    dialogue cannot produce a flat overlap plateau (the previous overlap-only
-    scoring returned near-100% confidence for almost every offset).
+    speech intervals using sequence alignment and interval DTW.
 
     Returns (best_offset, confidence_0_to_1).
     """
     if not cues or not speech_intervals:
         return 0.0, 0.0
 
-    cues = sorted(((float(s), float(e)) for s, e in cues if float(e) > float(s)), key=lambda c: c[0])
-    speech_intervals = sorted(
-        ((float(s), float(e)) for s, e in speech_intervals if float(e) > float(s)),
-        key=lambda c: c[0],
-    )
-    if not cues or not speech_intervals:
-        return 0.0, 0.0
-
-    speech_end = max(s[1] for s in speech_intervals)
     min_offset = float(min_offset)
     max_offset = float(max_offset)
     if max_offset < min_offset:
         min_offset, max_offset = max_offset, min_offset
 
-    # ── Stage 1: coarse search over the full range ──────────────────────────
-    coarse_step = 0.25
-    span = max_offset - min_offset
-    coarse_offsets = [
-        min_offset + i * coarse_step
-        for i in range(int(math.floor(span / coarse_step)) + 1)
-    ]
-    if coarse_offsets[-1] < max_offset - 0.01:
-        coarse_offsets.append(max_offset)
-
-    scores, overlaps, speech_coverage = _score_offsets(
-        cues, speech_intervals, coarse_offsets, coarse_step
+    max_delta = max(abs(min_offset), abs(max_offset))
+    res = alass_align_intervals(
+        cues,
+        speech_intervals,
+        max_delta=max_delta,
+        allow_framerate_drift=False,
     )
-    if not scores:
-        return 0.0, 0.0
-
-    best_i = max(range(len(scores)), key=lambda i: scores[i])
-    best_score = scores[best_i]
-    coarse_offset = coarse_offsets[best_i]
-
-    # If speech detection saw (almost) no silence the pattern carries no
-    # usable information; refuse to guess rather than shift subtitles randomly.
-    if speech_coverage >= 0.97:
-        return 0.0, 0.1
-    if best_score <= 0.08:
-        return 0.0, 0.1
-
-    # ── Stage 2: fine search around the coarse peak ─────────────────────────
-    fine_step = max(0.02, min(0.05, float(step) if step and step > 0 else 0.05))
-    fine_min = max(min_offset, coarse_offset - coarse_step)
-    fine_max = min(max_offset, coarse_offset + coarse_step)
-    fine_offsets: List[float] = []
-    k = fine_min
-    while k <= fine_max + 1e-9:
-        fine_offsets.append(round(k, 4))
-        k += fine_step
-    if not fine_offsets:
-        fine_offsets = [coarse_offset]
-
-    fine_scores, fine_overlaps, _ = _score_offsets(
-        cues, speech_intervals, fine_offsets, fine_step
-    )
-    if fine_scores:
-        best_j = max(range(len(fine_scores)), key=lambda i: fine_scores[i])
-        if fine_scores[best_j] >= best_score - 0.02:
-            best_offset = fine_offsets[best_j]
-            best_score = fine_scores[best_j]
-            best_overlap = fine_overlaps[best_j]
-        else:
-            best_offset = coarse_offset
-            best_overlap = overlaps[best_i]
-    else:
-        best_offset = coarse_offset
-        best_overlap = overlaps[best_i]
+    best_offset = res["offset"]
+    confidence = res["confidence"]
 
     best_offset = max(min_offset, min(max_offset, best_offset))
-    # Subtitle cues within 150ms are perceptually imperceptible;
-    # treat anything inside that narrow window as "already in sync".
     if abs(best_offset) < 0.15:
         best_offset = 0.0
 
-    # Peak-to-background prominence. A correct alignment produces one sharp
-    # peak; an ambiguous one sits on a broad plateau.
-    ordered = sorted(scores)
-    baseline = ordered[len(ordered) // 2]
-    prominence = (best_score - baseline) / max(1e-6, 1.0 - baseline)
-    prominence = max(0.0, min(1.0, prominence))
-
-    support = max(0.0, min(1.0, best_overlap))
-    confidence = 0.20 + 0.50 * prominence + 0.30 * support
-    if best_score < 0.15:
-        confidence = min(confidence, 0.2)
-    if best_score < 0.30:
-        confidence = min(confidence, 0.45)
-
-    confidence = round(max(0.0, min(1.0, confidence)), 2)
-    return round(best_offset, 3), confidence
+    return round(best_offset, 3), round(confidence, 2)
 
 
 def _dominant_delta(
@@ -401,56 +327,23 @@ def align_to_reference_cues(
     max_delta: float = 120.0,
 ) -> Tuple[float, float]:
     """
-    Aligns target subtitle cues to a container ground-truth reference subtitle track.
-    Uses a robust dominant-cluster vote of pairwise start deltas.
+    Aligns target subtitle cues to a container ground-truth reference subtitle track
+    using sequence alignment and interval DTW.
     Returns (offset_seconds, confidence_0_to_1).
     """
     if not target_cues or not reference_cues:
         return 0.0, 0.0
 
-    target_starts = sorted(float(c[0]) for c in target_cues)
-    reference_starts = sorted(float(c[0]) for c in reference_cues)
-    if not target_starts or not reference_starts:
-        return 0.0, 0.0
-
-    # Only consider target cues that can actually match the reference span.
-    max_ref = reference_starts[-1]
-    considered = [t for t in target_starts if t <= max_ref + max_delta]
-    if not considered:
-        considered = target_starts
-
-    median_offset, inliers, supported = _dominant_delta(considered, reference_starts, max_delta)
-    if not inliers:
-        return 0.0, 0.0
-
-    considered_sample = considered[:400]
-    confidence = supported / max(1, len(considered_sample))
-    if supported < 2:
-        confidence = min(confidence, 0.5)
-
-    # Ambiguity guard. Dense, regularly spaced cue tracks can match almost any
-    # offset within 0.6s (e.g. dialogue every 2s), which made a wrong reference
-    # look like a 100% confident alignment. Measure support at decoy offsets
-    # that are not multiples of common cue spacings and only trust the margin
-    # above the best decoy.
-    tolerance = 0.6
-    decoy_support = 0.0
-    for decoy in (11.11, 23.33, 37.77, 71.19, 103.03, -13.37, -41.41, -83.83):
-        hits = 0
-        shift = median_offset + decoy
-        for t in considered_sample:
-            expected = t + shift
-            idx = bisect.bisect_left(reference_starts, expected - tolerance)
-            if idx < len(reference_starts) and reference_starts[idx] <= expected + tolerance:
-                hits += 1
-        decoy_support = max(decoy_support, hits / max(1, len(considered_sample)))
-
-    if decoy_support >= 0.98:
-        confidence = 0.0
-    else:
-        confidence = (confidence - decoy_support) / max(1e-6, 1.0 - decoy_support)
-    confidence = round(max(0.0, min(1.0, confidence)), 2)
-    return round(median_offset, 3), confidence
+    res = alass_align_intervals(
+        target_cues,
+        reference_cues,
+        max_delta=float(max_delta),
+        allow_framerate_drift=False,
+    )
+    offset = res["offset"]
+    if abs(offset) < 0.15:
+        offset = 0.0
+    return round(offset, 3), round(res["confidence"], 2)
 
 
 def align_to_reference_cues_ex(
@@ -459,7 +352,8 @@ def align_to_reference_cues_ex(
     max_delta: float = 120.0,
 ) -> Dict[str, Any]:
     """
-    Extended reference alignment that also detects framerate drift.
+    Extended reference alignment using sequence alignment & interval DTW that also detects
+    framerate drift and piecewise scene-cut breakpoints.
 
     Returns:
         {
@@ -467,135 +361,35 @@ def align_to_reference_cues_ex(
           "confidence": float,
           "drift_model": Optional[{"model": "linear", "params": [a, b], "rmse": float}],
           "matched_cues": int,
+          "piecewise": Optional[List[dict]],
         }
     """
-    offset, confidence = align_to_reference_cues(target_cues, reference_cues, max_delta)
-    result: Dict[str, Any] = {
-        "offset": offset,
-        "confidence": confidence,
-        "drift_model": None,
-        "matched_cues": 0,
-    }
-    if len(target_cues) < 8 or len(reference_cues) < 8:
-        return result
-
-    target_starts = sorted(float(c[0]) for c in target_cues)
-    reference_starts = sorted(float(c[0]) for c in reference_cues)
-    ref_span = reference_starts[-1] - reference_starts[0]
-    if ref_span < 30.0:
-        return result
-
-    _, inliers, supported = _dominant_delta(target_starts, reference_starts, max_delta)
-    result["matched_cues"] = supported
-
-    # If a rigid shift already explains the data almost perfectly, there is no
-    # meaningful framerate drift to model.
-    if confidence >= 0.85 and inliers:
-        residual = statistics.median(abs(d - offset) for d in inliers)
-        if residual <= 0.35:
-            return result
-
-    # Try discrete framerate conversion ratios. For each candidate scale we
-    # re-vote on scaled target starts; a true drift produces a much tighter
-    # cluster (higher inlier ratio) than the unscaled fit.
-    best: Optional[Tuple[float, float, int, float]] = None  # (scale, offset, inliers, ratio)
-    for scale in (1.0, *_FRAMERATE_SCALES):
-        scaled = [t * scale for t in target_starts]
-        cand_offset, cand_inliers, cand_supported = _dominant_delta(scaled, reference_starts, max_delta)
-        if not cand_inliers:
-            continue
-        considered = sum(
-            1
-            for t in scaled
-            if reference_starts[0] - max_delta <= t <= reference_starts[-1] + max_delta
-        )
-        ratio = cand_supported / max(1, min(considered, 400))
-        if best is None or (ratio, cand_supported) > (best[3], best[2]):
-            best = (scale, cand_offset, cand_supported, ratio)
-
-    if best is None:
-        return result
-
-    scale, scaled_offset, inlier_count, inlier_ratio = best
-
-    # Keep the rigid fit when scaling does not materially improve support.
-    if scale == 1.0:
-        # Do not overwrite the decoy-corrected confidence with the raw inlier
-        # ratio: for dense/regular tracks the raw ratio is inflated and the
-        # ambiguity guard above is the trustworthy signal.
-        result["confidence"] = round(max(0.0, min(1.0, confidence)), 2)
-        result["offset"] = round(offset, 3)
-        return result
-    if inlier_count < 8 or inlier_ratio < max(0.35, confidence):
-        return result
-
-    # Refit precisely on the matched pairs using the ORIGINAL cue timeline, so
-    # the returned model is directly applicable to the client-side cues.
-    def _pair_samples(scale_value: float, base_offset: float, tolerance: float) -> List[Tuple[float, float]]:
-        pairs: List[Tuple[float, float]] = []
-        last_idx = -1
-        for t in target_starts:
-            expected = t * scale_value + base_offset
-            lo = bisect.bisect_left(reference_starts, expected - tolerance)
-            hi = bisect.bisect_left(reference_starts, expected + tolerance)
-            best_i = None
-            best_d = tolerance
-            for idx in range(max(lo, last_idx + 1), hi):
-                d = abs(reference_starts[idx] - expected)
-                if d < best_d:
-                    best_i = idx
-                    best_d = d
-            if best_i is not None:
-                pairs.append((t, reference_starts[best_i]))
-                last_idx = best_i
-        return pairs
-
-    gap_estimate = 3.0
-    if len(target_starts) > 1:
-        gaps = [b - a for a, b in zip(target_starts, target_starts[1:]) if 0.2 < (b - a) < 12.0]
-        if gaps:
-            gap_estimate = statistics.median(gaps)
-    tolerance = max(1.0, min(4.0, gap_estimate * 0.6))
-
-    from core.subtitle_sync.drift import DriftModel
-
-    pairs = _pair_samples(scale, scaled_offset, tolerance)
-    fitted = None
-    for _ in range(3):
-        if len(pairs) < 6:
-            break
-        fitted = DriftModel.fit_drift([p[0] for p in pairs], [p[1] for p in pairs])
-        if fitted.get("model") != "linear":
-            break
-        a, b = fitted["params"]
-        # Trim gross outliers (usually cues missing from one of the tracks)
-        # and re-pair using the newly fitted model.
-        trimmed = [
-            (t, r) for t, r in pairs
-            if abs((t + a * t + b) - r) <= 1.5
-        ]
-        if len(trimmed) < 6 or len(trimmed) == len(pairs):
-            break
-        pairs = _pair_samples(1.0 + a, b, tolerance)
-        fitted = DriftModel.fit_drift([p[0] for p in pairs], [p[1] for p in pairs])
-
-    if not fitted or len(pairs) < 6 or (pairs[-1][0] - pairs[0][0]) < 45.0:
-        return result
-
-    slope = fitted["params"][0] if fitted.get("params") else 0.0
-    rmse = fitted.get("rmse", 1.0)
-    if fitted.get("model") == "linear" and abs(slope) > 0.0004 and rmse <= 0.75:
-        result["drift_model"] = {
-            "model": "linear",
-            "params": [round(slope, 6), round(fitted["params"][1], 4)],
-            "rmse": rmse,
-            "scale": round(scale, 6),
+    if not target_cues or not reference_cues:
+        return {
+            "offset": 0.0,
+            "confidence": 0.0,
+            "drift_model": None,
+            "matched_cues": 0,
+            "piecewise": None,
         }
-        result["offset"] = round(fitted["params"][1], 3)
-        result["confidence"] = round(min(1.0, 0.8 + 0.2 * inlier_ratio), 2)
-        result["matched_cues"] = len(pairs)
 
-    return result
+    res = alass_align_intervals(
+        target_cues,
+        reference_cues,
+        max_delta=float(max_delta),
+        allow_framerate_drift=True,
+    )
+    offset = res["offset"]
+    if abs(offset) < 0.15 and res["drift_model"] is None:
+        offset = 0.0
+
+    return {
+        "offset": round(offset, 3),
+        "confidence": round(res["confidence"], 2),
+        "drift_model": res["drift_model"],
+        "matched_cues": res["matched_cues"],
+        "piecewise": res.get("piecewise"),
+    }
 
 
 async def extract_speech_intervals_from_stream(
@@ -632,7 +426,7 @@ async def extract_speech_intervals_from_stream(
         "-vn",
         "-map", "0:a:0?",
         "-ac", "2",
-        "-af", f"silencedetect=noise={noise_db}dB:d=0.35",
+        "-af", f"highpass=f=200,lowpass=f=3500,silencedetect=noise={noise_db}dB:d=0.35",
         "-f", "null",
         "-",
     ])
