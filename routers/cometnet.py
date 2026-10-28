@@ -151,8 +151,9 @@ class JoinPartyRequest(BaseModel):
 
 class PartyEventRequest(BaseModel):
     peer_id: str = Field(..., min_length=3, max_length=64)
-    action: str = Field(..., description="play | pause | seek | sync")
+    action: str = Field(..., description="play | pause | seek | sync | sub_sync")
     position: float = Field(..., ge=0)
+    subtitle_state: Optional[Dict[str, Any]] = Field(None, description="Optional {offset, drift_model, active_track_id}")
 
 
 @router.post("/party/create", dependencies=[Depends(verify_api_key)])
@@ -175,7 +176,7 @@ async def join_party_room(code: str, req: JoinPartyRequest) -> Dict[str, Any]:
 async def post_party_event(code: str, req: PartyEventRequest) -> Dict[str, Any]:
     manager = get_watch_party_manager()
     try:
-        event = manager.post_event(code, req.peer_id, req.action, req.position)
+        event = manager.post_event(code, req.peer_id, req.action, req.position, subtitle_state=req.subtitle_state)
     except WatchPartyError as e:
         raise HTTPException(status_code=409, detail=str(e))
     # Fan the transport event out to remote instances over the mesh.

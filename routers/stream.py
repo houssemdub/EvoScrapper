@@ -549,7 +549,8 @@ async def get_embedded_subtitles(
         )
 
     if fast is True:
-        # Fast extraction: only first 5 minutes, no caching, immediate response
+        # Fast preview: launch background full-track extraction while serving first 5 minutes immediately
+        start_sub_vtt_extraction(cache_key, target_source, sub_index)
         from core.transmuxer import extract_embedded_subtitle_vtt
         vtt = await extract_embedded_subtitle_vtt(target_source, sub_index, timeout=10.0, duration=300.0)
         return Response(

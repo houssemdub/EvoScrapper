@@ -164,6 +164,7 @@ class SubtitleSyncEngine:
         # A high-confidence container reference already pins the timeline
         # exactly. Analysing two minutes of swarm audio would add tens of
         # seconds of latency without changing the answer.
+        vad_drift_model = None
         reference_is_authoritative = reference_offset is not None and reference_conf >= 0.85
         if video_source and not reference_is_authoritative:
             try:
@@ -173,12 +174,31 @@ class SubtitleSyncEngine:
                 if effective_start <= 0.0 and clean_cues and clean_cues[0][0] > 60.0:
                     effective_start = max(0.0, clean_cues[0][0] - 10.0)
 
-                speech = await extract_speech_intervals_from_stream(
-                    video_source, duration=vad_duration, start_time=effective_start
-                )
+                span = (clean_cues[-1][0] - clean_cues[0][0]) if len(clean_cues) >= 2 else 0.0
+                multi_window = span >= 300.0 and not reference_cues
+                w2_start = round(clean_cues[0][0] + span * 0.5, 1) if multi_window else 0.0
+
+                if multi_window:
+                    tasks = [
+                        extract_speech_intervals_from_stream(video_source, duration=vad_duration, start_time=effective_start),
+                        extract_speech_intervals_from_stream(video_source, duration=min(60.0, vad_duration), start_time=w2_start),
+                    ]
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    speech = results[0] if not isinstance(results[0], Exception) else []
+                    speech2 = results[1] if multi_window and not isinstance(results[1], Exception) else []
+                else:
+                    speech = await extract_speech_intervals_from_stream(
+                        video_source, duration=vad_duration, start_time=effective_start
+                    )
+                    speech2 = []
+
+                vad_offset1 = None
+                vad_conf1 = 0.0
                 if speech:
                     offset, conf = compute_optimal_offset(target_cue_times, speech)
                     if conf > 0.2:
+                        vad_offset1 = offset
+                        vad_conf1 = conf
                         candidates.append(
                             SyncCandidate(
                                 offset=offset,
@@ -187,6 +207,32 @@ class SubtitleSyncEngine:
                                 metadata={"speech_intervals": len(speech)},
                             )
                         )
+
+                if speech2:
+                    cues_w2 = [(s, e) for s, e in target_cue_times if w2_start - 30.0 <= s <= w2_start + vad_duration + 30.0]
+                    if len(cues_w2) >= 3:
+                        offset2, conf2 = compute_optimal_offset(cues_w2, speech2)
+                        if conf2 > 0.25:
+                            candidates.append(
+                                SyncCandidate(
+                                    offset=offset2,
+                                    confidence=conf2,
+                                    method="audio_vad_w2",
+                                    metadata={"speech_intervals": len(speech2)},
+                                )
+                            )
+                            # Fit linear drift between window 1 and window 2 if confidence is solid
+                            if vad_offset1 is not None and vad_conf1 >= 0.35 and conf2 >= 0.35:
+                                dt = w2_start - effective_start
+                                if dt >= 180.0:
+                                    slope = (offset2 - vad_offset1) / dt
+                                    if 0.00015 <= abs(slope) <= 0.08:
+                                        intercept = vad_offset1 - slope * effective_start
+                                        vad_drift_model = {
+                                            "model": "linear",
+                                            "params": [round(slope, 6), round(intercept, 3)],
+                                            "rmse": 0.0,
+                                        }
             except Exception as e:
                 app_logger.warning(f"[SubtitleSyncEngine] VAD analysis failed: {e}")
 
@@ -236,6 +282,9 @@ class SubtitleSyncEngine:
             final_method = "embedded_ref_drift"
             drift_model = dict(reference_drift)
             drift_model["params"] = drift_params
+        elif vad_drift_model is not None:
+            drift_model = vad_drift_model
+            final_method = "audio_vad_drift"
 
         # 7. Adaptive Real-Time Controller instantiation
         adaptive_ctrl = AdaptiveSyncController(

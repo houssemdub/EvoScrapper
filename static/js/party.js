@@ -70,8 +70,9 @@ function startWatchPartyPolling() {
       const data = await res.json();
       if (data && Array.isArray(data.events)) {
         for (const evt of data.events) {
-          if (evt.sequence > lastPartySequence) {
-            lastPartySequence = evt.sequence;
+          const seq = evt.seq || evt.sequence || 0;
+          if (seq > lastPartySequence) {
+            lastPartySequence = seq;
             if (evt.peer_id !== myPartyPeerId) {
               applyWatchPartyEvent(evt);
             }
@@ -97,11 +98,38 @@ function applyWatchPartyEvent(evt) {
     if (Math.abs(video.currentTime - evt.position) > 1.5) video.currentTime = evt.position;
   }
 
+  // Sync host subtitle timing and active track to guests
+  if (evt.subtitle_state && window.state && window.state.subtitles) {
+    const sub = evt.subtitle_state;
+    if (typeof sub.offset === 'number' && typeof setSubtitleSync === 'function') {
+      if (Math.abs((window.state.subtitles.currentOffset || 0) - sub.offset) > 0.05) {
+        setSubtitleSync(sub.offset);
+        if (typeof showToast === 'function') {
+          showToast(`Host synced subtitles: ${sub.offset >= 0 ? '+' : ''}${sub.offset.toFixed(2)}s`, 'info');
+        }
+      }
+    }
+    if (sub.drift_model !== undefined) {
+      window.state.subtitles.driftModel = sub.drift_model;
+    }
+    if (sub.active_track_id && typeof applySubtitle === 'function' && Array.isArray(window.state.subtitles.availableSubs)) {
+      const match = window.state.subtitles.availableSubs.find(s => (s.id || s.download_url) === sub.active_track_id);
+      if (match && (!window.state.subtitles.activeTrack || (window.state.subtitles.activeTrack.id || window.state.subtitles.activeTrack.download_url) !== sub.active_track_id)) {
+        applySubtitle(match, false).catch(() => {});
+      }
+    }
+  }
+
   setTimeout(() => { isApplyingPartyEvent = false; }, 500);
 }
 
 function reportWatchPartyEvent(action, position) {
   if (!activePartyCode || isApplyingPartyEvent) return;
+  const subState = (window.state && window.state.subtitles) ? {
+    offset: window.state.subtitles.currentOffset || 0.0,
+    drift_model: window.state.subtitles.driftModel || null,
+    active_track_id: (window.state.subtitles.activeTrack ? (window.state.subtitles.activeTrack.id || window.state.subtitles.activeTrack.download_url) : null),
+  } : null;
   fetch(`/api/v1/cometnet/party/${encodeURIComponent(activePartyCode)}/event`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -109,6 +137,7 @@ function reportWatchPartyEvent(action, position) {
       peer_id: myPartyPeerId,
       action: action,
       position: position || 0,
+      subtitle_state: subState,
     }),
   }).catch(() => {});
 }

@@ -44,7 +44,15 @@
 - **Native VLC Launcher**: Seamless one-click desktop streaming directly to VLC media player with tracked child process PID lifecycle management.
 
 ### 📝 4. Precision Subtitle Engine ("EvoSubs")
+- **VLC-Grade Timeline Synchronization**: Subtitles share the container audio clock with zero drift. An idempotent ~16ms `requestAnimationFrame` loop updates cues per-frame (replaces 250ms `ontimeupdate` lag) with DOM layout-thrashing prevention (`_lastHtml`).
+- **Anchor-Relative Clock Math**: `getPlayerCurrentTime()` computes media progress against `anchorTime + (video.currentTime - anchorStreamStartTime)` across transmux attach and seeking boundaries, eliminating segment re-zeroing desyncs.
+- **Native `<track>` Rendering & Smart Overlay Fallback**: In-sync external tracks render natively on video PTS via HTML5 `VTTCue` / `video.addTextTrack()`, seamlessly handing off to the 60fps DOM overlay whenever manual nudges, drift models, or secondary learning subtitles are active.
 - **Multi-Modal Subtitle Sync Engine v2**: Multi-signal temporal alignment fusing Audio Voice Activity Detection (FFmpeg silencedetect), container-embedded reference tracks, multi-source external timing consensus, and forced subtitle / sign filtering.
+- **Multi-Window VAD Drift Detection**: Parallel VAD speech extraction across onset and mid-film windows (`asyncio.gather`) detects and models linear framerate drift ($\Delta o / \Delta t$) even when no container reference track exists.
+- **X-TIMESTAMP-MAP & WebVTT Preservations**: Emits 90kHz MPEGTS timestamp alignment headers (`X-TIMESTAMP-MAP=MPEGTS:{pts},LOCAL:00:00:00.000`) and drops pre-timeline cues rather than zero-collapsing timestamps during SRT-to-VTT conversion.
+- **ASS/SSA Style Markup Preservation**: Translates ASS formatting overrides (`{\b1}`, `{\i1}`, `{\u1}`) into HTML tags (`<b>`, `<i>`, `<u>`) while safely filtering malicious markup.
+- **Watch-Together Subtitle State Sync**: Full synchronization of `{offset, drift_model, active_track_id}` across watch party members over CometNet gossip.
+- **Automated PGS Bitmap Canvas Routing**: Emits `NOTE Codec: hdmv_pgs` so Blu-ray PGS streams automatically render via `pgs-decoder.js` on Canvas.
 - **Dominant-Cluster Reference Alignment**: Reference tracks are matched by all-pairs start-delta voting across ±120s, a densest-cluster median, and an ambiguity guard that rejects dense/regular cue grids where many offsets look plausible.
 - **Self-Reference Guard**: A reference that matches the active subtitles (≥85% of cue starts within 0.15s) is ignored in both backend and player, so alignment falls back to audio VAD instead of reporting a misleading `0s / 100%` match.
 - **Speech-Pattern VAD**: Zero-normalised cross-correlation over a coarse-to-fine ±180s search rejects flat or uninformative speech and snaps corrections below 0.6s to zero, preventing random jumps on silent or cold-swarm streams.

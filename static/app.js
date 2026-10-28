@@ -81,6 +81,9 @@ const state = {
     map: {},
   },
   subtitles: {
+    _rafId: null,
+    continuousSync: false,
+    _lastSeekSyncTime: 0,
     activeTrack: null,
     activeSubName: 'Auto',
     activeLang: 'en',
@@ -3320,6 +3323,7 @@ function loadSavedSubtitleSync(track) {
     return {
       offset: Number.isFinite(parsed.offset) ? parsed.offset : 0,
       driftA: Number.isFinite(parsed.driftA) ? parsed.driftA : 0,
+      driftModel: (parsed.driftModel && typeof parsed.driftModel === 'object') ? parsed.driftModel : null,
     };
   } catch (_) {
     return null;
@@ -3336,12 +3340,55 @@ function saveCurrentSubtitleSync() {
     const driftA = (model && model.model === 'linear' && Array.isArray(model.params))
       ? (Number(model.params[0]) || 0)
       : 0;
-    localStorage.setItem(key, JSON.stringify({
+    const payload = {
       offset: Math.round((state.subtitles.currentOffset || 0) * 1000) / 1000,
       driftA: Math.round(driftA * 1000000) / 1000000,
       savedAt: Date.now(),
-    }));
+    };
+    if (model && typeof model === 'object' && Array.isArray(model.params)) {
+      payload.driftModel = {
+        model: model.model,
+        params: model.params.map((p) => Number(p) || 0),
+      };
+    }
+    localStorage.setItem(key, JSON.stringify(payload));
   } catch (_) {}
+}
+
+function getPlayerCurrentTime() {
+  const video = document.getElementById('evo-video-player');
+  if (!video) return 0;
+  const active = state.discover.activeStream;
+  if (!active || !active.useTransmux) return video.currentTime || 0;
+  const anchorTime = (active.anchorTime !== undefined && active.anchorTime !== null)
+    ? active.anchorTime
+    : (active.playbackOffset || 0);
+  const anchorStreamStart = (active.anchorStreamStartTime !== undefined && active.anchorStreamStartTime !== null)
+    ? active.anchorStreamStartTime
+    : (video.startTime || 0);
+  const mediaElapsed = Math.max(0, (video.currentTime || 0) - anchorStreamStart);
+  return anchorTime + mediaElapsed;
+}
+
+function startSubtitleOverlayLoop() {
+  if (state.subtitles._rafId) return;
+  const loop = () => {
+    const video = document.getElementById('evo-video-player');
+    if (!video || video.paused || video.ended || document.hidden) {
+      stopSubtitleOverlayLoop();
+      return;
+    }
+    updateSubtitleOverlay();
+    state.subtitles._rafId = requestAnimationFrame(loop);
+  };
+  state.subtitles._rafId = requestAnimationFrame(loop);
+}
+
+function stopSubtitleOverlayLoop() {
+  if (state.subtitles._rafId) {
+    cancelAnimationFrame(state.subtitles._rafId);
+    state.subtitles._rafId = null;
+  }
 }
 
 function setSubtitleDrift(driftA) {
@@ -3369,19 +3416,42 @@ function applySubtitleSyncResult(offsetSeconds, driftModel) {
   setSubtitleSync(baseOffset);
 }
 
+function sanitizeSubtitleCueMarkup(text) {
+  if (!text) return '';
+  let s = String(text).replace(/\{[^}]*\}/g, '');
+  s = s.replace(/<\/?(script|iframe|object|embed|style|link|meta)[\s\S]*?>/gi, '');
+  s = s.replace(/\bon\w+\s*=/gi, '');
+  return s.trim();
+}
+
 function updateSubtitleOverlay() {
   const video = document.getElementById('evo-video-player');
   const cueBox = document.getElementById('player-active-cue');
   const secBox = document.getElementById('player-secondary-cue');
   if (!video) return;
 
-  const active = state.discover.activeStream;
-  const cur = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+  // When native text track is active and in exact sync, let browser render on video PTS
+  if (video._nativeSubTrack) {
+    if ((state.subtitles.currentOffset || 0) === 0 && !state.subtitles.driftModel) {
+      if (cueBox && !cueBox.classList.contains('hidden')) {
+        cueBox.classList.add('hidden');
+        cueBox._lastHtml = '';
+      }
+    } else {
+      try { video._nativeSubTrack.mode = 'disabled'; } catch (_) {}
+      video._nativeSubTrack = null;
+    }
+  }
+
+  const cur = getPlayerCurrentTime();
 
   // 1. Primary Subtitles
   const rawCues = state.subtitles.rawCues;
-  if (!rawCues || rawCues.length === 0 || !cueBox) {
-    if (cueBox) cueBox.classList.add('hidden');
+  if (!rawCues || rawCues.length === 0 || !cueBox || video._nativeSubTrack) {
+    if (cueBox && !cueBox.classList.contains('hidden')) {
+      cueBox.classList.add('hidden');
+      cueBox._lastHtml = '';
+    }
   } else {
     const activeCues = rawCues.filter((c) => {
       const win = subtitleCueWindow(c);
@@ -3391,10 +3461,10 @@ function updateSubtitleOverlay() {
       const uniqueLines = [];
       const seen = new Set();
       for (const c of activeCues) {
-        const clean = (c.text || '').replace(/\{[^}]*\}/g, '').replace(/<[^>]*>/g, '').trim();
+        const clean = sanitizeSubtitleCueMarkup(c.text);
         const lines = clean.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
         for (const line of lines) {
-          const normKey = line.replace(/^[-\u2013\u2014\u2022\s]+/, '').toLowerCase().trim();
+          const normKey = line.replace(/<[^>]*>/g, '').replace(/^[-\u2013\u2014\u2022\s]+/, '').toLowerCase().trim();
           if (!normKey) continue;
           if (!seen.has(normKey)) {
             seen.add(normKey);
@@ -3403,35 +3473,58 @@ function updateSubtitleOverlay() {
         }
       }
       if (uniqueLines.length > 0) {
-        cueBox.innerHTML = uniqueLines.join('<br>');
+        const html = uniqueLines.join('<br>');
+        if (cueBox._lastHtml !== html) {
+          cueBox.innerHTML = html;
+          cueBox._lastHtml = html;
+        }
         cueBox.classList.remove('hidden');
       } else {
-        cueBox.classList.add('hidden');
+        if (!cueBox.classList.contains('hidden')) {
+          cueBox.classList.add('hidden');
+          cueBox._lastHtml = '';
+        }
       }
     } else {
-      cueBox.classList.add('hidden');
+      if (!cueBox.classList.contains('hidden')) {
+        cueBox.classList.add('hidden');
+        cueBox._lastHtml = '';
+      }
     }
   }
 
   // 2. Dual / Secondary Subtitles (Language Learning Top Position)
   const secCues = state.subtitles.secondaryCues;
   if (!secCues || secCues.length === 0 || !secBox) {
-    if (secBox) secBox.classList.add('hidden');
+    if (secBox && !secBox.classList.contains('hidden')) {
+      secBox.classList.add('hidden');
+      secBox._lastHtml = '';
+    }
   } else {
     const activeSec = secCues.filter((c) => {
       const win = subtitleCueWindow(c);
       return cur >= win.start && cur <= win.end;
     });
     if (activeSec.length > 0) {
-      const secLines = activeSec.map((c) => (c.text || '').replace(/\{[^}]*\}/g, '').replace(/<[^>]*>/g, '').trim()).filter(Boolean);
+      const secLines = activeSec.map((c) => sanitizeSubtitleCueMarkup(c.text)).filter(Boolean);
       if (secLines.length > 0) {
-        secBox.innerHTML = secLines.join('<br>');
+        const html = secLines.join('<br>');
+        if (secBox._lastHtml !== html) {
+          secBox.innerHTML = html;
+          secBox._lastHtml = html;
+        }
         secBox.classList.remove('hidden');
       } else {
-        secBox.classList.add('hidden');
+        if (!secBox.classList.contains('hidden')) {
+          secBox.classList.add('hidden');
+          secBox._lastHtml = '';
+        }
       }
     } else {
-      secBox.classList.add('hidden');
+      if (!secBox.classList.contains('hidden')) {
+        secBox.classList.add('hidden');
+        secBox._lastHtml = '';
+      }
     }
   }
 }
@@ -3456,6 +3549,52 @@ function renderCuesToVideo(rawCues, offsetSeconds) {
     console.warn('[EvoPlayer] Subtitle track cleanup warning:', err);
   }
 
+  // Native track rendering when in zero offset without drift/secondary cues (exact VLC media-clock sync)
+  const useNativeTrack = Boolean(
+    (offsetSeconds || 0) === 0 &&
+    !state.subtitles.driftModel &&
+    (!state.subtitles.secondaryCues || state.subtitles.secondaryCues.length === 0) &&
+    typeof VTTCue !== 'undefined' &&
+    typeof video.addTextTrack === 'function' &&
+    rawCues && rawCues.length > 0 && rawCues.length < 5000
+  );
+
+  if (useNativeTrack) {
+    try {
+      const nativeTrack = video.addTextTrack('subtitles', 'EvoSubtitles', state.subtitles.activeLang || 'en');
+      nativeTrack.mode = 'showing';
+      for (const c of rawCues) {
+        if (c.end > c.start) {
+          const clean = (c.text || '').replace(/\{[^}]*\}/g, '').replace(/<[^>]*>/g, '').trim();
+          if (clean) {
+            nativeTrack.addCue(new VTTCue(c.start, c.end, clean));
+          }
+        }
+      }
+      video._nativeSubTrack = nativeTrack;
+    } catch (_) {
+      video._nativeSubTrack = null;
+    }
+  } else {
+    video._nativeSubTrack = null;
+  }
+
+  // Bind rAF loop listeners once per video element
+  if (!video._subRafBound) {
+    video._subRafBound = true;
+    video.addEventListener('play', startSubtitleOverlayLoop);
+    video.addEventListener('playing', startSubtitleOverlayLoop);
+    video.addEventListener('pause', stopSubtitleOverlayLoop);
+    video.addEventListener('ended', stopSubtitleOverlayLoop);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && video && !video.paused && !video.ended) {
+        startSubtitleOverlayLoop();
+      } else {
+        stopSubtitleOverlayLoop();
+      }
+    });
+  }
+
   // Bind direct event handlers for instantaneous overlay updates & timeline tracking
   video.ontimeupdate = () => {
     updatePlayerTimeline();
@@ -3470,8 +3609,11 @@ function renderCuesToVideo(rawCues, offsetSeconds) {
     updateSubtitleOverlay();
   };
 
-  // Force immediate update
+  // Force immediate update & start loop if already playing
   updateSubtitleOverlay();
+  if (!video.paused && !video.ended && !document.hidden) {
+    startSubtitleOverlayLoop();
+  }
 }
 
 function jumpToFirstCue() {
@@ -3497,7 +3639,7 @@ function jumpToNextCue() {
   const cues = state.subtitles.rawCues;
   const active = state.discover.activeStream;
   if (!video || !cues || cues.length === 0) return;
-  const cur = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+  const cur = getPlayerCurrentTime();
   const next = cues.find((c) => (c.start + subtitleOffsetAt(c.start)) > (cur + 0.6));
   if (next) {
     const target = Math.max(0, (next.start + subtitleOffsetAt(next.start)) - 0.2);
@@ -3516,7 +3658,7 @@ function jumpToPrevCue() {
   const cues = state.subtitles.rawCues;
   const active = state.discover.activeStream;
   if (!video || !cues || cues.length === 0) return;
-  const cur = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+  const cur = getPlayerCurrentTime();
   const prev = [...cues].reverse().find((c) => (c.end + subtitleOffsetAt(c.end)) < (cur - 0.6));
   if (prev) {
     const target = Math.max(0, (prev.start + subtitleOffsetAt(prev.start)) - 0.2);
@@ -3609,10 +3751,11 @@ function setSubtitleSync(seconds) {
   const sign = clamped > 0 ? '+' : '';
   const ms = Math.round(clamped * 1000);
   const text = `${sign}${ms}ms (${sign}${clamped.toFixed(2)}s)`;
+  const isQuad = Boolean(state.subtitles.driftModel && state.subtitles.driftModel.model === 'quadratic');
   const driftSlope = (state.subtitles.driftModel && state.subtitles.driftModel.model === 'linear')
     ? (state.subtitles.driftModel.params?.[0] || 0)
     : 0;
-  const driftSuffix = driftSlope ? ` · drift ${(driftSlope * 100).toFixed(1)}%` : '';
+  const driftSuffix = isQuad ? ' · quad drift' : (driftSlope ? ` · drift ${(driftSlope * 100).toFixed(1)}%` : '');
 
   if (badge) badge.innerText = `${sign}${clamped.toFixed(1)}s${driftSuffix}`;
   if (slider) slider.value = clamped;
@@ -3700,8 +3843,7 @@ async function triggerAutoSyncSubtitles() {
       if (embeddedSub) refSubIdx = embeddedSub.sub_index ?? 0;
     }
 
-    const videoEl = document.getElementById('evo-video-player');
-    const curPlayTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (videoEl ? (videoEl.currentTime || 0) : 0);
+    const curPlayTime = getPlayerCurrentTime();
 
     const payload = {
       info_hash: active.infoHash,
@@ -3791,7 +3933,7 @@ function syncSubtitleToCurrentTime() {
     return;
   }
 
-  const curPlayTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+  const curPlayTime = getPlayerCurrentTime();
 
   let bestCue = null;
   let minDiff = Infinity;
@@ -3864,7 +4006,7 @@ function disableSubtitles() {
       const infoHash = active ? active.infoHash : '';
       const fileIdx = (active && active.fileIdx !== undefined) ? active.fileIdx : 0;
       // Absolute media position (burn-in streams may have been seeked).
-      const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+      const curTime = getPlayerCurrentTime();
       const wasPaused = video.paused;
       const epParam = (active && active.episode !== undefined && active.episode !== null) ? `&episode=${active.episode}` : '';
       const sParam = (active && active.season !== undefined && active.season !== null) ? `&season=${active.season}` : '';
@@ -3874,6 +4016,8 @@ function disableSubtitles() {
         active.useTransmux = false;
         active.transcodeVideo = false;
         active.playbackOffset = 0;
+    active.anchorTime = 0;
+    active.anchorStreamStartTime = 0;
       }
       video.src = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
       video.load();
@@ -4041,7 +4185,7 @@ async function applySubtitle(subItem, isAuto = false) {
       if (pgsEngine === 'server_burnin') {
         // Mode 1: Server-Side Real-Time Burn-In (FFmpeg overlay)
         if (window.evoPgsDecoder) window.evoPgsDecoder.detach();
-        const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video ? (video.currentTime || 0) : 0);
+        const curTime = getPlayerCurrentTime();
         const wasPaused = video ? video.paused : false;
         const audioTrack = active ? (active.audioTrack || 0) : 0;
         const audioParam = `&audio_track=${audioTrack}&audio_boost=1.25`;
@@ -4066,7 +4210,7 @@ async function applySubtitle(subItem, isAuto = false) {
         // Mode 2: Client-Side Canvas Overlay (Zero video transcoding)
         if (active) active.burnSubIdx = null;
         if (video && video.src && video.src.includes('burn_sub_idx=')) {
-          const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+          const curTime = getPlayerCurrentTime();
           const wasPaused = video.paused;
           const audioTrack = active ? (active.audioTrack || 0) : 0;
           let cleanUrl;
@@ -4077,12 +4221,18 @@ async function applySubtitle(subItem, isAuto = false) {
             if (active) {
               active.useTransmux = true;
               active.playbackOffset = cleanStart;
+          active.anchorTime = cleanStart;
+          active.anchorStreamStartTime = 0;
+              active.anchorTime = cleanStart;
+              active.anchorStreamStartTime = 0;
             }
           } else {
             cleanUrl = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
             if (active) {
               active.useTransmux = false;
               active.playbackOffset = 0;
+    active.anchorTime = 0;
+    active.anchorStreamStartTime = 0;
             }
           }
           video.src = cleanUrl;
@@ -4101,8 +4251,7 @@ async function applySubtitle(subItem, isAuto = false) {
           if (window.evoPgsDecoder) {
             const cues = window.evoPgsDecoder.parse(arrayBuf);
             window.evoPgsDecoder.attach(video, canvas, () => {
-              const curAct = state.discover.activeStream;
-              return (curAct && curAct.useTransmux ? (curAct.playbackOffset || 0) : 0) + (video ? (video.currentTime || 0) : 0);
+              return getPlayerCurrentTime();
             });
             if (badge) {
               badge.innerText = `PGS (${cues.length} cues)`;
@@ -4126,7 +4275,7 @@ async function applySubtitle(subItem, isAuto = false) {
       if (active) active.burnSubIdx = null;
       const infoHash = active ? active.infoHash : '';
       const fileIdx = (active ? (active.fileIdx ?? active.playingFileIdx ?? 0) : 0);
-      const curTime = (active && active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+      const curTime = getPlayerCurrentTime();
       const wasPaused = video.paused;
       const epParam = (active && active.episode !== undefined && active.episode !== null) ? `&episode=${active.episode}` : '';
       const sParam = (active && active.season !== undefined && active.season !== null) ? `&season=${active.season}` : '';
@@ -4141,12 +4290,16 @@ async function applySubtitle(subItem, isAuto = false) {
         if (active) {
           active.useTransmux = true;
           active.playbackOffset = cleanStart;
+          active.anchorTime = cleanStart;
+          active.anchorStreamStartTime = 0;
         }
       } else {
         cleanUrl = `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${fileIdx}${epParam}${sParam}${magParam}`;
         if (active) {
           active.useTransmux = false;
           active.playbackOffset = 0;
+    active.anchorTime = 0;
+    active.anchorStreamStartTime = 0;
         }
       }
       video.src = cleanUrl;
@@ -4275,9 +4428,11 @@ async function applySubtitle(subItem, isAuto = false) {
     // earlier adjustment is restored just like online subtitles.
     const savedSync = loadSavedSubtitleSync(subItem);
     const restoredOffset = savedSync && Number.isFinite(savedSync.offset) ? savedSync.offset : 0.0;
-    const restoredDrift = savedSync && Number.isFinite(savedSync.driftA) && Math.abs(savedSync.driftA) > 0.00005
-      ? { model: 'linear', params: [savedSync.driftA, 0] }
-      : null;
+    const restoredDrift = (savedSync && savedSync.driftModel && typeof savedSync.driftModel === 'object')
+      ? savedSync.driftModel
+      : (savedSync && Number.isFinite(savedSync.driftA) && Math.abs(savedSync.driftA) > 0.00005
+          ? { model: 'linear', params: [savedSync.driftA, 0] }
+          : null);
     state.subtitles.driftModel = restoredDrift;
     renderCuesToVideo(cues, restoredOffset);
     setSubtitleSync(restoredOffset);
@@ -5792,7 +5947,7 @@ function initPlayerTimelineControls() {
 
       const active = state.discover.activeStream;
       if (active && active.totalDuration > 30) {
-        const cur = (active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+        const cur = getPlayerCurrentTime();
         if (Math.abs(cur - active.totalDuration) > 15) {
           if (!window._evoAutoReconnectFailures) window._evoAutoReconnectFailures = 0;
           if (window._evoAutoReconnectFailures < 3) {
@@ -6117,7 +6272,7 @@ function updatePlayerTimeline() {
     active.totalDuration = video.duration;
   }
 
-  const currentTotalTime = (active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+  const currentTotalTime = getPlayerCurrentTime();
 
   // Robust totalDuration fallback resolution (unfreezing 0:00 / 0:00)
   let totalDuration = (active.totalDuration && isFinite(active.totalDuration) && active.totalDuration > 0)
@@ -6245,7 +6400,7 @@ function skipPlayerSeconds(delta) {
   const video = document.getElementById('evo-video-player');
   const active = state.discover.activeStream;
   if (!video || !active) return;
-  const currentTotal = (active.playbackOffset || 0) + (video.currentTime || 0);
+  const currentTotal = getPlayerCurrentTime();
   seekPlayer(currentTotal + delta);
   if (delta > 0) {
     showPlayerOsd('<i class="fa-solid fa-forward"></i>', `+${delta}s`);
@@ -6450,8 +6605,12 @@ function selectAudioTrack(trackIdx) {
     const modeBadge = document.getElementById('player-hud-mode-label');
     if (modeBadge) modeBadge.innerText = 'Direct';
     updateAudioHudButtons();
-    const curTime = (active.playbackOffset || 0) + (video ? video.currentTime : 0);
+    const curTime = getPlayerCurrentTime();
     active.playbackOffset = 0;
+    active.anchorTime = 0;
+    active.anchorStreamStartTime = 0;
+    active.anchorTime = 0;
+    active.anchorStreamStartTime = 0;
     const epParams = (active.season !== null && active.episode !== null && active.season !== undefined && active.episode !== undefined)
       ? `&season=${active.season}&episode=${active.episode}`
       : '';
@@ -6491,7 +6650,7 @@ function selectAudioTrack(trackIdx) {
 
   renderAudioMenu(active.audioTracks);
 
-  const curTime = (active.playbackOffset || 0) + (video ? video.currentTime : 0);
+  const curTime = getPlayerCurrentTime();
   seekPlayer(curTime);
   showToast(`Switched to: ${track ? track.title : `Track ${trackIdx + 1}`}`, 'info');
 }
@@ -8453,6 +8612,8 @@ function seekTransmuxOffset(clamped) {
     : snapTransmuxSeekTime(active, clamped);
 
   active.playbackOffset = effectiveSeek;
+  active.anchorTime = effectiveSeek;
+  active.anchorStreamStartTime = 0;
 
   const burnSubParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
   const transcodeParam = (active.transcodeVideo || hasBurnSub) ? '&transcode_video=true' : '';
@@ -8497,6 +8658,44 @@ function fetchKeyframes(infoHash, fileIdx, magnet) {
     .catch(() => {});
 }
 
+function triggerSeekMicroSync(seekTime) {
+  const active = state.discover.activeStream;
+  const cues = state.subtitles.rawCues;
+  if (!active || !active.infoHash || !cues || cues.length === 0) return;
+  if (state.subtitles._seekSyncDebounce) clearTimeout(state.subtitles._seekSyncDebounce);
+  state.subtitles._seekSyncDebounce = setTimeout(async () => {
+    try {
+      state.subtitles._lastSeekSyncTime = seekTime;
+      const fileIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null) ? active.playingFileIdx : (active.fileIdx ?? 0);
+      const payloadCues = buildCuePayload(cues);
+      const res = await fetch('/api/v1/stream/subtitles/auto-sync-v2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          info_hash: active.infoHash,
+          file_idx: fileIdx,
+          magnet: active.magnet || null,
+          season: (active.season !== undefined && active.season !== null) ? active.season : null,
+          episode: (active.episode !== undefined && active.episode !== null) ? active.episode : null,
+          cues: payloadCues,
+          start_time: Math.max(0, seekTime),
+          max_duration_seconds: 30.0,
+        }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.success && data.confidence >= 0.70) {
+        const offset = Number(data.offset);
+        if (Number.isFinite(offset) && Math.abs(offset - (state.subtitles.currentOffset || 0)) <= 2.0) {
+          setSubtitleSync(offset);
+          saveCurrentSubtitleSync();
+          showToast(`Micro-sync re-aligned (${offset >= 0 ? '+' : ''}${offset.toFixed(2)}s)`, 'info');
+        }
+      }
+    } catch (_) {}
+  }, 1200);
+}
+
 function seekPlayer(targetSeconds, immediate = false) {
   const video = document.getElementById('evo-video-player');
   const active = state.discover.activeStream;
@@ -8504,6 +8703,12 @@ function seekPlayer(targetSeconds, immediate = false) {
 
   const maxDuration = (active.totalDuration > 0) ? active.totalDuration : 7200;
   const clamped = Math.max(0, Math.min(maxDuration - 1, targetSeconds));
+
+  if (state.subtitles.continuousSync && state.subtitles.activeTrack && !state.subtitles.activeTrack.is_embedded) {
+    if (Math.abs(clamped - (state.subtitles._lastSeekSyncTime || 0)) > 120) {
+      triggerSeekMicroSync(clamped);
+    }
+  }
 
   if (!active.useTransmux) {
     video.currentTime = clamped;
@@ -8520,6 +8725,8 @@ function seekPlayer(targetSeconds, immediate = false) {
 
   // Update UI timeline immediately for smooth dragging feedback
   active.playbackOffset = targetTime;
+  active.anchorTime = targetTime;
+  active.anchorStreamStartTime = 0;
   updatePlayerTimeline();
 
   if (_seekDebounceTimer) clearTimeout(_seekDebounceTimer);
@@ -9180,6 +9387,8 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
       // Burn-in transcodes honour exact seeks; copy mode snaps to a keyframe.
       const snappedSeek = hasBurnSub ? resumeTime : snapTransmuxSeekTime(active, resumeTime);
       active.playbackOffset = snappedSeek;
+      active.anchorTime = snappedSeek;
+      active.anchorStreamStartTime = 0;
       const mBadge = document.getElementById('player-hud-mode-label');
       if (mBadge) mBadge.innerText = hasBurnSub ? 'PGS Burn-In' : 'Transmux';
       const burnParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
@@ -9194,11 +9403,13 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
       active.transcodeVideo = true;
       const mBadge = document.getElementById('player-hud-mode-label');
       if (mBadge) mBadge.innerText = 'Transcode';
-      const curPlayTime = (active.playbackOffset || 0) + (video.currentTime || 0);
+      const curPlayTime = getPlayerCurrentTime();
       // The new transcode stream is seeked to curPlayTime and its timestamps
       // restart at zero, so playbackOffset must be updated or every subtitle
       // (and the timeline) shifts by the elapsed video time.
       active.playbackOffset = curPlayTime;
+      active.anchorTime = curPlayTime;
+      active.anchorStreamStartTime = 0;
       const startParam = curPlayTime > 0 ? `&start_time=${curPlayTime.toFixed(2)}` : '';
       const hasBurnSub = (active.burnSubIdx !== null && active.burnSubIdx !== undefined);
       const burnParam = hasBurnSub ? `&burn_sub_idx=${active.burnSubIdx}` : '';
@@ -9250,7 +9461,7 @@ function toggleStreamPipelineMode() {
   const video = document.getElementById('evo-video-player');
   if (!active || !video) return;
 
-  const curTime = (active.useTransmux ? (active.playbackOffset || 0) : 0) + (video.currentTime || 0);
+  const curTime = getPlayerCurrentTime();
 
   // Cycle pipeline modes: Direct -> Transmux (Lossless AAC) -> Transcode (H.264 ultra-compatible) -> Direct
   if (!active.useTransmux) {
@@ -9281,6 +9492,8 @@ function toggleStreamPipelineMode() {
       ? snapTransmuxSeekTime(active, curTime)
       : curTime;
     active.playbackOffset = startTime;
+    active.anchorTime = startTime;
+    active.anchorStreamStartTime = 0;
     const tcParam = active.transcodeVideo ? '&transcode_video=true' : '';
     if (modeBadge) modeBadge.innerText = active.transcodeVideo ? 'Transcode' : 'Transmux';
     showToast(
@@ -9297,6 +9510,8 @@ function toggleStreamPipelineMode() {
     video.play().catch(() => {});
   } else {
     active.playbackOffset = 0;
+    active.anchorTime = 0;
+    active.anchorStreamStartTime = 0;
     if (modeBadge) modeBadge.innerText = 'Direct';
     showToast('Switched to Direct Stream (Full Seek & Buffer)', 'info');
     const newUrl = `/api/v1/stream/play?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${epParams}${magnetParam}${durationParam}`;

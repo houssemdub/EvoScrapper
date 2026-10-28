@@ -1570,7 +1570,15 @@ def sanitize_webvtt_content(vtt_text: str) -> str:
         return "WEBVTT\n\nNOTE Empty subtitle track\n"
 
     lines = vtt_text.splitlines()
+    timestamp_map = None
+    for raw_line in lines[:10]:
+        if "X-TIMESTAMP-MAP=" in raw_line:
+            timestamp_map = raw_line.strip()
+            break
+
     output = ["WEBVTT\n"]
+    if timestamp_map:
+        output.append(f"{timestamp_map}\n")
     time_regex = re.compile(r"^\s*(?:(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3})\s*-->\s*(?:(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3})")
     drawing_regex = re.compile(r"^m\s+[-0-9\s]+[lbcsp]", re.IGNORECASE)
     drawing_pure = re.compile(r"^[m\s\-0-9lbcsp]+$", re.IGNORECASE)
@@ -1744,11 +1752,7 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
         if text.strip() and ("-->" in text or "WEBVTT" in text):
             return sanitize_webvtt_content(text)
         if "bitmap" in err_text or "pgs" in err_text:
-            return (
-                "WEBVTT\n\n"
-                "00:00:01.000 --> 00:00:08.000\n"
-                "[Bitmap PGS Subtitle: Image-based track cannot be rendered in HTML5 video. Please select a text subtitle (SRT) from the drawer or launch in VLC/MPV]\n"
-            )
+            return "WEBVTT\n\nNOTE Codec: hdmv_pgs (Bitmap PGS Subtitle)\n"
         return "WEBVTT\n\nNOTE Empty or unsupported embedded subtitle track\n"
     except Exception as e:
         return f"WEBVTT\n\nNOTE Extraction error: {str(e)}\n"

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### VLC Subtitle Pipeline Parity: Frame-Accurate Clock Synchronization & Rendering Engine
+
+#### Added
+- **rAF-Driven Cue Evaluation (`static/app.js`)**: Replaced 250ms `ontimeupdate` polling with a ~16ms `requestAnimationFrame` loop tied to `play`, `playing`, `pause`, `ended`, and `visibilitychange`. Implemented DOM layout thrashing protection via `_lastHtml` caching so frame-accurate updates consume negligible CPU.
+- **Anchor-Relative Clock Math (`static/app.js`)**: Centralized progress calculation in `getPlayerCurrentTime()`, evaluating against `anchorTime + (video.currentTime - anchorStreamStartTime)` across transmux attach and seeking boundaries to eliminate segment re-zeroing desyncs.
+- **Drift-Aware Nudge & Polynomial Persistence (`static/app.js`)**: Full serialization and restoration of both linear and quadratic `driftModel` configurations in `localStorage`, retaining custom slopes and curvature during manual offset nudges.
+- **Native `<track>` Rendering with Smart Overlay Fallback (`static/app.js`)**: In-sync external subtitles (0ms offset, zero drift) render natively via HTML5 `VTTCue` / `video.addTextTrack()`, synchronizing directly against browser video PTS (VLC native behavior) and automatically degrading to the 60fps DOM overlay during manual nudges or secondary subtitle display.
+- **Seek-Triggered Micro-Realignment (`static/app.js`)**: Optional `continuousSync` mode that runs a debounced 30s VAD re-alignment on seeks >120s to ensure persistent accuracy throughout long films.
+- **Multi-Window VAD Speech Anchoring (`core/subtitle_sync/engine.py`)**: Parallel audio extraction across dialogue onset and mid-film windows (`asyncio.gather`) estimating linear framerate drift ($\Delta o / \Delta t$) even when no container reference track exists.
+- **X-TIMESTAMP-MAP & WebVTT Preservations (`core/transmuxer.py`, `routers/subtitles.py`)**: WebVTT sanitization preserves upstream `X-TIMESTAMP-MAP` headers; `proxy_subtitle_vtt` generates 90kHz MPEGTS map headers (`X-TIMESTAMP-MAP=MPEGTS:{pts},LOCAL:00:00:00.000`), and SRT-to-VTT conversion omits pre-media cues instead of zero-collapsing timestamps.
+- **ASS/SSA Style Markup Preservation (`routers/subtitles.py`, `static/app.js`)**: `ass_to_webvtt` translates ASS inline tags (`{\b1}`, `{\i1}`, `{\u1}`) to standard HTML tags (`<b>`, `<i>`, `<u>`) before stripping non-rendering overrides, while `sanitizeSubtitleCueMarkup` safely renders styled captions in the overlay.
+- **Watch-Party Subtitle State Gossip (`core/watch_party.py`, `routers/cometnet.py`, `static/js/party.js`)**: Room events and snapshots include `subtitle_state: {offset, drift_model, active_track_id}`, allowing guests to automatically adopt host-applied sync and track selection over CometNet gossip.
+- **Automated PGS Bitmap Routing (`core/transmuxer.py`)**: Replaced legacy text fallback cue with `WEBVTT\n\nNOTE Codec: hdmv_pgs (Bitmap PGS Subtitle)\n`, enabling the web player to automatically engage client-side Canvas decoding via `pgs-decoder.js`.
+
+#### Tests
+- Added `tests/test_subtitle_clock_parity.py` (11 tests) verifying rAF loop contracts, anchor clock math, model persistence, background extraction triggers, `X-TIMESTAMP-MAP` retention, multi-window VAD, native `<track>` handoffs, watch party sync, ASS style translation, and PGS routing. Full subtitle suite verified at 75 passing tests.
+
 ### Subtitle Sync Engine v2: Multi-Modal Signal Fusion & Real-Time Adaptive Alignment
 
 #### Added

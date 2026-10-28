@@ -296,11 +296,14 @@ async def proxy_download(request: Request, url: str = Query(..., description="Up
         )
 
 
-def ass_to_webvtt(ass_text: str, offset_seconds: float = 0.0) -> str:
+def ass_to_webvtt(ass_text: str, offset_seconds: float = 0.0, timestamp_map: Optional[str] = None) -> str:
     """Converts Advanced SubStation Alpha (.ass / .ssa) anime subtitles to WebVTT."""
     text = ass_text.replace("\r\n", "\n").replace("\r", "\n")
     lines = text.split("\n")
-    out_lines = ["WEBVTT", ""]
+    out_lines = ["WEBVTT"]
+    if timestamp_map:
+        out_lines.append(timestamp_map.strip())
+    out_lines.append("")
 
     def parse_ass_time(t_str: str) -> float:
         parts = t_str.strip().split(":")
@@ -343,12 +346,19 @@ def ass_to_webvtt(ass_text: str, offset_seconds: float = 0.0) -> str:
                     continue
 
                 dialogue = parts[9]
-                # Strip ASS override tags {\pos(...) }, {\an8}, {\b1}, etc.
+                # Convert ASS inline styles to standard HTML/VTT formatting before stripping other tags
+                dialogue = re.sub(r"\{\\b1\}", "<b>", dialogue)
+                dialogue = re.sub(r"\{\\b0\}", "</b>", dialogue)
+                dialogue = re.sub(r"\{\\i1\}", "<i>", dialogue)
+                dialogue = re.sub(r"\{\\i0\}", "</i>", dialogue)
+                dialogue = re.sub(r"\{\\u1\}", "<u>", dialogue)
+                dialogue = re.sub(r"\{\\u0\}", "</u>", dialogue)
+                # Strip remaining ASS override tags {\pos(...) }, {\an8}, etc.
                 dialogue = re.sub(r"\{[^}]*\}", "", dialogue)
                 # Normalize line breaks and spaces
                 dialogue = re.sub(r"\\[nN]", "\n", dialogue)
                 dialogue = dialogue.replace(r"\h", " ")
-                dialogue = re.sub(r"<[^>]*>", "", dialogue).strip()
+                dialogue = dialogue.strip()
 
                 if dialogue:
                     out_lines.append(f"{format_vtt_time(start_sec)} --> {format_vtt_time(end_sec)}")
@@ -358,17 +368,17 @@ def ass_to_webvtt(ass_text: str, offset_seconds: float = 0.0) -> str:
     return "\n".join(out_lines) + "\n"
 
 
-def srt_to_webvtt(srt_text: str, offset_seconds: float = 0.0) -> str:
+def srt_to_webvtt(srt_text: str, offset_seconds: float = 0.0, timestamp_map: Optional[str] = None) -> str:
     """Converts SRT or raw WebVTT subtitle string to WebVTT format, applying optional time shift."""
     text = srt_text.replace("\r\n", "\n").replace("\r", "\n")
     lines = text.split("\n")
-    out_lines = ["WEBVTT", ""]
+    out_lines = ["WEBVTT"]
+    if timestamp_map:
+        out_lines.append(timestamp_map.strip())
+    out_lines.append("")
     time_pattern = re.compile(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})")
 
-    def shift_time(h, m, s, ms, delta):
-        total_sec = int(h or 0) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0 + delta
-        if total_sec < 0:
-            total_sec = 0.0
+    def format_sec(total_sec: float) -> str:
         nh = int(total_sec // 3600)
         nm = int((total_sec % 3600) // 60)
         ns = int(total_sec % 60)
@@ -380,14 +390,20 @@ def srt_to_webvtt(srt_text: str, offset_seconds: float = 0.0) -> str:
     while start_idx < len(lines) and (lines[start_idx].strip() == "" or lines[start_idx].strip().startswith("WEBVTT")):
         start_idx += 1
 
+    skip_current_cue = False
     for line in lines[start_idx:]:
         m = time_pattern.search(line)
         if m:
             h1, m1, s1, ms1, h2, m2, s2, ms2 = m.groups()
-            t1 = shift_time(h1, m1, s1, ms1, offset_seconds)
-            t2 = shift_time(h2, m2, s2, ms2, offset_seconds)
-            out_lines.append(f"{t1} --> {t2}")
-        else:
+            t1_sec = int(h1 or 0) * 3600 + int(m1) * 60 + int(s1) + int(ms1) / 1000.0 + offset_seconds
+            t2_sec = int(h2 or 0) * 3600 + int(m2) * 60 + int(s2) + int(ms2) / 1000.0 + offset_seconds
+            if t2_sec <= 0.0:
+                skip_current_cue = True
+                continue
+            skip_current_cue = False
+            t1_sec = max(0.0, t1_sec)
+            out_lines.append(f"{format_sec(t1_sec)} --> {format_sec(t2_sec)}")
+        elif not skip_current_cue:
             out_lines.append(line)
 
     return "\n".join(out_lines) + "\n"
@@ -425,6 +441,8 @@ async def proxy_subtitle_vtt(
     request: Request,
     url: str = Query(..., description="Upstream subtitle download or proxy URL"),
     offset: float = Query(0.0, description="Optional time offset in seconds (+/-)"),
+    timestamp_map: Optional[str] = Query(None, description="Optional X-TIMESTAMP-MAP header string"),
+    media_start: Optional[float] = Query(None, description="Optional stream media start offset in seconds"),
 ):
     """
     Downloads any upstream subtitle (SRT, VTT, ASS, SSA, or ZIP archive),
@@ -447,6 +465,10 @@ async def proxy_subtitle_vtt(
         import charset_normalizer
     except ImportError:
         charset_normalizer = None
+
+    effective_map = timestamp_map
+    if not effective_map and media_start is not None and media_start > 0:
+        effective_map = f"X-TIMESTAMP-MAP=MPEGTS:{int(media_start * 90000)},LOCAL:00:00:00.000"
 
     try:
         headers = {
@@ -488,9 +510,9 @@ async def proxy_subtitle_vtt(
         # Automatically detect and convert ASS/SSA vs SRT to WebVTT
         is_ass = "[Script Info]" in text or "[Events]" in text or "Dialogue:" in text or url.lower().endswith((".ass", ".ssa"))
         if is_ass:
-            vtt_content = ass_to_webvtt(text, offset_seconds=offset)
+            vtt_content = ass_to_webvtt(text, offset_seconds=offset, timestamp_map=effective_map)
         else:
-            vtt_content = srt_to_webvtt(text, offset_seconds=offset)
+            vtt_content = srt_to_webvtt(text, offset_seconds=offset, timestamp_map=effective_map)
 
         return Response(
             content=vtt_content,

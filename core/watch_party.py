@@ -33,6 +33,7 @@ class WatchPartyRoom:
         self.members: Dict[str, float] = {host_peer_id: self.created_at}
         self.events: List[Dict[str, Any]] = []
         self._seq = 0
+        self.latest_subtitle_state: Optional[Dict[str, Any]] = None
 
     def add_member(self, peer_id: str) -> int:
         if peer_id not in self.members and len(self.members) >= ROOM_MAX_MEMBERS:
@@ -44,10 +45,16 @@ class WatchPartyRoom:
     def is_member(self, peer_id: str) -> bool:
         return peer_id in self.members
 
-    def post_event(self, peer_id: str, action: str, position: float) -> Dict[str, Any]:
+    def post_event(
+        self,
+        peer_id: str,
+        action: str,
+        position: float,
+        subtitle_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         if not self.is_member(peer_id):
             raise WatchPartyError("peer has not joined this room")
-        allowed = {"play", "pause", "seek", "sync"}
+        allowed = {"play", "pause", "seek", "sync", "sub_sync"}
         if action not in allowed:
             raise WatchPartyError(f"unsupported action: {action}")
         self._seq += 1
@@ -58,6 +65,9 @@ class WatchPartyRoom:
             "position": round(float(position), 3),
             "ts": time.time(),
         }
+        if subtitle_state:
+            event["subtitle_state"] = subtitle_state
+            self.latest_subtitle_state = subtitle_state
         self.events.append(event)
         if len(self.events) > ROOM_MAX_EVENTS:
             self.events = self.events[-ROOM_MAX_EVENTS:]
@@ -77,6 +87,7 @@ class WatchPartyRoom:
             "member_count": len(self.members),
             "latest_seq": self._seq,
             "latest_event": latest,
+            "latest_subtitle_state": self.latest_subtitle_state,
         }
 
 
@@ -109,13 +120,28 @@ class WatchPartyManager:
         room.add_member((peer_id or "").strip())
         return room
 
-    def post_event(self, code: str, peer_id: str, action: str, position: float) -> Dict[str, Any]:
+    def post_event(
+        self,
+        code: str,
+        peer_id: str,
+        action: str,
+        position: float,
+        subtitle_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         room = self.get_room(code)
         if not room:
             raise WatchPartyError("room not found")
-        return room.post_event(peer_id, action, position)
+        return room.post_event(peer_id, action, position, subtitle_state=subtitle_state)
 
-    def apply_gossip_event(self, code: str, peer_id: str, action: str, position: float, ts: float) -> bool:
+    def apply_gossip_event(
+        self,
+        code: str,
+        peer_id: str,
+        action: str,
+        position: float,
+        ts: float,
+        subtitle_state: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Ingests a PARTY_EVENT gossiped from a remote instance, if the room exists here."""
         room = self.get_room(code)
         if not room:
@@ -124,7 +150,7 @@ class WatchPartyManager:
             return False
         if peer_id and peer_id not in room.members:
             room.members[peer_id] = ts
-        room.post_event(peer_id, action, position)
+        room.post_event(peer_id, action, position, subtitle_state=subtitle_state)
         return True
 
     def _sweep(self) -> None:
