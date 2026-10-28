@@ -327,6 +327,7 @@ async def stream_transmuxed_torrent(
         "Accept-Ranges": "none",
         "X-EvoStream-Audio": f"track_{audio_track}_boost_{audio_boost}",
         "X-Evo-Buffer-State": "healthy",
+        "Access-Control-Expose-Headers": "X-Evo-Seek-Keyframe, X-EvoStream-Audio, X-Evo-BurnWarn, X-Evo-Buffer-State",
     }
     if burn_sub_idx is not None:
         resp_hdrs["X-Evo-BurnWarn"] = "1"

@@ -1681,6 +1681,17 @@
                   </button>
                   <button class="btn btn-xs btn-ghost text-red" onclick="resetSubtitleSync()" title="Reset delay to 0.0s">Reset</button>
                 </div>
+                <!-- 2-Point Manual Calibration Engine (Guaranteed zero-drift lock for any release) -->
+                <div class="flex items-center gap-1 mb-2 flex-wrap">
+                  <span class="text-2xs mono text-dim mr-1">2-Point Drift Lock:</span>
+                  <button id="btn-sub-point-a" class="btn btn-2xs btn-outline" onclick="setSubtitleSyncPoint('A')" title="Set Point A at early dialogue (Hotkey: Shift+A)">
+                    <i class="fa-solid fa-flag text-accent"></i> Set Pt A (Start)
+                  </button>
+                  <button id="btn-sub-point-b" class="btn btn-2xs btn-outline" onclick="setSubtitleSyncPoint('B')" title="Set Point B later in movie to auto-fit exact drift (Hotkey: Shift+B)">
+                    <i class="fa-solid fa-flag-checkered text-green"></i> Set Pt B (Later)
+                  </button>
+                  <span id="sub-calibration-status" class="mono text-2xs text-dim"></span>
+                </div>
                 <div class="flex items-center gap-1 mb-1 flex-wrap">
                   <span class="text-2xs mono text-dim mr-1">Framerate Drift:</span>
                   <button class="btn btn-2xs btn-outline" onclick="rescaleSubtitleFramerate(23.976 / 25.0, '23.976 -> 25 fps')" title="PAL speedup correction (0.959x)">23.976 &rarr; 25 fps</button>
@@ -1698,6 +1709,18 @@
                   <span class="mono text-xs font-bold text-bright"><i class="fa-solid fa-clock-rotate-left text-green"></i> SUBTITLE TIMING OFFSET:</span>
                   <span id="sub-sync-val" class="mono text-xs font-bold text-green">0ms (In Sync)</span>
                 </div>
+                <!-- Studio Logo / Large Offset Presets -->
+                <div class="flex items-center gap-1 mb-2 flex-wrap">
+                  <span class="text-2xs mono text-dim nudge-label">Studio Delay:</span>
+                  <button class="btn btn-2xs btn-outline" onclick="adjustSubtitleSync(-30.0)">-30s</button>
+                  <button class="btn btn-2xs btn-outline" onclick="adjustSubtitleSync(-15.0)">-15s</button>
+                  <button class="btn btn-2xs btn-outline" onclick="adjustSubtitleSync(-5.0)">-5s</button>
+                  <button class="btn btn-2xs btn-outline" onclick="adjustSubtitleSync(-1.0)">-1s</button>
+                  <button class="btn btn-2xs btn-outline" onclick="adjustSubtitleSync(1.0)">+1s</button>
+                  <button class="btn btn-2xs btn-outline" onclick="adjustSubtitleSync(5.0)">+5s</button>
+                  <button class="btn btn-2xs btn-outline" onclick="adjustSubtitleSync(15.0)">+15s</button>
+                  <button class="btn btn-2xs btn-outline" onclick="adjustSubtitleSync(30.0)">+30s</button>
+                </div>
                 <!-- Millisecond Precision Nudge Buttons -->
                 <div class="sub-sync-nudge-row mb-2">
                   <span class="text-xs mono text-dim nudge-label">Fine Nudge:</span>
@@ -1709,18 +1732,28 @@
                   <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSyncMs(500)">+500ms</button>
                   <button class="btn btn-xs btn-ghost text-red" onclick="resetSubtitleSync()" title="Reset delay to 0.0s">Reset</button>
                 </div>
-                <!-- Slider with second increments -->
-                <div class="flex items-center gap-1 mb-2">
-                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-1.0)">-1.0s</button>
-                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.5)">-0.5s</button>
-                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(-0.1)">-0.1s</button>
-                  <input type="range" id="sub-sync-slider" min="-10" max="10" step="0.05" value="0" class="sub-sync-slider" oninput="setSubtitleSync(parseFloat(this.value))" onchange="saveCurrentSubtitleSync()">
-                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.1)">+0.1s</button>
-                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(0.5)">+0.5s</button>
-                  <button class="btn btn-xs btn-outline" onclick="adjustSubtitleSync(1.0)">+1.0s</button>
+                <!-- Slider with second increments and direct number input -->
+                <div class="flex items-center gap-2 mb-2">
+                  <input type="range" id="sub-sync-slider" min="-60" max="60" step="0.05" value="0" class="sub-sync-slider flex-1" oninput="setSubtitleSync(parseFloat(this.value))" onchange="saveCurrentSubtitleSync()">
+                  <div class="flex items-center gap-1">
+                    <input type="number" id="sub-sync-num-input" class="mono text-xs text-bright" style="width: 68px; text-align: center; background: rgba(0,0,0,0.5); border: 1px solid var(--color-rule); border-radius: 4px; padding: 2px 4px;" step="0.1" value="0.0" onchange="setSubtitleSync(parseFloat(this.value)); saveCurrentSubtitleSync();">
+                    <span class="mono text-2xs text-dim">s</span>
+                  </div>
                 </div>
-                <div class="text-xs text-dim mono" style="font-size:0.7rem;">
-                  Hotkeys: Press <kbd class="kbd">G</kbd> to delay subtitles (-100ms) or <kbd class="kbd">H</kbd> to advance (+100ms) anytime during playback.
+
+                <!-- One-Click Nearby Dialogue Anchor -->
+                <div class="sub-nearby-dialogue-wrap mt-2 pt-2" style="border-top: 1px dashed var(--color-rule-subtle);">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="mono text-2xs font-bold text-accent"><i class="fa-solid fa-bullseye"></i> NEARBY DIALOGUE (ONE-CLICK ANCHOR):</span>
+                    <button class="btn btn-2xs btn-ghost text-accent" onclick="renderNearbyDialogueCues()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+                  </div>
+                  <div id="sub-nearby-dialogue-list" class="sub-nearby-dialogue-list">
+                    <div class="text-2xs mono text-dim p-1">Pause video during speech to view nearby lines</div>
+                  </div>
+                </div>
+
+                <div class="text-xs text-dim mono mt-2" style="font-size:0.7rem;">
+                  Hotkeys: Press <kbd class="kbd">G</kbd> to delay (-100ms), <kbd class="kbd">H</kbd> to advance (+100ms), <kbd class="kbd">Shift+S</kbd> to snap voice.
                 </div>
               </div>
 

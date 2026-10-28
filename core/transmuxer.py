@@ -1412,12 +1412,21 @@ async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, ti
     cmd = [
         ffprobe,
         "-v", "quiet",
+    ]
+    if source_url.startswith("http"):
+        cmd.extend([
+            "-reconnect", "1",
+            "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "3",
+        ])
+    cmd.extend([
         "-select_streams", "v:0",
         "-show_packets",
         "-show_entries", "packet=pts_time,flags",
         "-of", "csv=p=0",
         source_url
-    ]
+    ])
     keyframes = [0.0]
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -1425,7 +1434,17 @@ async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, ti
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                stdout, _ = await proc.communicate()
+            except Exception:
+                stdout = b""
         for line in stdout.decode("utf-8", errors="replace").splitlines():
             parts = line.strip().split(",")
             if len(parts) >= 2 and "K" in parts[-1]:

@@ -175,7 +175,10 @@ class SubtitleSyncEngine:
                     effective_start = max(0.0, clean_cues[0][0] - 10.0)
 
                 span = (clean_cues[-1][0] - clean_cues[0][0]) if len(clean_cues) >= 2 else 0.0
-                multi_window = span >= 300.0 and not reference_cues
+                is_http_stream = str(video_source).startswith("http")
+                # For HTTP streaming sources (torrents), avoid seeking far ahead into unbuffered media
+                # which causes piece starvation and times out the VAD task.
+                multi_window = span >= 300.0 and not reference_cues and not is_http_stream
                 w2_start = round(clean_cues[0][0] + span * 0.5, 1) if multi_window else 0.0
 
                 if multi_window:

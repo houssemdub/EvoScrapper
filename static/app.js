@@ -84,6 +84,7 @@ const state = {
     _rafId: null,
     continuousSync: false,
     _lastSeekSyncTime: 0,
+    syncPoints: { A: null, B: null },
     activeTrack: null,
     activeSubName: 'Auto',
     activeLang: 'en',
@@ -2961,6 +2962,9 @@ function switchSubDrawerTab(tabId) {
     if (btn) btn.classList.toggle('active', t === tabId);
     if (panel) panel.classList.toggle('hidden', t !== tabId);
   });
+  if (tabId === 'sync') {
+    renderNearbyDialogueCues();
+  }
 }
 
 function toggleSubtitleDrawer(forceOpen = null) {
@@ -3708,6 +3712,7 @@ function setSubtitleSync(seconds) {
   const badge = document.getElementById('player-sync-badge');
   const slider = document.getElementById('sub-sync-slider');
   const syncVal = document.getElementById('sub-sync-val');
+  const numInput = document.getElementById('sub-sync-num-input');
 
   const sign = clamped > 0 ? '+' : '';
   const ms = Math.round(clamped * 1000);
@@ -3719,7 +3724,8 @@ function setSubtitleSync(seconds) {
   const driftSuffix = isQuad ? ' · quad drift' : (driftSlope ? ` · drift ${(driftSlope * 100).toFixed(1)}%` : '');
 
   if (badge) badge.innerText = `${sign}${clamped.toFixed(1)}s${driftSuffix}`;
-  if (slider) slider.value = clamped;
+  if (slider) slider.value = Math.max(-60, Math.min(60, clamped));
+  if (numInput && document.activeElement !== numInput) numInput.value = clamped.toFixed(2);
   if (syncVal) {
     syncVal.innerText = clamped === 0 && !driftSlope
       ? '0ms (In Sync)'
@@ -3729,6 +3735,122 @@ function setSubtitleSync(seconds) {
 
   // Update on-screen subtitle cues in real-time
   updateSubtitleOverlay();
+}
+
+function setSubtitleSyncPoint(point) {
+  const video = document.getElementById('evo-video-player');
+  const cues = state.subtitles.rawCues;
+  const statusEl = document.getElementById('sub-calibration-status');
+  if (!video || !cues || cues.length === 0) {
+    showToast('Load a subtitle track first', 'warning');
+    return;
+  }
+  const curTime = getPlayerCurrentTime();
+  let bestCue = null;
+  let minDiff = Infinity;
+  for (const c of cues) {
+    const diff = Math.abs(curTime - (c.start + subtitleOffsetAt(c.start)));
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestCue = c;
+    }
+  }
+  if (!bestCue) {
+    showToast('No nearby cue found to anchor point', 'warning');
+    return;
+  }
+
+  if (point === 'A') {
+    state.subtitles.syncPoints.A = { mediaTime: curTime, cueStart: bestCue.start };
+    const label = (bestCue.text || '').replace(/<[^>]*>/g, '').trim().slice(0, 25);
+    showToast(`📍 Point A locked at ${formatMmSs(curTime)} ("${label}...")`, 'info');
+    if (statusEl) statusEl.innerHTML = `<span class="text-accent font-bold">Pt A: ${formatMmSs(curTime)}</span> (Now play further & set Pt B)`;
+  } else if (point === 'B') {
+    const ptA = state.subtitles.syncPoints.A;
+    if (!ptA) {
+      showToast('Set Point A first at an earlier dialogue line', 'warning');
+      return;
+    }
+    const ptB = { mediaTime: curTime, cueStart: bestCue.start };
+    const dtMedia = ptB.mediaTime - ptA.mediaTime;
+    const dtCue = ptB.cueStart - ptA.cueStart;
+    if (Math.abs(dtMedia) < 20 || Math.abs(dtCue) < 20) {
+      showToast('Points A and B must be at least 20s apart to measure drift', 'warning');
+      return;
+    }
+
+    const slope = (dtMedia - dtCue) / dtCue;
+    const offset = ptA.mediaTime - (1 + slope) * ptA.cueStart;
+
+    if (Math.abs(slope) > 0.15) {
+      showToast('Calculated drift exceeds normal framerate range (>15%)', 'warning');
+      return;
+    }
+
+    state.subtitles.driftModel = Math.abs(slope) > 0.00005
+      ? { model: 'linear', params: [Math.round(slope * 1000000) / 1000000, Math.round(offset * 1000) / 1000], rmse: 0.0 }
+      : null;
+    setSubtitleSync(offset);
+    saveCurrentSubtitleSync();
+
+    const pctStr = (slope * 100).toFixed(2);
+    const sign = slope >= 0 ? '+' : '';
+    showToast(`🎯 Calibrated: Offset ${offset >= 0 ? '+' : ''}${offset.toFixed(2)}s, Drift ${sign}${pctStr}%`, 'success');
+    if (statusEl) statusEl.innerHTML = `<span class="text-green font-bold">✅ Locked (${sign}${pctStr}% drift)</span>`;
+    renderNearbyDialogueCues();
+  }
+}
+
+function alignSubtitleToCue(cueIndex) {
+  const cues = state.subtitles.rawCues;
+  if (!cues || !cues[cueIndex]) return;
+  const targetCue = cues[cueIndex];
+  const curPlayTime = getPlayerCurrentTime();
+  const driftOffset = subtitleDriftOffsetAt(targetCue.start);
+  const newOffset = curPlayTime - targetCue.start - driftOffset;
+  setSubtitleSync(newOffset);
+  saveCurrentSubtitleSync();
+  const clean = (targetCue.text || '').replace(/<[^>]*>/g, '').trim().slice(0, 30);
+  showToast(`🎯 Aligned "${clean}..." to ${formatMmSs(curPlayTime)}`, 'success');
+  renderNearbyDialogueCues();
+}
+
+function renderNearbyDialogueCues() {
+  const container = document.getElementById('sub-nearby-dialogue-list');
+  if (!container) return;
+  const cues = state.subtitles.rawCues;
+  if (!cues || cues.length === 0) {
+    container.innerHTML = '<div class="text-2xs mono text-dim p-1">No active subtitle track loaded</div>';
+    return;
+  }
+  const curPlayTime = getPlayerCurrentTime();
+  const nearby = cues
+    .map((c, idx) => ({ cue: c, idx, diff: Math.abs(curPlayTime - (c.start + subtitleOffsetAt(c.start))) }))
+    .sort((a, b) => a.diff - b.diff)
+    .slice(0, 5)
+    .sort((a, b) => a.cue.start - b.cue.start);
+
+  if (nearby.length === 0) {
+    container.innerHTML = '<div class="text-2xs mono text-dim p-1">No dialogue near current position</div>';
+    return;
+  }
+
+  container.innerHTML = nearby
+    .map((item) => {
+      const c = item.cue;
+      const text = sanitizeSubtitleCueMarkup(c.text).replace(/<[^>]*>/g, '').trim().slice(0, 40);
+      const cueTime = formatMmSs(c.start);
+      return `
+        <div class="sub-nearby-cue-item">
+          <span class="sub-nearby-cue-time">${cueTime}</span>
+          <span class="sub-nearby-cue-text" title="${text}">"${text}"</span>
+          <button class="btn btn-2xs btn-accent" onclick="alignSubtitleToCue(${item.idx})" title="Align this line to current video time (${formatMmSs(curPlayTime)})">
+            <i class="fa-solid fa-bullseye"></i> Align Here
+          </button>
+        </div>
+      `;
+    })
+    .join('');
 }
 
 function adjustSubtitleSyncMs(msDelta) {
@@ -6065,6 +6187,12 @@ function initPlayerTimelineControls() {
     } else if (e.key === 'b' || e.key === 'B') {
       e.preventDefault();
       cycleAudioTrack();
+    } else if ((e.key === 'a' || e.key === 'A') && e.shiftKey) {
+      e.preventDefault();
+      setSubtitleSyncPoint('A');
+    } else if ((e.key === 'b' || e.key === 'B') && e.shiftKey) {
+      e.preventDefault();
+      setSubtitleSyncPoint('B');
     } else if ((e.key === 's' || e.key === 'S') && e.ctrlKey && e.shiftKey) {
       e.preventDefault();
       triggerAutoSyncSubtitles();

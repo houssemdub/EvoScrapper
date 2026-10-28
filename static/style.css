@@ -4042,6 +4042,52 @@ p, span, div {
   text-align: center;
 }
 
+.sub-nearby-dialogue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem;
+}
+
+.sub-nearby-cue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid transparent;
+  transition: all var(--dur-fast);
+}
+
+.sub-nearby-cue-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--color-rule-subtle);
+}
+
+.sub-nearby-cue-text {
+  font-size: 0.75rem;
+  color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.sub-nearby-cue-time {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 /* Popover Menu inside Player */
 .player-settings-popover {
   position: absolute;
