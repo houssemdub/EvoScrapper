@@ -532,18 +532,21 @@ async def get_embedded_subtitles(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
         )
 
+    await ensure_streaming_daemon()
+    source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
+    local_file = _find_cached_media_path(info_hash=info_hash, episode=episode)
+    target_source = local_file if local_file else source_url
+
     failed = get_failed_sub_vtt(cache_key)
     if failed:
+        # A past failure is not terminal: relaunch the single-flight job so the
+        # track recovers on a later poll once the swarm warms up.
+        start_sub_vtt_extraction(cache_key, target_source, sub_index)
         return Response(
             content=failed,
             media_type="text/vtt; charset=utf-8",
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
         )
-
-    await ensure_streaming_daemon()
-    source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
-    local_file = _find_cached_media_path(info_hash=info_hash, episode=episode)
-    target_source = local_file if local_file else source_url
 
     if fast is True:
         # Fast extraction: only first 5 minutes, no caching, immediate response

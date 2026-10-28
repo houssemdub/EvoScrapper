@@ -4,6 +4,10 @@
  */
 
 // ── Application State ────────────────────────────────────────────────────────
+// Poll budget for pending embedded-subtitle extraction; must cover the server's
+// EVO_SUB_EXTRACT_TIMEOUT default (240s). Contract-tested in test_embedded_subtitle_delivery.py.
+const EMBEDDED_SUB_POLL_BUDGET_MS = 240000;
+
 const state = {
   currentTab: 'torrents',
   activeCategory: 'all',
@@ -4177,7 +4181,8 @@ async function applySubtitle(subItem, isAuto = false) {
         }
 
         if (badge) badge.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-accent"></i> Extracting embedded subs…`;
-        for (let attempt = 0; attempt < 12; attempt++) {
+        const maxPolls = Math.ceil(EMBEDDED_SUB_POLL_BUDGET_MS / 3000);
+        for (let attempt = 0; attempt < maxPolls; attempt++) {
           await new Promise(r => setTimeout(r, 3000));
           if (state.subtitles._subPollToken !== subPollToken) return;
           try {

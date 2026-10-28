@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import sys
 
 import pytest
@@ -117,6 +118,30 @@ def test_stream_subtitles_endpoint_serves_cache_and_pending(tmp_path, monkeypatc
     assert resp2.body.decode("utf-8") == VALID_VTT
 
 
+def test_failed_extraction_is_retryable(monkeypatch):
+    """Functional: a failed extraction must not be terminal — the endpoint relaunches the job (single-flight) so a later poll can succeed."""
+    from routers import stream as stream_router
+
+    async def noop_daemon():
+        return None
+
+    FAILED = "WEBVTT\n\nNOTE Extraction error: simulated timeout\n"
+    monkeypatch.setattr(stream_router, "get_failed_sub_vtt", lambda key: FAILED)
+    monkeypatch.setattr(stream_router, "load_cached_sub_vtt", lambda key: None)
+    monkeypatch.setattr(stream_router, "_find_cached_media_path", lambda **kw: None)
+    monkeypatch.setattr(stream_router, "ensure_streaming_daemon", noop_daemon)
+    started = {}
+    monkeypatch.setattr(stream_router, "start_sub_vtt_extraction",
+                        lambda key, src, idx: started.setdefault("args", (key, src, idx)) or True)
+    monkeypatch.setattr(stream_router, "get_internal_stream_url",
+                        lambda info_hash, file_idx, **kw: f"http://daemon/{info_hash}/{file_idx}")
+
+    resp = asyncio.run(stream_router.get_embedded_subtitles(info_hash="abc123", file_idx=0, sub_index=0))
+    assert resp.body.decode("utf-8") == FAILED
+    assert resp.headers.get("X-Evo-Sub-Pending") != "1"
+    assert "args" in started, "failed marker must relaunch the extraction job"
+
+
 # ── 3. Frontend polls pending extraction ──────────────────────────────────────
 
 def test_app_js_polls_pending_embedded_extraction():
@@ -125,6 +150,22 @@ def test_app_js_polls_pending_embedded_extraction():
         app_code = f.read()
     assert "X-Evo-Sub-Pending" in app_code, "app.js must detect the pending response header"
     assert "NOTE Extraction pending" in app_code or "X-Evo-Sub-Pending" in app_code
+
+
+def test_app_js_poll_budget_covers_server_extraction_timeout():
+    """Contract: the frontend poll budget must cover the server's EVO_SUB_EXTRACT_TIMEOUT (default 240s)."""
+    with open(APP_JS_PATH, "r", encoding="utf-8") as f:
+        app_code = f.read()
+    m = re.search(r"EMBEDDED_SUB_POLL_BUDGET_MS\s*=\s*(\d+)", app_code)
+    assert m, "app.js must define EMBEDDED_SUB_POLL_BUDGET_MS for the pending-extraction poll loop"
+    budget_ms = int(m.group(1))
+    with open(TRANSMUXER_PY_PATH, "r", encoding="utf-8") as f:
+        tm_code = f.read()
+    tm = re.search(r'EVO_SUB_EXTRACT_TIMEOUT",\s*"(\d+)"', tm_code)
+    server_default_s = int(tm.group(1)) if tm else 240
+    assert budget_ms >= server_default_s * 1000, (
+        f"frontend poll budget {budget_ms}ms is shorter than server extraction timeout {server_default_s}s"
+    )
 
 
 # ── 4. Stremio addon advertises embedded tracks ───────────────────────────────
