@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Keyframe Anchor Container Start Normalization & Cache Hardening
+
+#### Fixed
+- **Container `start_time` Anchor Normalization (`core/transmuxer.py`)**: Normalized probed and cached keyframe timestamps to content time (`pts_time - container_start`, clamped >= 0) via lightweight `ffprobe -show_entries format=start_time` probing (or caller-supplied `container_start`). Eliminates subtitle and seek desync on TS and Blu-ray remux sources where ffmpeg input `-ss` is `start_time`-relative while packet `pts_time` is absolute.
+- **Keyframe Cache v2 & Poisoning Prevention (`core/transmuxer.py`)**: Bumped keyframe cache format to version 2 (`{"version": 2, "container_start": float, "keyframes": [...]}`), cleanly invalidating legacy absolute PTS caches. Probes that time out before packet inspection completes no longer persist truncated keyframe lists.
+- **Transmux Header Honesty (`routers/stream.py`)**: Restrict `X-Evo-Seek-Keyframe` header emission strictly to verified keyframes found within 15s of the seek position. Omitting the header on distant/empty keyframe lookups prevents misleading client re-anchors.
+- **Client 3-Decimal Seek Precision (`static/app.js`)**: Updated all `start_time=${...}` query parameter interpolations across playback modes and track switchers to `toFixed(3)` to align precisely with 3-decimal backend keyframe precision and prevent dipping below keyframe boundaries.
+
+
 ### VLC Subtitle Pipeline Parity: Frame-Accurate Clock Synchronization & Rendering Engine
 
 #### Added

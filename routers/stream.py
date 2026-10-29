@@ -253,8 +253,9 @@ async def _capture_seek_event(info_hash: str, position_seconds: float) -> None:
         pass
 
 
-@router.get("/transmux")
+@router.api_route("/transmux", methods=["GET", "HEAD"])
 async def stream_transmuxed_torrent(
+    request: Request,
     info_hash: str = Query(..., description="Torrent info hash"),
     file_idx: int = Query(0, description="File index inside torrent"),
     magnet: Optional[str] = Query(None, description="Original magnet link with trackers"),
@@ -279,8 +280,47 @@ async def stream_transmuxed_torrent(
     await ensure_streaming_daemon()
     b_mb = buffer_mb if isinstance(buffer_mb, int) else None
     source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode, buffer_mb=b_mb)
-    # Backend matches the frontend's requested anchor time directly so player and transmux clocks stay 1:1 in sync
+    # Backend snaps requested seek to the preceding keyframe in copy mode so audio, video, and subtitle clocks stay 1:1 in sync
     snapped_start = start_time
+    matched_keyframe = None
+    if start_time and start_time > 0 and not (transcode_video or burn_sub_idx is not None):
+        from core.transmuxer import load_cached_keyframes, probe_keyframes_near
+        cached_kfs = load_cached_keyframes(info_hash, file_idx)
+        need_probe = True
+        if cached_kfs:
+            preceding = [k for k in cached_kfs if k <= start_time]
+            if preceding and (start_time - preceding[-1]) <= 15.0:
+                snapped_start = preceding[-1]
+                matched_keyframe = preceding[-1]
+                need_probe = False
+        if need_probe:
+            try:
+                near_kfs = await probe_keyframes_near(source_url, info_hash, file_idx, target_time=start_time, timeout=3.0)
+                if near_kfs:
+                    preceding = [k for k in near_kfs if k <= start_time]
+                    if preceding and (start_time - preceding[-1]) <= 15.0:
+                        snapped_start = preceding[-1]
+                        matched_keyframe = preceding[-1]
+            except Exception:
+                pass
+
+    resp_hdrs = {
+        "Content-Type": "video/mp4",
+        "Accept-Ranges": "none",
+        "X-EvoStream-Audio": f"track_{audio_track}_boost_{audio_boost}",
+        "X-Evo-Buffer-State": "healthy",
+        "Access-Control-Expose-Headers": "X-Evo-Seek-Keyframe, X-EvoStream-Audio, X-Evo-BurnWarn, X-Evo-Buffer-State",
+    }
+    if burn_sub_idx is not None:
+        resp_hdrs["X-Evo-BurnWarn"] = "1"
+    if matched_keyframe is not None and matched_keyframe >= 0:
+        resp_hdrs["X-Evo-Seek-Keyframe"] = str(round(matched_keyframe, 3))
+    if duration and isinstance(duration, (int, float)) and duration > 0:
+        resp_hdrs["X-Content-Duration"] = str(round(duration, 2))
+        resp_hdrs["Content-Duration"] = str(round(duration, 2))
+
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type="video/mp4", headers=resp_hdrs)
 
     if snapped_start and snapped_start > 0:
         dur_val = duration if (duration and isinstance(duration, (int, float)) and duration > 0) else None
@@ -307,21 +347,6 @@ async def stream_transmuxed_torrent(
         audio_boost=audio_boost,
         channels=channels if isinstance(channels, int) else None,
     )
-
-    resp_hdrs = {
-        "Content-Type": "video/mp4",
-        "Accept-Ranges": "none",
-        "X-EvoStream-Audio": f"track_{audio_track}_boost_{audio_boost}",
-        "X-Evo-Buffer-State": "healthy",
-        "Access-Control-Expose-Headers": "X-Evo-Seek-Keyframe, X-EvoStream-Audio, X-Evo-BurnWarn, X-Evo-Buffer-State",
-    }
-    if burn_sub_idx is not None:
-        resp_hdrs["X-Evo-BurnWarn"] = "1"
-    if snapped_start and snapped_start > 0:
-        resp_hdrs["X-Evo-Seek-Keyframe"] = str(round(snapped_start, 3))
-    if duration and isinstance(duration, (int, float)) and duration > 0:
-        resp_hdrs["X-Content-Duration"] = str(round(duration, 2))
-        resp_hdrs["Content-Duration"] = str(round(duration, 2))
 
     return StreamingResponse(
         generator,

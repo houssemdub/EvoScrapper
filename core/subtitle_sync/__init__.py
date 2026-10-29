@@ -10,9 +10,11 @@ from core.subtitle_sync.forced_subs import detect_forced_subtitles, filter_for_s
 from core.subtitle_sync.vad import (
     align_to_reference_cues,
     align_to_reference_cues_ex,
+    auto_sync_fft,
     compute_optimal_offset,
     extract_speech_intervals_from_stream,
     parse_silencedetect_output,
+    retime_subtitles_linear,
 )
 
 __all__ = [
@@ -30,4 +32,6 @@ __all__ = [
     "align_to_reference_cues",
     "align_to_reference_cues_ex",
     "extract_speech_intervals_from_stream",
+    "auto_sync_fft",
+    "retime_subtitles_linear",
 ]

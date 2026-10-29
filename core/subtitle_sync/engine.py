@@ -4,6 +4,7 @@ Fuses audio VAD, embedded reference tracks, external subtitle consensus,
 forced subtitle filtering, framerate drift modeling, and adaptive playback controllers.
 """
 from dataclasses import dataclass
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import app_logger
@@ -201,7 +202,7 @@ class SubtitleSyncEngine:
 
                 vad_offset1 = None
                 vad_conf1 = 0.0
-                if speech:
+                if speech and len(speech) >= 2:
                     offset, conf = compute_optimal_offset(target_cue_times, speech)
                     if conf > 0.2:
                         vad_offset1 = offset
@@ -215,7 +216,7 @@ class SubtitleSyncEngine:
                             )
                         )
 
-                if speech2:
+                if speech2 and len(speech2) >= 2:
                     cues_w2 = [(s, e) for s, e in target_cue_times if w2_start - 30.0 <= s <= w2_start + vad_duration + 30.0]
                     if len(cues_w2) >= 3:
                         offset2, conf2 = compute_optimal_offset(cues_w2, speech2)

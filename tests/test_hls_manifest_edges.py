@@ -57,6 +57,10 @@ def test_manifest_with_real_cached_keyframes_across_durations():
     for kf_file in keyframe_files:
         h, idx = kf_file.stem.rsplit("_", 1)
         kfs = json.loads(kf_file.read_text())
+        if isinstance(kfs, dict):
+            kfs = kfs.get("keyframes", [])
+        if not kfs or max(kfs) <= 0:
+            continue
         for dur in (30.0, 600.0, 3600.0, max(kfs), max(kfs) * 0.5):
             manifest = generate_hls_manifest(
                 info_hash=h, total_duration_sec=float(dur),

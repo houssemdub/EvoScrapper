@@ -13,6 +13,12 @@ import re
 import statistics
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+
 from core.logger import app_logger
 from core.subtitle_sync.alass_engine import alass_align_intervals
 from core.transmuxer import find_ffmpeg
@@ -224,6 +230,102 @@ def _score_offsets(
     return scores, overlaps, speech_coverage
 
 
+def auto_sync_fft(
+    speech_intervals: List[Tuple[float, float]],
+    cues: List[Tuple[float, float]],
+    sample_step_sec: float = 0.010,
+    max_lag_sec: float = 60.0,
+) -> Tuple[float, float]:
+    """
+    Automated waveform alignment via FFT Cross-Correlation (ffsubsync architecture).
+    Rasterizes subtitle intervals [start, end] into 10ms binary bins and runs
+    Frequency-Domain Cross-Correlation: IFFT( FFT(Audio_VAD) * conj(FFT(Sub_Binary)) )
+    Returns (optimal_offset_sec, confidence_score).
+    """
+    if not speech_intervals or not cues or not HAS_NUMPY:
+        return 0.0, 0.0
+
+    t_min = min(s for s, e in speech_intervals)
+    t_max = max(e for s, e in speech_intervals)
+
+    win_start = max(0.0, t_min - max_lag_sec)
+    win_end = t_max + max_lag_sec
+    cues_in_win = [(s, e) for s, e in cues if e >= win_start and s <= win_end]
+    if not cues_in_win:
+        return 0.0, 0.0
+
+    obs_start = min(t_min, min(s for s, e in cues_in_win))
+    obs_end = max(t_max, max(e for s, e in cues_in_win))
+    total_bins = int(np.ceil((obs_end - obs_start) / sample_step_sec))
+    if total_bins <= 0 or total_bins > 500000:
+        return 0.0, 0.0
+
+    aud_bin = np.zeros(total_bins, dtype=np.float32)
+    for s, e in speech_intervals:
+        i1 = max(0, int((s - obs_start) / sample_step_sec))
+        i2 = min(total_bins, int((e - obs_start) / sample_step_sec))
+        if i1 < i2:
+            aud_bin[i1:i2] = 1.0
+
+    sub_bin = np.zeros(total_bins, dtype=np.float32)
+    for s, e in cues_in_win:
+        i1 = max(0, int((s - obs_start) / sample_step_sec))
+        i2 = min(total_bins, int((e - obs_start) / sample_step_sec))
+        if i1 < i2:
+            sub_bin[i1:i2] = 1.0
+
+    aud_norm = aud_bin - np.mean(aud_bin)
+    sub_norm = sub_bin - np.mean(sub_bin)
+    norm_denom = (np.linalg.norm(aud_norm) * np.linalg.norm(sub_norm)) + 1e-8
+
+    fft_size = 1 << (2 * total_bins - 1).bit_length()
+    fft_aud = np.fft.rfft(aud_norm, n=fft_size)
+    fft_sub = np.fft.rfft(sub_norm, n=fft_size)
+    cross_corr = np.fft.irfft(fft_aud * np.conj(fft_sub), n=fft_size)
+
+    max_lag_bins = int(max_lag_sec / sample_step_sec)
+    valid_indices = list(range(0, min(max_lag_bins + 1, fft_size))) + list(range(max(0, fft_size - max_lag_bins), fft_size))
+    best_idx = max(valid_indices, key=lambda idx: cross_corr[idx])
+    lag_bins = best_idx if best_idx <= fft_size // 2 else best_idx - fft_size
+
+    offset_sec = lag_bins * sample_step_sec
+    confidence = float(cross_corr[best_idx] / norm_denom)
+    if abs(offset_sec) < 0.10:
+        offset_sec = 0.0
+    return round(float(offset_sec), 3), round(float(confidence), 2)
+
+
+def retime_subtitles_linear(
+    cues: List[Tuple[float, float]],
+    offset_sec: float = 0.0,
+    src_fps: float = 23.976,
+    dst_fps: float = 23.976,
+    anchor_points: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None,
+) -> List[Tuple[float, float]]:
+    """
+    Fixes progressive frame-rate drift and constant offset using an affine transform:
+        t_new = m * t_old + b
+    Can either use explicit FPS ratios (e.g. 23.976 -> 25.0) or two known sync anchors
+    ((sub_t1, audio_t1), (sub_t2, audio_t2)).
+    """
+    if anchor_points is not None:
+        (sub_t1, aud_t1), (sub_t2, aud_t2) = anchor_points
+        if abs(sub_t2 - sub_t1) > 1e-4:
+            m = (aud_t2 - aud_t1) / (sub_t2 - sub_t1)
+            b = aud_t1 - (m * sub_t1)
+        else:
+            m = 1.0
+            b = offset_sec
+    else:
+        m = src_fps / dst_fps if dst_fps > 0 else 1.0
+        b = offset_sec
+
+    return [
+        (round(s * m + b, 3), round(e * m + b, 3))
+        for s, e in cues
+    ]
+
+
 def compute_optimal_offset(
     cues: List[Tuple[float, float]],
     speech_intervals: List[Tuple[float, float]],
@@ -234,7 +336,7 @@ def compute_optimal_offset(
     """
     Finds the time shift delta_t in [min_offset, max_offset] that maximizes
     the correlation between the subtitle dialogue pattern and detected audio
-    speech intervals using sequence alignment and interval DTW.
+    speech intervals using FFT Cross-Correlation (ffsubsync) or interval DTW fallback.
 
     Returns (best_offset, confidence_0_to_1).
     """
@@ -247,6 +349,20 @@ def compute_optimal_offset(
         min_offset, max_offset = max_offset, min_offset
 
     max_delta = max(abs(min_offset), abs(max_offset))
+
+    if HAS_NUMPY:
+        try:
+            fft_offset, fft_conf = auto_sync_fft(
+                speech_intervals,
+                cues,
+                sample_step_sec=step if (0 < step <= 0.05) else 0.010,
+                max_lag_sec=max_delta,
+            )
+            if fft_conf >= 0.25 or fft_offset == 0.0:
+                return fft_offset, fft_conf
+        except Exception as e:
+            app_logger.debug(f"[SubtitleSync] FFT cross-correlation fallback: {e}")
+
     res = alass_align_intervals(
         cues,
         speech_intervals,

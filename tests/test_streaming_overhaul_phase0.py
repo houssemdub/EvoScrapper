@@ -120,7 +120,7 @@ async def test_transmux_copy_seek_flags_avoid_desync():
     assert captured_cmd is not None
     assert "-copyts" not in captured_cmd, "-copyts MUST be omitted to prevent A/V PTS gap with aac audio"
     assert "-avoid_negative_ts" in captured_cmd
-    assert "-noaccurate_seek" not in captured_cmd
+    assert "-noaccurate_seek" in captured_cmd
     af_idx = captured_cmd.index("-af")
     assert "aresample=async=1" in captured_cmd[af_idx + 1]
     assert "asetpts=PTS-STARTPTS" not in captured_cmd[af_idx + 1]

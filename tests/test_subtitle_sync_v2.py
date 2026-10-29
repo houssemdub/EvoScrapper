@@ -535,6 +535,56 @@ def test_dominant_delta_dense_large_shift():
     assert supported >= 90
 
 
+def test_auto_sync_fft_waveform_alignment_user_scenario():
+    """Verifies that FFT cross-correlation recovers exact +5.30s shift from speech waveform."""
+    from core.subtitle_sync.vad import auto_sync_fft, compute_optimal_offset
+
+    speech = [
+        (10.0, 14.5),
+        (20.0, 24.0),
+        (32.0, 36.5),
+        (45.0, 50.0),
+        (65.0, 72.0),
+    ]
+    # Cues delayed by 5.30s (the exact user issue)
+    cues_delayed = [(s + 5.30, e + 5.30) for s, e in speech]
+
+    offset, conf = auto_sync_fft(speech, cues_delayed, sample_step_sec=0.010, max_lag_sec=60.0)
+    assert abs(offset - (-5.30)) <= 0.05
+    assert conf >= 0.50
+
+    # Also verify compute_optimal_offset delegates to FFT and yields the same answer
+    opt_offset, opt_conf = compute_optimal_offset(cues_delayed, speech)
+    assert abs(opt_offset - (-5.30)) <= 0.05
+    assert opt_conf >= 0.50
+
+
+def test_retime_subtitles_linear():
+    """Verifies affine drift retimer with FPS ratios and anchor points."""
+    from core.subtitle_sync.vad import retime_subtitles_linear
+
+    cues = [(100.0, 105.0), (200.0, 205.0), (300.0, 305.0)]
+
+    # 1. Constant offset +2.5s
+    c_off = retime_subtitles_linear(cues, offset_sec=2.5)
+    assert c_off[0] == (102.5, 107.5)
+    assert c_off[1] == (202.5, 207.5)
+
+    # 2. PAL speedup (23.976 -> 25.0)
+    pal = retime_subtitles_linear(cues, src_fps=23.976, dst_fps=25.0)
+    expected_m = 23.976 / 25.0
+    assert abs(pal[0][0] - round(100.0 * expected_m, 3)) < 1e-4
+
+    # 3. Two anchor points ((sub_1, aud_1), (sub_2, aud_2))
+    # sub at 100 is aud at 102 (offset +2), sub at 300 is aud at 306 (offset +6)
+    anchored = retime_subtitles_linear(cues, anchor_points=((100.0, 102.0), (300.0, 306.0)))
+    # m = (306 - 102) / (300 - 100) = 4 / 200 = 1.02
+    # b = 102 - 102 = 0
+    assert anchored[0] == (102.0, 107.1)
+    assert anchored[2] == (306.0, 311.1)
+
+
+
 
 
 

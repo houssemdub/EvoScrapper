@@ -373,7 +373,10 @@ async def stream_transmuxed_video(
     ])
 
     # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes.
+    # In video copy mode, -noaccurate_seek forces both audio and video demuxers to seek together to the nearest preceding keyframe container boundary, eliminating GOP asymmetry A/V desync.
     if start_seconds and start_seconds > 0:
+        if not transcode_video and burn_sub_idx is None:
+            cmd.append("-noaccurate_seek")
         cmd.extend(["-ss", f"{start_seconds:.3f}"])
 
     if duration_seconds and duration_seconds > 0:
@@ -1376,6 +1379,7 @@ def launch_vlc_process(stream_url_or_path: str, title: Optional[str] = None) -> 
 
 
 KEYFRAMES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "keyframes"))
+KEYFRAME_CACHE_VERSION = 2
 
 
 def get_keyframes_cache_path(info_hash: str, file_idx: int = 0) -> str:
@@ -1384,39 +1388,139 @@ def get_keyframes_cache_path(info_hash: str, file_idx: int = 0) -> str:
     return os.path.join(KEYFRAMES_DIR, f"{info_hash.lower()}_{file_idx}.json")
 
 
-def load_cached_keyframes(info_hash: str, file_idx: int = 0) -> Optional[List[float]]:
-    """Loads cached keyframe timestamps if available on disk."""
+def load_cached_keyframes_data(info_hash: str, file_idx: int = 0) -> Optional[dict]:
+    """Loads cached keyframe metadata (v2 format) if available on disk."""
     path = get_keyframes_cache_path(info_hash, file_idx)
     if os.path.isfile(path):
         try:
             import json
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, list) and data:
-                    return sorted([float(x) for x in data])
+                if isinstance(data, dict) and data.get("version") == KEYFRAME_CACHE_VERSION:
+                    kfs = data.get("keyframes")
+                    if isinstance(kfs, list):
+                        return {
+                            "version": data["version"],
+                            "container_start": float(data.get("container_start", 0.0)),
+                            "keyframes": sorted([float(x) for x in kfs]),
+                        }
         except Exception:
             pass
     return None
 
 
-def save_cached_keyframes(info_hash: str, file_idx: int, keyframes: List[float]):
-    """Persists probed keyframe timestamps to disk."""
+def load_cached_keyframes(info_hash: str, file_idx: int = 0) -> Optional[List[float]]:
+    """Loads cached keyframe timestamps if available on disk (v2 format only; legacy caches discarded)."""
+    data = load_cached_keyframes_data(info_hash, file_idx)
+    if data:
+        return data["keyframes"]
+    return None
+
+
+def save_cached_keyframes(info_hash: str, file_idx: int, keyframes: List[float], container_start: float = 0.0):
+    """Persists probed keyframe timestamps to disk in v2 format."""
     path = get_keyframes_cache_path(info_hash, file_idx)
     try:
         import json
+        payload = {
+            "version": KEYFRAME_CACHE_VERSION,
+            "container_start": round(float(container_start), 3),
+            "keyframes": sorted(keyframes),
+        }
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(sorted(keyframes), f)
+            json.dump(payload, f)
     except Exception:
         pass
 
 
-async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, timeout: float = 8.0) -> List[float]:
-    """Probes source video keyframes using ffprobe packet flags and caches results [Phase 7 STRM-HIGH-05]."""
-    cached = load_cached_keyframes(info_hash, file_idx)
-    if cached is not None:
-        return cached
+async def probe_container_start(source_url: str, timeout: float = 3.0) -> float:
+    """Lightweight probe for container start_time via ffprobe [R1]."""
+    if not source_url:
+        return 0.0
+    ffprobe = shutil.which("ffprobe") or find_ffprobe() or "ffprobe"
+    cmd = [
+        ffprobe,
+        "-v", "quiet",
+    ]
+    if source_url.startswith("http"):
+        cmd.extend([
+            "-reconnect", "1",
+            "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "3",
+        ])
+    cmd.extend([
+        "-show_entries", "format=start_time",
+        "-of", "json",
+        source_url
+    ])
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        text = stdout.decode("utf-8", errors="replace").strip()
+        try:
+            import json
+            data = json.loads(text)
+            st = data.get("format", {}).get("start_time")
+            if st is not None:
+                return max(0.0, float(st))
+        except Exception:
+            try:
+                val = float(text)
+                return max(0.0, val)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return 0.0
 
-    ffprobe = shutil.which("ffprobe") or "ffprobe"
+
+async def probe_keyframes_near(
+    source_url: str,
+    info_hash: str,
+    file_idx: int = 0,
+    target_time: float = 0.0,
+    span: float = 30.0,
+    timeout: float = 4.0,
+    container_start: Optional[float] = None,
+) -> List[float]:
+    """
+    Rapidly probes video keyframe timestamps in a window around target_time using ffprobe -read_intervals.
+    Normalizes keyframes to content time (pts_time - container_start, clamped >= 0) [R1].
+    Merges any discovered keyframes into the persistent keyframe cache.
+    """
+    cached_data = load_cached_keyframes_data(info_hash, file_idx)
+    cached = cached_data["keyframes"] if cached_data else []
+    if cached:
+        preceding = [k for k in cached if k <= target_time]
+        if preceding and (target_time - preceding[-1]) <= 15.0:
+            return cached
+
+    # Resolve container start time
+    c_start = 0.0
+    if container_start is not None:
+        if isinstance(container_start, dict):
+            c_start = float(container_start.get("start_time", 0.0))
+        else:
+            try:
+                c_start = float(container_start)
+            except (ValueError, TypeError):
+                c_start = 0.0
+    elif cached_data is not None:
+        c_start = cached_data.get("container_start", 0.0)
+    else:
+        c_start = await probe_container_start(source_url)
+    c_start = max(0.0, c_start)
+
+    start_sec = max(0.0, target_time - 25.0) + c_start
+    end_sec = target_time + 10.0 + c_start
+    interval_spec = f"{start_sec:.2f}%{end_sec:.2f}"
+
+    ffprobe = shutil.which("ffprobe") or find_ffprobe() or "ffprobe"
     cmd = [
         ffprobe,
         "-v", "quiet",
@@ -1430,12 +1534,15 @@ async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, ti
         ])
     cmd.extend([
         "-select_streams", "v:0",
+        "-read_intervals", interval_spec,
         "-show_packets",
         "-show_entries", "packet=pts_time,flags",
         "-of", "csv=p=0",
         source_url
     ])
-    keyframes = [0.0]
+
+    new_kfs = set(cached)
+    new_kfs.add(0.0)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1458,14 +1565,103 @@ async def probe_keyframes(source_url: str, info_hash: str, file_idx: int = 0, ti
             if len(parts) >= 2 and "K" in parts[-1]:
                 try:
                     pts = float(parts[0])
-                    if pts > 0 and pts not in keyframes:
-                        keyframes.append(round(pts, 3))
+                    norm_pts = max(0.0, round(pts - c_start, 3))
+                    new_kfs.add(norm_pts)
+                except ValueError:
+                    pass
+        sorted_kfs = sorted(new_kfs)
+        if len(sorted_kfs) > len(cached):
+            save_cached_keyframes(info_hash, file_idx, sorted_kfs, container_start=c_start)
+        return sorted_kfs
+    except Exception:
+        pass
+    return cached or []
+
+
+async def probe_keyframes(
+    source_url: str,
+    info_hash: str,
+    file_idx: int = 0,
+    timeout: float = 8.0,
+    container_start: Optional[float] = None,
+) -> List[float]:
+    """
+    Probes source video keyframes using ffprobe packet flags and caches results [Phase 7 STRM-HIGH-05].
+    Normalizes keyframes to content time (pts_time - container_start, clamped >= 0) [R1].
+    Only persists keyframe list when probe completes without timeout [R2].
+    """
+    cached = load_cached_keyframes(info_hash, file_idx)
+    if cached is not None:
+        return cached
+
+    # Resolve container start time
+    c_start = 0.0
+    if container_start is not None:
+        if isinstance(container_start, dict):
+            c_start = float(container_start.get("start_time", 0.0))
+        else:
+            try:
+                c_start = float(container_start)
+            except (ValueError, TypeError):
+                c_start = 0.0
+    else:
+        c_start = await probe_container_start(source_url)
+    c_start = max(0.0, c_start)
+
+    ffprobe = shutil.which("ffprobe") or find_ffprobe() or "ffprobe"
+    cmd = [
+        ffprobe,
+        "-v", "quiet",
+    ]
+    if source_url.startswith("http"):
+        cmd.extend([
+            "-reconnect", "1",
+            "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "3",
+        ])
+    cmd.extend([
+        "-select_streams", "v:0",
+        "-show_packets",
+        "-show_entries", "packet=pts_time,flags",
+        "-of", "csv=p=0",
+        source_url
+    ])
+    keyframes = [0.0]
+    timed_out = False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            timed_out = True
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                stdout, _ = await proc.communicate()
+            except Exception:
+                stdout = b""
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
+            parts = line.strip().split(",")
+            if len(parts) >= 2 and "K" in parts[-1]:
+                try:
+                    pts = float(parts[0])
+                    norm_pts = max(0.0, round(pts - c_start, 3))
+                    if norm_pts not in keyframes:
+                        keyframes.append(norm_pts)
                 except ValueError:
                     pass
         keyframes.sort()
-        if len(keyframes) > 1:
-            save_cached_keyframes(info_hash, file_idx, keyframes)
-            return keyframes
+        # R2: only persist when probe completed without timeout
+        if not timed_out and len(keyframes) > 1:
+            save_cached_keyframes(info_hash, file_idx, keyframes, container_start=c_start)
+        return keyframes
     except Exception:
         pass
     return []
@@ -1495,6 +1691,8 @@ def generate_hls_manifest(
 
     if keyframes is None:
         keyframes = load_cached_keyframes(info_hash, file_idx)
+    elif isinstance(keyframes, dict):
+        keyframes = keyframes.get("keyframes")
 
     segments: List[tuple[float, float]] = []
 
