@@ -3168,6 +3168,7 @@ function parseVttOrSrtToCues(text) {
   const lines = norm.split('\n');
   const cues = [];
   const timeRegex = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})/;
+  const timeRegexAlt = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{2,3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{2,3})/;
 
   let curStart = null;
   let curEnd = null;
@@ -3186,7 +3187,7 @@ function parseVttOrSrtToCues(text) {
       continue;
     }
 
-    const match = line.match(timeRegex);
+    const match = line.match(timeRegex) || line.match(timeRegexAlt);
     if (match) {
       if (curStart !== null && curText.length > 0) {
         const cleanDia = curText.join('\n').replace(/\{[^}]*\}/g, '').trim();
@@ -3198,12 +3199,12 @@ function parseVttOrSrtToCues(text) {
       const h1 = parseInt(match[1] || '0', 10);
       const m1 = parseInt(match[2], 10);
       const s1 = parseInt(match[3], 10);
-      const ms1 = parseInt(match[4], 10);
+      const ms1 = parseInt((match[4] || '').padEnd(3, '0'), 10);
 
       const h2 = parseInt(match[5] || '0', 10);
       const m2 = parseInt(match[6], 10);
       const s2 = parseInt(match[7], 10);
-      const ms2 = parseInt(match[8], 10);
+      const ms2 = parseInt((match[8] || '').padEnd(3, '0'), 10);
 
       curStart = h1 * 3600 + m1 * 60 + s1 + ms1 / 1000;
       curEnd = h2 * 3600 + m2 * 60 + s2 + ms2 / 1000;
@@ -3229,6 +3230,7 @@ function parseVttOrSrtToCues(text) {
     }
   }
 
+  cues.sort((a, b) => a.start - b.start);
   return cues;
 }
 
@@ -3312,6 +3314,18 @@ function subtitleSyncStorageKeyFor(active, track) {
 
 function subtitleSyncStorageKey() {
   return subtitleSyncStorageKeyFor(state.discover.activeStream, state.subtitles.activeTrack);
+}
+
+// Master switch for automatic subtitle timing changes (saved-offset restore at
+// load, post-seek micro-sync). Default OFF: cues always play as authored by the
+// container/provider until the user syncs manually or enables this in Settings.
+function isSubtitleAutoSyncEnabled() {
+  try {
+    const s = JSON.parse(localStorage.getItem('evo_advanced_settings') || '{}');
+    return s.subs_autosync === true;
+  } catch (_) {
+    return false;
+  }
 }
 
 function loadSavedSubtitleSync(track) {
@@ -3398,7 +3412,7 @@ function queryActiveSubtitleCues(cues, effectiveTime) {
   for (let i = rightIdx; i >= 0; i--) {
     const c = cues[i];
     const win = subtitleCueWindow(c);
-    if (effectiveTime > win.end + 15.0) break;
+    if (effectiveTime > win.end + 30.0 && effectiveTime > win.start + 30.0) break;
     if (effectiveTime >= win.start && effectiveTime <= win.end) {
       matched.push(c);
     }
@@ -3573,7 +3587,7 @@ function renderCuesToVideo(rawCues, offsetSeconds) {
   const video = document.getElementById('evo-video-player');
   if (!video) return;
 
-  state.subtitles.rawCues = rawCues || [];
+  state.subtitles.rawCues = (rawCues || []).slice().sort((a, b) => a.start - b.start);
   state.subtitles.currentOffset = offsetSeconds || 0;
 
   // Clear any native HTML5 track elements so browser does not paint duplicate native cues
@@ -4575,14 +4589,22 @@ async function applySubtitle(subItem, isAuto = false) {
     state.subtitles.activeSubName = subItem.release_name || `${subItem.language} (${subItem.provider})`;
     state.subtitles.activeLang = subItem.lang_code || 'en';
 
-    // Restore a previously saved offset/drift for this exact media + track.
-    // Container-embedded tracks normally need no correction, but an explicit
-    // earlier adjustment is restored just like online subtitles.
+    // Automatic timing changes are opt-in (Settings → Subtitle Auto-Sync).
+    // When disabled, cues play as authored; a previously saved correction is
+    // only announced, never applied silently.
     const savedSync = loadSavedSubtitleSync(subItem);
-    let restoredOffset = savedSync && Number.isFinite(savedSync.offset) ? savedSync.offset : 0.0;
-    const restoredDrift = (savedSync && savedSync.driftModel && typeof savedSync.driftModel === 'object')
+    let restoredOffset = 0.0;
+    let savedSyncNote = '';
+    const savedOffsetValid = savedSync && Number.isFinite(savedSync.offset) && Math.abs(savedSync.offset) > 0.05;
+    if (savedOffsetValid && isSubtitleAutoSyncEnabled()) {
+      restoredOffset = savedSync.offset;
+    } else if (savedOffsetValid) {
+      const sSign = savedSync.offset >= 0 ? '+' : '';
+      savedSyncNote = ` · saved sync ${sSign}${savedSync.offset.toFixed(2)}s available (Subtitles menu)`;
+    }
+    const restoredDrift = (isSubtitleAutoSyncEnabled() && savedSync && savedSync.driftModel && typeof savedSync.driftModel === 'object')
       ? savedSync.driftModel
-      : (savedSync && Number.isFinite(savedSync.driftA) && Math.abs(savedSync.driftA) > 0.00005
+      : (isSubtitleAutoSyncEnabled() && savedSync && Number.isFinite(savedSync.driftA) && Math.abs(savedSync.driftA) > 0.00005
           ? { model: 'linear', params: [savedSync.driftA, 0] }
           : null);
     state.subtitles.driftModel = restoredDrift;
@@ -4615,7 +4637,7 @@ async function applySubtitle(subItem, isAuto = false) {
       const isStartSilent = firstCue && firstCue.start > 5;
       statusPill.innerHTML = `
         <i class="fa-solid fa-circle-check text-green"></i>
-        <span>${subItem.language || 'English'} Subtitles Active (${cues.length} lines${isStartSilent ? ` · 1st dialogue at ${firstMmSs} ⏩ Click to Jump` : ''})</span>
+        <span>${subItem.language || 'English'} Subtitles Active (${cues.length} lines${isStartSilent ? ` · 1st dialogue at ${firstMmSs} ⏩ Click to Jump` : ''}${savedSyncNote})</span>
       `;
       statusPill.classList.remove('hidden');
       clearTimeout(window._subPillTimer);
@@ -5322,6 +5344,9 @@ function loadAllSettings() {
   const skipintroChk = document.getElementById('settings-toggle-skipintro');
   if (skipintroChk) skipintroChk.checked = s.skip_intro !== false;
 
+  const subsAutosyncChk = document.getElementById('settings-toggle-subs-autosync');
+  if (subsAutosyncChk) subsAutosyncChk.checked = s.subs_autosync === true;
+
   const shelfContinueChk = document.getElementById('settings-toggle-shelf-continue');
   if (shelfContinueChk) shelfContinueChk.checked = s.shelf_continue !== false && localStorage.getItem('evoscrapper_setting_show_continue') !== '0';
 
@@ -5397,6 +5422,7 @@ function saveAndApplyAllSettings() {
   const ambilightBlur = parseInt(document.getElementById('settings-ambilight-blur-input')?.value || '45', 10);
   const autoplay = document.getElementById('settings-toggle-autoplay')?.checked ?? true;
   const skipintro = document.getElementById('settings-toggle-skipintro')?.checked ?? true;
+  const subsAutosync = document.getElementById('settings-toggle-subs-autosync')?.checked ?? false;
   const autopurge = document.getElementById('settings-toggle-autopurge')?.checked ?? false;
 
   const config = {
@@ -5416,6 +5442,7 @@ function saveAndApplyAllSettings() {
     ambilight_blur: ambilightBlur,
     autoplay_next: autoplay,
     skip_intro: skipintro,
+    subs_autosync: subsAutosync,
     auto_purge_cache: autopurge,
     shelf_continue: document.getElementById('settings-toggle-shelf-continue')?.checked ?? true,
     shelf_bookmarks: document.getElementById('settings-toggle-shelf-bookmarks')?.checked ?? true
@@ -8843,6 +8870,7 @@ function fetchKeyframes(infoHash, fileIdx, magnet) {
 function triggerSeekMicroSync(seekTime) {
   const active = state.discover.activeStream;
   const cues = state.subtitles.rawCues;
+  if (!isSubtitleAutoSyncEnabled()) return;
   if (!active || !active.infoHash || !cues || cues.length === 0) return;
   if (state.subtitles._seekSyncDebounce) clearTimeout(state.subtitles._seekSyncDebounce);
   state.subtitles._seekSyncDebounce = setTimeout(async () => {

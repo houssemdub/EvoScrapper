@@ -1784,6 +1784,55 @@ def generate_hls_manifest(
     return "\n".join(lines)
 
 
+def format_vtt_timestamp(seconds: float) -> str:
+    total = max(0.0, float(seconds))
+    h = int(total // 3600)
+    m = int((total % 3600) // 60)
+    s = int(total % 60)
+    ms = int(round((total - int(total)) * 1000))
+    if ms >= 1000:
+        s += 1
+        ms -= 1000
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+    return f"{m:02d}:{s:02d}.{ms:03d}"
+
+
+def shift_vtt_timestamps(vtt_text: str, offset_seconds: float) -> str:
+    """
+    Normalizes WebVTT cue timestamps by subtracting offset_seconds (e.g. container start_time),
+    clamping cue start and end times to >= 0.0.
+    Preserves WebVTT cue settings/trailers (e.g. 'line:90% position:50%').
+    """
+    if not vtt_text or abs(offset_seconds) < 0.001:
+        return vtt_text
+    time_regex = re.compile(
+        r"^\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{2,3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{2,3})(.*)$"
+    )
+    lines = vtt_text.splitlines()
+    out = []
+    for line in lines:
+        m = time_regex.match(line)
+        if m:
+            h1 = int(m.group(1) or 0)
+            m1 = int(m.group(2))
+            s1 = int(m.group(3))
+            ms1 = int(m.group(4).ljust(3, "0"))
+            t1 = max(0.0, (h1 * 3600 + m1 * 60 + s1 + ms1 / 1000.0) - offset_seconds)
+
+            h2 = int(m.group(5) or 0)
+            m2 = int(m.group(6))
+            s2 = int(m.group(7))
+            ms2 = int(m.group(8).ljust(3, "0"))
+            t2 = max(0.0, (h2 * 3600 + m2 * 60 + s2 + ms2 / 1000.0) - offset_seconds)
+
+            trailer = m.group(9) or ""
+            out.append(f"{format_vtt_timestamp(t1)} --> {format_vtt_timestamp(t2)}{trailer}")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def sanitize_webvtt_content(vtt_text: str) -> str:
     """
     Cleans WebVTT content converted from Matroska ASS/SSA subtitles.
@@ -1896,7 +1945,12 @@ def sub_vtt_job_running(key: str) -> bool:
     return task is not None and not task.done()
 
 
-def start_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0) -> bool:
+def start_sub_vtt_extraction(
+    key: str,
+    source_url: str,
+    sub_index: int = 0,
+    container_start: Optional[float] = None,
+) -> bool:
     """Launches a single-flight background extraction job. Returns False if one is already running."""
     if sub_vtt_job_running(key):
         return False
@@ -1906,13 +1960,27 @@ def start_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0) -> b
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = asyncio.get_event_loop()
-    _sub_vtt_jobs[key] = loop.create_task(_run_sub_vtt_extraction(key, source_url, sub_index))
+    _sub_vtt_jobs[key] = loop.create_task(
+        _run_sub_vtt_extraction(key, source_url, sub_index, container_start=container_start)
+    )
     return True
 
 
-async def _run_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0) -> None:
+async def _run_sub_vtt_extraction(
+    key: str,
+    source_url: str,
+    sub_index: int = 0,
+    container_start: Optional[float] = None,
+) -> None:
     try:
-        vtt = await extract_embedded_subtitle_vtt(source_url, sub_index, timeout=SUB_EXTRACT_TIMEOUT)
+        try:
+            vtt = await extract_embedded_subtitle_vtt(
+                source_url, sub_index, timeout=SUB_EXTRACT_TIMEOUT, container_start=container_start
+            )
+        except TypeError:
+            vtt = await extract_embedded_subtitle_vtt(
+                source_url, sub_index, timeout=SUB_EXTRACT_TIMEOUT
+            )
         stored = store_cached_sub_vtt(key, vtt)
         if not stored:
             _sub_vtt_failed[key] = vtt or "WEBVTT\n\nNOTE Empty or unsupported embedded subtitle track\n"
@@ -1922,11 +1990,18 @@ async def _run_sub_vtt_extraction(key: str, source_url: str, sub_index: int = 0)
         _sub_vtt_jobs.pop(key, None)
 
 
-async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int = 0, timeout: float = 8.0, duration: Optional[float] = None) -> str:
+async def extract_embedded_subtitle_vtt(
+    source_url: str,
+    sub_stream_index: int = 0,
+    timeout: float = 8.0,
+    duration: Optional[float] = None,
+    container_start: Optional[float] = None,
+) -> str:
     """
     Extracts an embedded subtitle stream from MKV/MP4 using FFmpeg and converts it to WebVTT format on stdout.
     Background jobs pass a long timeout (SUB_EXTRACT_TIMEOUT); direct callers keep the legacy 8s budget.
     If duration is specified, only extracts subtitles up to that timestamp (for fast preview).
+    Normalizes cue timestamps to content time by subtracting container_start (probed if not provided).
     """
     ffmpeg_bin = find_ffmpeg()
     if not ffmpeg_bin:
@@ -1957,6 +2032,12 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
         cmd.extend(["-t", f"{duration:.1f}"])
     cmd.append("-")
 
+    if container_start is None:
+        try:
+            container_start = await probe_container_start(source_url, timeout=3.0)
+        except Exception:
+            container_start = 0.0
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1975,7 +2056,10 @@ async def extract_embedded_subtitle_vtt(source_url: str, sub_stream_index: int =
         text = stdout.decode("utf-8", errors="replace") if stdout else ""
         err_text = stderr.decode("utf-8", errors="replace").lower() if stderr else ""
         if text.strip() and ("-->" in text or "WEBVTT" in text):
-            return sanitize_webvtt_content(text)
+            sanitized = sanitize_webvtt_content(text)
+            if container_start and container_start > 0:
+                sanitized = shift_vtt_timestamps(sanitized, container_start)
+            return sanitized
         if "bitmap" in err_text or "pgs" in err_text:
             return "WEBVTT\n\nNOTE Codec: hdmv_pgs (Bitmap PGS Subtitle)\n"
         return "WEBVTT\n\nNOTE Empty or unsupported embedded subtitle track\n"

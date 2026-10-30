@@ -390,3 +390,57 @@ def test_cache_version_invalidates_legacy_caches(tmp_path, monkeypatch):
     assert data["version"] == 2
     assert data["container_start"] == 1.4
 
+
+
+def test_shift_vtt_timestamps_normalizes_to_content_time():
+    """Contract: shift_vtt_timestamps subtracts container_start, clamps to 0.0, and preserves cue settings."""
+    from core.transmuxer import shift_vtt_timestamps
+
+    raw_vtt = """WEBVTT
+
+00:00:11.400 --> 00:00:13.400
+Hello World
+
+00:01:05.50 --> 00:01:08.50 line:90% position:50%
+Second line
+"""
+    shifted = shift_vtt_timestamps(raw_vtt, 1.4)
+    assert "00:10.000 --> 00:12.000" in shifted or "00:00:10.000 --> 00:00:12.000" in shifted
+    assert "Hello World" in shifted
+    assert "line:90% position:50%" in shifted
+    # Check clamping to 0.0 when start < offset
+    early_vtt = "WEBVTT\n\n00:00:00.500 --> 00:00:02.000\nEarly cue\n"
+    shifted_early = shift_vtt_timestamps(early_vtt, 1.4)
+    assert "00:00.000 --> 00:00.600" in shifted_early or "00:00:00.000 --> 00:00:00.600" in shifted_early
+
+
+def test_extract_embedded_subtitles_subtracts_container_start(monkeypatch):
+    """Contract: extract_embedded_subtitle_vtt normalizes raw container timestamps by subtracting container_start."""
+    import asyncio
+    from core import transmuxer as tx
+
+    raw_ffmpeg_vtt = b"""WEBVTT
+
+00:00:11.400 --> 00:00:13.400
+Dialogue at PTS 11.4
+"""
+
+    async def fake_subprocess_exec(*args, **kwargs):
+        class FakeProc:
+            returncode = 0
+            async def communicate(self):
+                return raw_ffmpeg_vtt, b""
+            def kill(self):
+                pass
+        return FakeProc()
+
+    async def fake_probe_container_start(url, timeout=3.0):
+        return 1.4
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_subprocess_exec)
+    monkeypatch.setattr(tx, "probe_container_start", fake_probe_container_start)
+
+    result = asyncio.run(tx.extract_embedded_subtitle_vtt("http://fake/stream", sub_stream_index=0))
+    # 11.4 - 1.4 = 10.0
+    assert "00:10.000 --> 00:12.000" in result or "00:00:10.000 --> 00:00:12.000" in result
+    assert "Dialogue at PTS 11.4" in result

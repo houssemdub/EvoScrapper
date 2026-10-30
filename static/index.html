@@ -2207,6 +2207,13 @@
                 </div>
                 <input type="checkbox" id="settings-toggle-skipintro" checked onchange="handleSettingChange('skip_intro', this.checked)">
               </div>
+              <div class="settings-row">
+                <div>
+                  <div class="mono font-bold text-xs text-primary">Subtitle Auto-Sync (Apply Saved &amp; Seek Micro-Sync)</div>
+                  <div class="settings-field-desc">Off (default): subtitles always play as authored; sync corrections you dial are saved per movie but never applied automatically. On: saved offsets are restored at load and seeks re-align automatically.</div>
+                </div>
+                <input type="checkbox" id="settings-toggle-subs-autosync" onchange="handleSettingChange('subs_autosync', this.checked)">
+              </div>
             </div>
 
             <div class="settings-card">

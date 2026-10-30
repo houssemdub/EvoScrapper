@@ -322,20 +322,21 @@ async def stream_transmuxed_torrent(
     if request.method == "HEAD":
         return Response(status_code=200, media_type="video/mp4", headers=resp_hdrs)
 
-    if snapped_start and snapped_start > 0:
-        dur_val = duration if (duration and isinstance(duration, (int, float)) and duration > 0) else None
-        asyncio.create_task(
-            warm_window(
-                info_hash,
-                file_idx=file_idx,
-                start_time=snapped_start,
-                duration=dur_val,
-                buffer_mb=b_mb,
-            )
+    target_start = snapped_start if snapped_start is not None else (start_time if start_time is not None else 0.0)
+    dur_val = duration if (duration and isinstance(duration, (int, float)) and duration > 0) else None
+    asyncio.create_task(
+        warm_window(
+            info_hash,
+            file_idx=file_idx,
+            start_time=target_start,
+            duration=dur_val,
+            buffer_mb=b_mb,
         )
+    )
+    if target_start > 0:
         # P1/P3: every seek is an anonymous observation for the collective
         # seek heatmap; the resulting hotspots feed back as engine hints.
-        asyncio.create_task(_capture_seek_event(info_hash, snapped_start))
+        asyncio.create_task(_capture_seek_event(info_hash, target_start))
 
     generator = stream_transmuxed_video(
         source_url_or_path=source_url,
@@ -535,7 +536,7 @@ async def get_embedded_subtitles(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
         )
 
-    cache_key = f"vtt|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
+    cache_key = f"vtt_v2|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
     cached = load_cached_sub_vtt(cache_key)
     if cached:
         return Response(
@@ -720,7 +721,7 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
             ref_tuples = [(c.start, c.end) for c in req.reference_cues]
     elif req.reference_sub_idx is not None:
         try:
-            cache_key = f"vtt|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
+            cache_key = f"vtt_v2|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
             vtt = load_cached_sub_vtt(cache_key)
             if not vtt:
                 vtt = await extract_embedded_subtitle_vtt(
@@ -844,7 +845,7 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
     # Otherwise extract the embedded reference track (cached VTT first).
     if ref_tuples is None and req.reference_sub_idx is not None:
         try:
-            cache_key = f"vtt|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
+            cache_key = f"vtt_v2|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
             vtt = load_cached_sub_vtt(cache_key)
             if not vtt:
                 vtt = await extract_embedded_subtitle_vtt(
