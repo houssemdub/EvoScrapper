@@ -536,7 +536,7 @@ async def get_embedded_subtitles(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
         )
 
-    cache_key = f"vtt_v2|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
+    cache_key = f"vtt_v3|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
     cached = load_cached_sub_vtt(cache_key)
     if cached:
         return Response(
@@ -721,7 +721,7 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
             ref_tuples = [(c.start, c.end) for c in req.reference_cues]
     elif req.reference_sub_idx is not None:
         try:
-            cache_key = f"vtt_v2|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
+            cache_key = f"vtt_v3|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
             vtt = load_cached_sub_vtt(cache_key)
             if not vtt:
                 vtt = await extract_embedded_subtitle_vtt(
@@ -845,7 +845,7 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
     # Otherwise extract the embedded reference track (cached VTT first).
     if ref_tuples is None and req.reference_sub_idx is not None:
         try:
-            cache_key = f"vtt_v2|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
+            cache_key = f"vtt_v3|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
             vtt = load_cached_sub_vtt(cache_key)
             if not vtt:
                 vtt = await extract_embedded_subtitle_vtt(

@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Subtitle Desync & Buffer Playback Pipeline Hardening
 
 #### Fixed
-- **Embedded Subtitle Normalization to Content Time (`core/transmuxer.py`)**: Subtitle cues extracted from container streams (MKV, TS, Blu-ray remuxes) are now shifted by `-container_start` (`shift_vtt_timestamps`) into content time matching the video player timeline and FFmpeg's `-avoid_negative_ts make_zero` fMP4 output. Eliminates the persistent subtitle delay on containers with non-zero start timestamps.
-- **Embedded Subtitle Cache Versioning (`routers/stream.py`)**: Bumped cache keys to `vtt_v2|...` so legacy on-disk caches with unnormalized container PTS timestamps are discarded and automatically regenerated with content-time alignment.
+- **Embedded Subtitle Content-Time Preservation (`core/transmuxer.py`)**: FFmpeg's default WebVTT extraction already emits cue times relative to the container start, matching the player timeline and `-avoid_negative_ts make_zero` fMP4 output. Removed the extra `start_time` subtraction that made cues play early on TS/remux sources with a non-zero container timestamp (and the extra ffprobe call it required).
+- **Embedded Subtitle Cache Versioning (`routers/stream.py`)**: Bumped cache keys to `vtt_v3|...` so on-disk caches written with double-subtracted timestamps are discarded and automatically regenerated with content-time alignment.
 - **Transmux Initial Playback Swarm Warming (`routers/stream.py`)**: Scheduled `warm_window` on cold start of transmux playback (`start_time=0.0` or None) rather than only on non-zero seeks, aligning torrent engine sliding windows and piece priorities immediately upon stream load.
 - **Client Cue Millisecond Regex & Sorting Integrity (`static/app.js`)**: Updated `parseVttOrSrtToCues` to parse both 2-digit and 3-digit millisecond timestamps without dropping cues. Enforced strict start-time sorting on parsed and rendered cue lists to ensure binary search in `queryActiveSubtitleCues` never misses dialogue.
 
