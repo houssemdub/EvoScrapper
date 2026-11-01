@@ -165,15 +165,28 @@ async def stream_raw_torrent(
     b_mb = buffer_mb if isinstance(buffer_mb, int) else None
     target_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode, buffer_mb=b_mb)
 
-    # Direct-daemon 307 redirect for localhost clients [Phase 4].
+    # Direct-daemon 307 redirect for localhost and private LAN clients [Phase 4 / FLAW-11].
     # Default on: the daemon is loopback-bound, Host-validated, and the URL
     # carries a short-lived HMAC signature, so the proxy hop is pure overhead.
     client_host = request.client.host if request.client else ""
     req_host = request.headers.get("host", "").split(":")[0].lower()
-    is_localhost = client_host in ("127.0.0.1", "::1", "localhost", "testclient") or req_host in ("127.0.0.1", "localhost")
-    if is_localhost and os.getenv("EVO_DIRECT_RANGE", "true").lower() in ("1", "true", "yes"):
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(url=target_url, status_code=307)
+    is_loopback = client_host in ("127.0.0.1", "::1", "localhost", "testclient") or req_host in ("127.0.0.1", "localhost")
+    allow_direct = os.getenv("EVO_DIRECT_RANGE", "true").lower() in ("1", "true", "yes")
+
+    if allow_direct:
+        if is_loopback:
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=target_url, status_code=307)
+        if os.getenv("EVO_DIRECT_RANGE_LAN", "false").lower() in ("1", "true", "yes"):
+            try:
+                import ipaddress
+                ip = ipaddress.ip_address(client_host)
+                if ip.is_private:
+                    from fastapi.responses import RedirectResponse
+                    lan_target = target_url.replace("127.0.0.1", req_host).replace("localhost", req_host)
+                    return RedirectResponse(url=lan_target, status_code=307)
+            except (ValueError, Exception):
+                pass
 
     req_headers = dict(streamer_auth_headers())
     range_header = request.headers.get("Range")

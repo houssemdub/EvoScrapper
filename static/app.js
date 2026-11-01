@@ -108,6 +108,75 @@ const state = {
   },
 };
 
+// ── High-Performance DOM Query Cache [FLAW-12 / Phase 3] ────────────────────
+const _domCache = new Map();
+function getCachedElement(id) {
+  let el = _domCache.get(id);
+  if (!el || !document.contains(el)) {
+    el = document.getElementById(id);
+    if (el) _domCache.set(id, el);
+  }
+  return el;
+}
+
+// ── Unified Player Timer & Lifecycle Manager [FLAW-12 / Phase 3] ────────────
+const TimerManager = {
+  _timers: new Set(),
+  _intervals: new Set(),
+  _rafs: new Set(),
+
+  setTimeout(fn, delay) {
+    const id = window.setTimeout(() => {
+      TimerManager._timers.delete(id);
+      fn();
+    }, delay);
+    TimerManager._timers.add(id);
+    return id;
+  },
+
+  clearTimeout(id) {
+    if (!id) return;
+    TimerManager._timers.delete(id);
+    window.clearTimeout(id);
+  },
+
+  setInterval(fn, delay) {
+    const id = window.setInterval(fn, delay);
+    TimerManager._intervals.add(id);
+    return id;
+  },
+
+  clearInterval(id) {
+    if (!id) return;
+    TimerManager._intervals.delete(id);
+    window.clearInterval(id);
+  },
+
+  requestAnimationFrame(fn) {
+    const id = window.requestAnimationFrame((ts) => {
+      TimerManager._rafs.delete(id);
+      fn(ts);
+    });
+    TimerManager._rafs.add(id);
+    return id;
+  },
+
+  cancelAnimationFrame(id) {
+    if (!id) return;
+    TimerManager._rafs.delete(id);
+    window.cancelAnimationFrame(id);
+  },
+
+  clearAll() {
+    TimerManager._timers.forEach((id) => window.clearTimeout(id));
+    TimerManager._timers.clear();
+    TimerManager._intervals.forEach((id) => window.clearInterval(id));
+    TimerManager._intervals.clear();
+    TimerManager._rafs.forEach((id) => window.cancelAnimationFrame(id));
+    TimerManager._rafs.clear();
+  }
+};
+
 // ── Browser Session Authentication ──────────────────────────────────────────
 // Media elements and EventSource cannot send custom headers. Exchange the API
 // key once for an HttpOnly cookie so every same-origin request authenticates.
@@ -6453,7 +6522,7 @@ function initPlayerTimelineControls() {
 }
 
 function updatePlayerTimeline() {
-  const video = document.getElementById('evo-video-player');
+  const video = getCachedElement('evo-video-player');
   const active = state.discover.activeStream;
   if (!video || !active) return;
   if (active.isDraggingTimeline) return;
@@ -6493,11 +6562,11 @@ function updatePlayerTimeline() {
 
   // Update progress bar
   const pct = totalDuration > 0 ? Math.min(100, Math.max(0, (currentTotalTime / totalDuration) * 100)) : 0;
-  const progressEl = document.getElementById('player-progress-bar');
+  const progressEl = getCachedElement('player-progress-bar');
   if (progressEl) progressEl.style.width = `${pct}%`;
 
   // Update buffered bar
-  const bufferedEl = document.getElementById('player-buffered-bar');
+  const bufferedEl = getCachedElement('player-buffered-bar');
   if (bufferedEl && video.buffered.length > 0) {
     try {
       const end = video.buffered.end(video.buffered.length - 1);
@@ -6508,8 +6577,8 @@ function updatePlayerTimeline() {
   }
 
   // Update time display labels continuously on each tick
-  const curEl = document.getElementById('player-cur-time');
-  const totalEl = document.getElementById('player-total-time');
+  const curEl = getCachedElement('player-cur-time');
+  const totalEl = getCachedElement('player-total-time');
   if (curEl) {
     if (active.showRemainingTime && totalDuration > 0) {
       const rem = Math.max(0, totalDuration - currentTotalTime);
@@ -9904,6 +9973,7 @@ function closePlayerModal() {
   }
 
   stopPlayerTicker();
+  TimerManager.clearAll();
   // P8/P5 cleanup: stop party polling and ladder watch
   if (state.discover._partyTimer) { clearInterval(state.discover._partyTimer); state.discover._partyTimer = null; }
   if (state.discover._ladderTimer) { clearInterval(state.discover._ladderTimer); state.discover._ladderTimer = null; }

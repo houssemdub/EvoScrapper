@@ -1243,9 +1243,17 @@ async def generate_sprite_sheet(
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
-        await asyncio.wait_for(proc.communicate(), timeout=180.0)
+        try:
+            waiter = proc.wait() if hasattr(proc, "wait") and callable(getattr(proc, "wait", None)) else proc.communicate()
+            await asyncio.wait_for(waiter, timeout=180.0)
+        except (asyncio.TimeoutError, TimeoutError):
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return None
     except Exception:
         return None
     if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:

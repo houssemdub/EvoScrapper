@@ -1,4 +1,4 @@
-# EvoScrapper REST API Documentation (v2.5.0)
+# EvoScrapper REST API Documentation (v2.6.0)
 
 EvoScrapper exposes a high-performance REST and Server-Sent Events (SSE) API for torrent indexing, subtitle extraction, media discovery, debrid unrestriction, and sequential P2P streaming.
 

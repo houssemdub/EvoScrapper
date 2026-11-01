@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-01
+
+### Evolution Map Hardening: Dynamic Proxy Secrets, Subprocess Memory Bounds, LAN Range Redirects & DOM Caching
+
+#### Security
+- **Dynamic Cryptographic Debrid Proxy Secret (`core/debrid/proxy.py`)**: Replaced static fallback with `secrets.token_hex(32)` generation when `DEBRID_PROXY_SECRET` is unset or set to the default placeholder. Eliminates open relay vulnerabilities across remote instances and generates isolated 64-character hex tokens on boot (FLAW-08).
+
+#### Performance & Resource Management
+- **Memory-Bounded Subprocess Piping (`core/transmuxer.py`)**: Converted `generate_sprite_sheet` subprocess execution to use `stdout=asyncio.subprocess.DEVNULL` and `stderr=asyncio.subprocess.DEVNULL` paired with `proc.wait()`. Eliminates unbounded memory buffering across 180s thumbnail renders and handles custom test process mocks seamlessly (FLAW-09).
+- **Frontend DOM Element Caching (`static/app.js`)**: Implemented `_domCache` Map and `getCachedElement(id)` utility with DOM detachment checks (`document.contains`). Eliminates repetitive `document.getElementById` queries inside 60fps scrubber and `ontimeupdate` event loops (FLAW-12).
+- **Player Lifecycle Timer Cleanup (`static/app.js`)**: Centralized timer registry (`TimerManager`) tracking `setTimeout`, `setInterval`, and `requestAnimationFrame`. Automatically executes `TimerManager.clearAll()` when the player modal closes (`closePlayerModal`), preventing orphaned background timers from mutating state or leaking memory (Phase 3).
+
+#### Networking
+- **Private LAN & Docker Direct Range Redirect Bypass (`routers/stream.py`)**: Expanded direct 307 range redirect support to RFC 1918 private subnets and Docker container gateways via `EVO_DIRECT_RANGE_LAN`. Automatically rewrites redirect target hosts to match client request host headers, bypassing the Python loopback proxy hop on local network clients (FLAW-11).
+
+#### Testing & Infrastructure
+- **Comprehensive Regression Hardening (`tests/test_evolution_map_hardening.py`)**: Added test coverage for dynamic proxy secrets, DEVNULL subprocess lifecycle, direct LAN 307 redirects, and frontend DOM caching contracts. Full test suite passes 100% across 548 tests.
+
 ## [2.5.0] - 2026-11-01
 
 ### Evolution Map Hardening: Concurrency Mutex, Fast-Path Resolver & Swarm Bandwidth Shield

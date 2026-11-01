@@ -9,7 +9,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-3776AB.svg?style=flat&logo=python&logoColor=white)](https://python.org)
 [![WebTorrent](https://img.shields.io/badge/WebTorrent-Node.js%20Daemon-brightgreen.svg?style=flat&logo=webtorrent)](https://webtorrent.io)
-[![Tests](https://img.shields.io/badge/Tests-544%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-548%20Passing%20(100%25)-success.svg?style=flat&logo=pytest)](tests/)
 [![Spec-Driven](https://img.shields.io/badge/Architecture-Contract--First%20(SPEC.md)-informational.svg)](SPEC.md)
 [![Security Audit](https://img.shields.io/badge/Security%20Audit-28%20Flaws%20Remediated-blueviolet.svg?style=flat)](FLAWS.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

@@ -129,10 +129,14 @@ class TestSpriteSheets:
             class Proc:
                 returncode = 0
 
-                async def communicate(self):
+                async def wait(self):
                     sprites_dir.mkdir(parents=True, exist_ok=True)
                     with open(out_path, "wb") as f:
                         f.write(b"jpegdata")
+                    return 0
+
+                async def communicate(self):
+                    await self.wait()
                     return b"", b""
 
             return Proc()

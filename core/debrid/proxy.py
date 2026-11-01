@@ -2,12 +2,27 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
 import time
 from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 import httpx
 
 from config import settings
 from core.security import fetch_public_url
+
+
+_RUNTIME_PROXY_SECRET: Optional[str] = None
+
+
+def get_debrid_proxy_secret() -> str:
+    """Returns configured secret or generates a cryptographically random secret on first access [FLAW-08]."""
+    global _RUNTIME_PROXY_SECRET
+    configured = getattr(settings, "DEBRID_PROXY_SECRET", "")
+    if configured and configured != "evoscrapper-debrid-proxy-secret-key":
+        return configured
+    if _RUNTIME_PROXY_SECRET is None:
+        _RUNTIME_PROXY_SECRET = secrets.token_hex(32)
+    return _RUNTIME_PROXY_SECRET
 
 
 _shared_client: Optional[httpx.AsyncClient] = None
@@ -42,7 +57,7 @@ class DebridStreamProxy:
     """
 
     def __init__(self, secret_key: Optional[str] = None):
-        self.secret_key = (secret_key or getattr(settings, "DEBRID_PROXY_SECRET", "evoscrapper-debrid-proxy-secret-key")).encode("utf-8")
+        self.secret_key = (secret_key or get_debrid_proxy_secret()).encode("utf-8")
 
     def generate_token(self, upstream_url: str, filename: Optional[str] = None, expires_in: int = 86400) -> str:
         """
