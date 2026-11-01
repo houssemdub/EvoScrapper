@@ -184,6 +184,13 @@ def compute_stream_score(item: TorrentItem, is_exact_ep: bool = False) -> float:
     # Swarm health bonus (capped to avoid drowning out quality signals)
     score += min(item.seeders, 200) * 0.4
 
+    if item.seeders == 0:
+        score -= 80.0
+    elif item.seeders < 3:
+        score -= 50.0
+    elif item.seeders < 5:
+        score -= 25.0
+
     # High-bitrate penalty when the swarm is thin: a 4K REMUX (~40 Mbps) needs
     # at least ~5 MB/s of sustained peer throughput.  With fewer than 5 good
     # seeders there is a high risk of buffer stalls that break A/V and subtitle
@@ -198,11 +205,11 @@ def compute_stream_score(item: TorrentItem, is_exact_ep: bool = False) -> float:
     _medium_high_bitrate = (
         "1080" in res and ("remux" in raw or "bluray" in src or "bdrip" in src)
     )
-    if _high_bitrate and item.seeders < 5:
+    if _high_bitrate and item.seeders < 8:
         score -= 60.0   # barely-seeded 4K REMUX → almost unplayable on P2P
     elif _high_bitrate and item.seeders < 15:
         score -= 25.0   # thin swarm for heavy bitrate
-    elif _medium_high_bitrate and item.seeders < 3:
+    elif _medium_high_bitrate and item.seeders < 5:
         score -= 20.0
 
     if is_exact_ep:
@@ -260,7 +267,7 @@ def parse_torrentio_stream(s: dict, season: Optional[int] = None, episode: Optio
             break
 
     seeds = 0
-    m_seeds = re.search(r"👤\s*(\d+)", meta_line)
+    m_seeds = re.search(r"[👤👥]\s*(\d+)", meta_line) or re.search(r"\b(?:seeds?|s):\s*(\d+)\b", meta_line, re.I)
     if m_seeds:
         seeds = int(m_seeds.group(1))
 
@@ -370,6 +377,28 @@ def parse_torrentio_stream(s: dict, season: Optional[int] = None, episode: Optio
     base_score += min(seeds, 200) * 0.4
     if episode is not None:
         base_score += 40.0
+
+    # Swarm health & bitrate penalties (harmonized with compute_stream_score)
+    _high_bitrate = (
+        ("2160" in quality or "4k" in quality.lower())
+        and ("remux" in raw_lower or "bluray" in raw_lower or "bdrip" in raw_lower)
+    )
+    _medium_high_bitrate = (
+        "1080" in quality and ("remux" in raw_lower or "bluray" in raw_lower or "bdrip" in raw_lower)
+    )
+    if seeds == 0:
+        base_score -= 80.0
+    elif seeds < 3:
+        base_score -= 50.0
+    elif seeds < 5:
+        base_score -= 25.0
+
+    if _high_bitrate and seeds < 8:
+        base_score -= 60.0
+    elif _high_bitrate and seeds < 15:
+        base_score -= 25.0
+    elif _medium_high_bitrate and seeds < 5:
+        base_score -= 20.0
 
     return StreamItem(
         name=badge_name,

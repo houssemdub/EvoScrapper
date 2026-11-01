@@ -8632,12 +8632,32 @@ let playerBufferingInterval = null;
 let playerBufferingStartTime = 0;
 let _hudShowDebounceTimer = null;
 let _hudMinDisplayUntil = 0;
+let _isInitialPrebuffering = false;
+let _prebufferStartTime = 0;
+
+function getPlayerBufferAheadSec() {
+  const video = document.getElementById('evo-video-player');
+  if (!video || !video.buffered || video.buffered.length === 0) return 0;
+  const cur = video.currentTime || 0;
+  for (let i = 0; i < video.buffered.length; i++) {
+    if (cur >= video.buffered.start(i) && cur <= video.buffered.end(i)) {
+      return Math.max(0, video.buffered.end(i) - cur);
+    }
+  }
+  if (cur <= 0.5 && video.buffered.length > 0 && video.buffered.start(0) <= 0.5) {
+    return Math.max(0, video.buffered.end(0) - cur);
+  }
+  return 0;
+}
 
 function requestShowBufferingHUD(delayMs = 800) {
   if (_hudShowDebounceTimer) clearTimeout(_hudShowDebounceTimer);
   _hudShowDebounceTimer = setTimeout(() => {
     const video = document.getElementById('evo-video-player');
-    if (video && (video.paused || video.readyState < 3)) {
+    const bufferAhead = getPlayerBufferAheadSec();
+    if (video && (video.paused || video.readyState < 3 || bufferAhead < 2.0)) {
+      _isInitialPrebuffering = true;
+      _prebufferStartTime = Date.now();
       showPlayerBufferingHUD();
       _hudMinDisplayUntil = Date.now() + 1500;
     }
@@ -8650,16 +8670,19 @@ function requestHideBufferingHUD(force = false) {
     _hudShowDebounceTimer = null;
   }
   const video = document.getElementById('evo-video-player');
-  if (!force && video && (video.paused || video.readyState < 3)) {
+  const bufferAhead = getPlayerBufferAheadSec();
+  if (!force && (_isInitialPrebuffering || (video && (video.paused || video.readyState < 3 || bufferAhead < 2.0)))) {
     return;
   }
   const remaining = _hudMinDisplayUntil - Date.now();
   if (remaining > 0 && !force) {
     setTimeout(() => {
       const vid = document.getElementById('evo-video-player');
-      if (vid && !vid.paused && vid.readyState >= 3) {
-        hidePlayerBufferingHUD();
+      const bAhead = getPlayerBufferAheadSec();
+      if (!force && (_isInitialPrebuffering || (vid && (vid.paused || vid.readyState < 3 || bAhead < 2.0)))) {
+        return;
       }
+      hidePlayerBufferingHUD();
     }, remaining);
   } else {
     hidePlayerBufferingHUD();
@@ -8700,19 +8723,19 @@ function showPlayerBufferingHUD() {
     const speedLabel = document.getElementById('buffering-speed-label');
 
     // Calculate actual video playback buffer ahead of current playhead
-    let bufferAheadSec = 0;
-    if (video && video.buffered && video.buffered.length > 0) {
-      const cur = video.currentTime;
-      for (let i = 0; i < video.buffered.length; i++) {
-        if (cur >= video.buffered.start(i) && cur <= video.buffered.end(i)) {
-          bufferAheadSec = Math.max(0, video.buffered.end(i) - cur);
-          break;
-        }
+    const bufferAheadSec = getPlayerBufferAheadSec();
+    const elapsedPrebuffer = _prebufferStartTime > 0 ? (Date.now() - _prebufferStartTime) / 1000 : 0;
+
+    // Transition out of initial pre-buffering once buffer is healthy (>= 2.0s)
+    // or after fallback timeout (8s) if video is advancing
+    if (_isInitialPrebuffering) {
+      if (bufferAheadSec >= 2.0 || (elapsedPrebuffer >= 8.0 && video && video.readyState >= 3 && video.currentTime > 0)) {
+        _isInitialPrebuffering = false;
       }
     }
 
     // Auto-dismiss HUD only once video is actively advancing with a healthy playback buffer (>= 2.0s)
-    if (video && !video.paused && video.currentTime > 0 && video.readyState >= 3 && bufferAheadSec >= 2.0) {
+    if (!_isInitialPrebuffering && video && !video.paused && video.currentTime > 0 && video.readyState >= 3 && bufferAheadSec >= 2.0) {
       requestHideBufferingHUD();
       return;
     }
@@ -8822,6 +8845,8 @@ function seekTransmuxOffset(clamped) {
 
   const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${audioParam}&start_time=${effectiveSeek.toFixed(3)}${burnSubParam}${transcodeParam}${epParams}${magnetParam}${durationParam}${bufferParam}`;
 
+  _isInitialPrebuffering = true;
+  _prebufferStartTime = Date.now();
   showPlayerBufferingHUD();
 
   video.pause();
@@ -9541,6 +9566,8 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     ? `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${effectiveFileIdx}&audio_track=0&audio_boost=1.25${transcodeParam}${epParams}${magnetParam}${durationParam}${bufferParam}`
     : `/api/v1/stream/play?info_hash=${infoHash}&file_idx=${effectiveFileIdx}${epParams}${magnetParam}${durationParam}${bufferParam}`;
 
+  _isInitialPrebuffering = true;
+  _prebufferStartTime = Date.now();
   showPlayerBufferingHUD();
 
   video.pause();
@@ -9735,6 +9762,8 @@ function toggleStreamPipelineMode() {
   const durationParam = active.totalDuration > 0 ? `&duration=${active.totalDuration}` : '';
   const fileIdxToUse = (active.playingFileIdx !== undefined && active.playingFileIdx !== null) ? active.playingFileIdx : (active.fileIdx || 0);
 
+  _isInitialPrebuffering = true;
+  _prebufferStartTime = Date.now();
   showPlayerBufferingHUD();
 
   if (active.useTransmux) {
@@ -9823,6 +9852,8 @@ function closePlayerModal() {
 
   if (unmuteOverlay) unmuteOverlay.classList.add('hidden');
   if (spinner) spinner.classList.add('hidden');
+  _isInitialPrebuffering = false;
+  _prebufferStartTime = 0;
   requestHideBufferingHUD(true);
   if (audioMenu) audioMenu.classList.add('hidden');
   if (wrap) wrap.classList.remove('user-idle');
