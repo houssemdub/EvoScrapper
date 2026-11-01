@@ -48,6 +48,11 @@ vlc_*.log
 vlc-help.txt
 daemon.log
 
+# Rust build artifacts
+target/
+streamer-rs/target/
+*.pdb
+
 # WebTorrent & Streaming Cache
 .stream_cache/
 streamer/node_modules/
