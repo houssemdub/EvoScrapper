@@ -1,7 +1,7 @@
 use crate::engine::SessionManager;
 use crate::server::auth::{validate_header_token, validate_stream_signature};
 use crate::server::range::parse_range_header;
-use crate::types::{EngineConfig, EngineError, InfoHash};
+use crate::types::{EngineConfig, EngineError};
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
@@ -23,6 +23,7 @@ pub struct AppState {
 pub struct StreamQuery {
     pub info_hash: Option<String>,
     pub file_idx: Option<usize>,
+    pub magnet: Option<String>,
     pub expires: Option<String>,
     pub sig: Option<String>,
 }
@@ -31,6 +32,7 @@ pub struct StreamQuery {
 pub struct InfoHashQuery {
     pub info_hash: Option<String>,
     pub file_idx: Option<usize>,
+    pub magnet: Option<String>,
 }
 
 /// GET /health
@@ -102,11 +104,13 @@ pub async fn single_stats_handler(
         return Err(EngineError::Unauthorized);
     }
 
-    let hash = InfoHash::new(&info_hash)
-        .ok_or_else(|| EngineError::TorrentNotFound(info_hash.clone()))?;
+    let managed = state
+        .session_manager
+        .get_or_create(&info_hash, None)
+        .await?;
     let stats = state
         .session_manager
-        .get_statistics(&hash, Some(file_idx))
+        .get_statistics(&info_hash, &managed, Some(file_idx))
         .await?;
 
     Ok(Json(stats))
@@ -126,11 +130,14 @@ pub async fn files_handler(
     let info_hash = q.info_hash.ok_or_else(|| {
         EngineError::InvalidRange("Missing info_hash query parameter".into())
     })?;
-    let hash = state.session_manager.get_or_create(&info_hash, None).await?;
-    let files = state.session_manager.get_files(&hash).await?;
+    let managed = state
+        .session_manager
+        .get_or_create(&info_hash, q.magnet)
+        .await?;
+    let files = state.session_manager.get_files(&managed).await?;
 
     Ok(Json(serde_json::json!({
-        "infoHash": hash.0,
+        "infoHash": SessionManager::canonical_hash(&info_hash),
         "files": files
     })))
 }
@@ -149,15 +156,18 @@ pub async fn warm_handler(
     let info_hash = q.info_hash.ok_or_else(|| {
         EngineError::InvalidRange("Missing info_hash parameter".into())
     })?;
-    let hash = state.session_manager.get_or_create(&info_hash, None).await?;
+    let managed = state
+        .session_manager
+        .get_or_create(&info_hash, q.magnet)
+        .await?;
     let stats = state
         .session_manager
-        .get_statistics(&hash, q.file_idx)
+        .get_statistics(&info_hash, &managed, q.file_idx)
         .await?;
 
     Ok(Json(serde_json::json!({
         "status": "warmed",
-        "infoHash": hash.0,
+        "infoHash": SessionManager::canonical_hash(&info_hash),
         "peers": stats.peers
     })))
 }
@@ -191,8 +201,11 @@ pub async fn stream_handler(
     })?;
     let file_idx = q.file_idx.unwrap_or(0);
 
-    let hash = state.session_manager.get_or_create(&info_hash, None).await?;
-    let files = state.session_manager.get_files(&hash).await?;
+    let managed = state
+        .session_manager
+        .get_or_create(&info_hash, q.magnet)
+        .await?;
+    let files = state.session_manager.get_files(&managed).await?;
     let file = files.get(file_idx).ok_or(EngineError::FileNotFound(file_idx))?;
 
     let total_size = file.length;
@@ -212,19 +225,45 @@ pub async fn stream_handler(
         ),
     };
 
+    let start = byte_range.start;
     let content_len = byte_range.length();
 
-    // 3. Construct synthetic streaming body for test / chunk serving
-    // In production, chunks stream from PiecePicker / DiskStorage
-    let stream_body = Body::from(vec![0u8; content_len.min(65536) as usize]);
+    // 3. Open librqbit stream and seek
+    let mut file_stream = managed
+        .stream(file_idx)
+        .await
+        .map_err(|e| EngineError::Internal(format!("Failed to stream torrent file: {}", e)))?;
+
+    use tokio::io::AsyncSeekExt;
+    file_stream
+        .seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(|e| EngineError::Internal(format!("Seek error: {}", e)))?;
+
+    use tokio::io::AsyncReadExt;
+    let limited = file_stream.take(content_len);
+    let body_stream = tokio_util::io::ReaderStream::new(limited);
+    let stream_body = Body::from_stream(body_stream);
+
+    let mime_type = if file.name.ends_with(".mkv") {
+        "video/x-matroska"
+    } else if file.name.ends_with(".webm") {
+        "video/webm"
+    } else {
+        "video/mp4"
+    };
 
     let mut response = Response::builder()
         .status(status)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, content_len.to_string())
-        .header(header::CONTENT_TYPE, "video/mp4")
+        .header(header::CONTENT_TYPE, mime_type)
         .header("Access-Control-Allow-Origin", "*")
-        .header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
+        .header("Access-Control-Allow-Headers", "Range, X-Evo-Streamer-Token")
+        .header(
+            "Access-Control-Expose-Headers",
+            "Content-Range, Accept-Ranges, Content-Length",
+        );
 
     if status == StatusCode::PARTIAL_CONTENT {
         response = response.header(header::CONTENT_RANGE, byte_range.content_range_header());

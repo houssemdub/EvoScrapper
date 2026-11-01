@@ -19,7 +19,41 @@ from config import settings
 STREAM_PORT = getattr(settings, "STREAM_PORT", 8889)
 TORRENT_PORT = getattr(settings, "TORRENT_PORT", 50000)
 DHT_PORT = getattr(settings, "DHT_PORT", 50001)
-DAEMON_URL = f"http://127.0.0.1:{STREAM_PORT}"
+
+def get_daemon_url() -> str:
+    """Returns the dynamic URL of the currently active streaming engine."""
+    try:
+        from core.engine_manager import get_engine_manager
+        mgr = get_engine_manager()
+        active_name = mgr.active_engine_name
+        engine = mgr.engines.get(active_name)
+        if engine:
+            return engine.url
+    except Exception:
+        pass
+    return f"http://127.0.0.1:{STREAM_PORT}"
+
+class _DynamicDaemonUrl(str):
+    def __str__(self):
+        return get_daemon_url()
+    def __repr__(self):
+        return f"'{get_daemon_url()}'"
+    def __fspath__(self):
+        return get_daemon_url()
+    def __eq__(self, other):
+        return str(self) == str(other)
+    def __hash__(self):
+        return hash(str(self))
+    def __add__(self, other):
+        return str(self) + str(other)
+    def __radd__(self, other):
+        return str(other) + str(self)
+    def startswith(self, prefix, *args):
+        return str(self).startswith(prefix, *args)
+    def replace(self, old, new, *args):
+        return str(self).replace(old, new, *args)
+
+DAEMON_URL = _DynamicDaemonUrl(f"http://127.0.0.1:{STREAM_PORT}")
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STREAMER_DIR = os.path.abspath(os.path.join(REPO_ROOT, "streamer"))
 SERVER_SCRIPT = os.path.join(STREAMER_DIR, "server.js")
@@ -277,28 +311,22 @@ def find_available_stream_port(preferred_port: int = 8889) -> int:
 def kill_stale_daemon(target_port: Optional[int] = None):
     """Kills any stale process on stream port ONLY if it is verified to be a Node.js streaming daemon."""
     global STREAM_PORT, DAEMON_URL
-    port_to_check = target_port or STREAM_PORT
-    if os.name == "nt":
-        for port in (port_to_check, TORRENT_PORT, DHT_PORT):
+    try:
+        import psutil
+        current_pid = os.getpid()
+        for proc in psutil.process_iter(['pid', 'name']):
             try:
-                out = subprocess.check_output(f"netstat -ano | findstr :{port}", shell=True, text=True)
-                for line in out.strip().splitlines():
-                    if "LISTENING" in line:
-                        parts = line.strip().split()
-                        pid = int(parts[-1])
-                        if pid > 0 and pid != os.getpid():
-                            if is_node_streamer_pid(pid):
-                                subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
-                            else:
-                                streaming_logger.warning(
-                                    f"Port {port} is occupied by foreign process PID {pid}. Not killing. Selecting fallback port."
-                                )
-                                if port == port_to_check:
-                                    fallback = find_available_stream_port(8890)
-                                    STREAM_PORT = fallback
-                                    DAEMON_URL = f"http://127.0.0.1:{STREAM_PORT}"
+                pid = proc.info.get('pid')
+                if pid and pid != current_pid and is_node_streamer_pid(pid):
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=1.5)
+                    except Exception:
+                        proc.kill()
             except Exception:
                 pass
+    except Exception:
+        pass
 
 
 def start_daemon_process() -> bool:
@@ -345,7 +373,15 @@ def start_daemon_process() -> bool:
 
 
 async def ensure_streaming_daemon() -> bool:
-    """Guarantees that the streaming engine is up and running."""
+    """Guarantees that the active streaming engine is up and running."""
+    try:
+        from core.engine_manager import get_engine_manager
+        mgr = get_engine_manager()
+        active = await mgr.get_active_engine()
+        return await active.ensure_started()
+    except Exception as e:
+        streaming_logger.warning(f"EngineManager ensure_started notice: {e}")
+
     if await is_daemon_healthy():
         return True
 

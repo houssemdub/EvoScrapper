@@ -31,9 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Zero Garbage Collection Stutter**: Eliminates V8 heap sweeps during sustained 4K HDR high-bitrate streaming.
 - **Resilient Aiohttp Session Loop Lifecycle (`core/torrent_streamer.py`)**: Hardened `get_http_session()` to dynamically detect stale event loops and re-instantiate client sessions across pytest runners.
 
+#### Fixed
+- **Rust Engine Video Stream Delivery (`streamer-rs`)**: Integrated `librqbit` 9.1.0 with async BitTorrent piece streaming (`FileStream`), live torrent session management, DHT bootstrap, and asynchronous byte-range seeking (`ReaderStream`), replacing dummy placeholder chunks.
+- **Node.js Ghost Daemon & EADDRINUSE Port Hang (`streamer/server.js`, `core/torrent_streamer.py`)**: Added dedicated `server.on('error')` and `process.exit(1)` on `EADDRINUSE`. Enhanced `kill_stale_daemon` to verify and purge orphaned daemons holding torrent ports 50000/50001 before launch.
+- **Dynamic Daemon URL Routing (`core/torrent_streamer.py`)**: Replaced hardcoded `DAEMON_URL` with dynamic dispatch proxy (`_DynamicDaemonUrl`), seamlessly routing all transmux, warm, file-info, and statistics calls to the active engine (Rust on 8891, Node on 8889, Python on 8892).
+- **Player Transmux Seek Keyframe Latency (`routers/stream.py`)**: Prevented blocking `ffprobe` subprocess execution on HEAD requests during `/transmux` keyframe alignment, returning headers instantly from local cache without stalling browser playback.
+- **Player HUD Live Engine Hot-Swap (`static/app.js`)**: Configured active player streams to automatically reconnect and restore playback position upon switching engines in the HUD.
+
 #### Testing
 - **Multi-Engine Parity Test Suite (`tests/test_multi_engine_parity.py`)**: Automated verification of RFC 7233 range consistency, Stremio statistics schema compliance, and end-to-end fallback chains.
 - **Engine Manager & API Suites (`tests/test_engine_manager.py`, `tests/test_engine_api.py`, `tests/test_py_streamer.py`)**: 14 tests proving hot-swapping, degradation, and fallback mechanics.
+- **Live Multi-Engine & Transmux Tests (`tests/test_engine_streaming_live.py`)**: Validated dynamic daemon url switching, multi-engine health transitions, and non-blocking transmux HEAD requests.
 
 ## [2.6.0] - 2026-11-01
 

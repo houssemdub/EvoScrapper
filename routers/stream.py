@@ -312,7 +312,7 @@ async def stream_transmuxed_torrent(
     # Backend snaps requested seek to the preceding keyframe in copy mode so audio, video, and subtitle clocks stay 1:1 in sync
     snapped_start = start_time
     matched_keyframe = None
-    if start_time and start_time > 0 and not (transcode_video or burn_sub_idx is not None):
+    if request.method != "HEAD" and start_time and start_time > 0 and not (transcode_video or burn_sub_idx is not None):
         from core.transmuxer import load_cached_keyframes, probe_keyframes_near
         cached_kfs = load_cached_keyframes(info_hash, file_idx)
         need_probe = True
@@ -332,6 +332,14 @@ async def stream_transmuxed_torrent(
                         matched_keyframe = preceding[-1]
             except Exception:
                 pass
+    elif request.method == "HEAD" and start_time and start_time > 0 and not (transcode_video or burn_sub_idx is not None):
+        from core.transmuxer import load_cached_keyframes
+        cached_kfs = load_cached_keyframes(info_hash, file_idx)
+        if cached_kfs:
+            preceding = [k for k in cached_kfs if k <= start_time]
+            if preceding and (start_time - preceding[-1]) <= 15.0:
+                snapped_start = preceding[-1]
+                matched_keyframe = preceding[-1]
 
     resp_hdrs = {
         "Content-Type": "video/mp4",

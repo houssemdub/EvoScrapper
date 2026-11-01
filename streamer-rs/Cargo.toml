@@ -26,6 +26,8 @@ url = "2.5"
 bytes = "1.6"
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
+librqbit = { version = "9.1.0", default-features = false, features = ["default-tls"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }

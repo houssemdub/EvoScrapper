@@ -5,5 +5,5 @@ pub mod swarm;
 
 pub use disk::DiskStorage;
 pub use piece_picker::{PiecePicker, PieceSchedule, Priority};
-pub use session::{SessionManager, TorrentSession};
+pub use session::SessionManager;
 pub use swarm::SwarmManager;

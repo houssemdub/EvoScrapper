@@ -814,11 +814,19 @@ function isHarmlessCloseError(err) {
 process.on('uncaughtException', (err) => {
     if (isHarmlessCloseError(err)) return;
     console.error('[StreamServer] Process uncaught exception:', err.message);
+    if (err && err.code === 'EADDRINUSE') {
+        process.exit(1);
+    }
 });
 
 process.on('unhandledRejection', (reason) => {
     if (isHarmlessCloseError(reason)) return;
     console.error('[StreamServer] Process unhandled rejection:', reason);
+});
+
+server.on('error', (err) => {
+    console.error('[StreamServer] Fatal server error:', err.message);
+    process.exit(1);
 });
 
 server.listen(PORT, BIND_HOST, () => {

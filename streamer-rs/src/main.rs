@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
         max_active_torrents: 3,
     };
 
-    let session_manager = SessionManager::new(config.clone())?;
+    let session_manager = SessionManager::new(config.clone()).await?;
 
     let app_state = Arc::new(AppState {
         config: config.clone(),

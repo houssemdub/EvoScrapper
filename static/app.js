@@ -5814,6 +5814,31 @@ async function selectStreamingEngine(engineName) {
 
     showToast(`Streaming engine switched to ${data.active_engine}`, 'success');
     await refreshEngineStatus();
+
+    // Hot-reload active playback on the newly selected engine if player is currently open
+    const active = (window.state || state)?.discover?.activeStream;
+    const video = document.getElementById('evo-video-player');
+    const modal = document.getElementById('player-modal');
+    if (active && video && modal && !modal.classList.contains('hidden')) {
+      const curTime = (active.playbackOffset || 0) + (video.currentTime || 0);
+      if (typeof playStreamInBrowser === 'function') {
+        playStreamInBrowser(
+          active.infoHash,
+          active.playingFileIdx !== undefined ? active.playingFileIdx : active.fileIdx,
+          active.title || active.playingFileName || 'Stream',
+          active.isMkv,
+          active.magnet || '',
+          active.season,
+          active.episode,
+          active.forceDirectIdx
+        );
+        if (curTime > 2 && typeof seekTransmuxOffset === 'function') {
+          setTimeout(() => {
+            seekTransmuxOffset(curTime);
+          }, 600);
+        }
+      }
+    }
   } catch (err) {
     showToast(`Engine switch error: ${err.message}`, 'error');
   }
