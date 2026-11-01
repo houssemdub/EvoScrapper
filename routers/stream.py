@@ -1223,29 +1223,9 @@ async def get_hls_playlist(
     from core.transmuxer import generate_hls_manifest
     from core.torrent_streamer import get_internal_stream_url
 
+    # Subtitles are served out-of-band via /api/v1/stream/subtitles and wired via <track>/overlay.
+    # EXT-X-MEDIA is omitted from the media playlist for RFC 8216 compliance.
     subtitle_tracks = []
-    if include_subtitles:
-        await ensure_streaming_daemon()
-        source_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode)
-        # HLS playlists are on a latency-sensitive path: never let a cold or
-        # swarm-starved ffprobe delay/break the manifest.
-        probe = {}
-        try:
-            probe = await asyncio.wait_for(probe_media_stream(source_url), timeout=3.0)
-        except Exception as exc:
-            streaming_logger.warning(f"[HLS] Subtitle track probe skipped: {exc}")
-        if probe.get("success") and probe.get("subtitle_tracks"):
-            for track in probe["subtitle_tracks"]:
-                # Only include text-based subtitles (not bitmap PGS/DVD/VobSub)
-                if not track.get("is_bitmap", False):
-                    subtitle_tracks.append({
-                        # Relative subtitle-stream ordinal: what FFmpeg's -map 0:s:N expects
-                        "sub_idx": track.get("sub_idx", len(subtitle_tracks)),
-                        "stream_idx": track["stream_idx"],
-                        "language": track["language"],
-                        "title": track["title"],
-                        "codec": track["codec"],
-                    })
 
     # Always keyframe-align: probe if cache is cold (bounded).
     from core.transmuxer import load_cached_keyframes, probe_keyframes

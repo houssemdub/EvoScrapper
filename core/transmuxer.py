@@ -1808,23 +1808,8 @@ def generate_hls_manifest(
             init_url += f"&magnet={urllib.parse.quote(magnet)}"
         lines.append(f'#EXT-X-MAP:URI="{init_url}"')
 
-    # Add subtitle tracks to manifest
-    if subtitle_tracks:
-        for idx, track in enumerate(subtitle_tracks):
-            lang = track.get("language", "und")
-            name = track.get("title", f"Subtitle {idx+1}")
-            # Use sub_idx (subtitle stream index 0,1,2...) for -map parameter, not global stream_idx
-            sub_idx = track.get("sub_idx", idx)
-            sub_url = f"/api/v1/stream/hls/subtitles?info_hash={info_hash}&file_idx={file_idx}&sub_idx={sub_idx}&segment_duration={segment_duration_sec}"
-            if magnet:
-                sub_url += f"&magnet={urllib.parse.quote(magnet)}"
-            if season is not None:
-                sub_url += f"&season={season}"
-            if episode is not None:
-                sub_url += f"&episode={episode}"
-            # DEFAULT=YES for first subtitle track, AUTOSELECT=YES for all
-            default = "YES" if idx == 0 else "NO"
-            lines.append(f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="{name}",LANGUAGE="{lang}",DEFAULT={default},AUTOSELECT=YES,URI="{sub_url}"')
+    # Subtitle tracks are injected client-side via <track> or player overlay (EXT-X-MEDIA is spec-invalid in media playlists)
+    # subtitle_tracks parameter kept for signature backward-compatibility (# noqa: ARG002)
 
     for i, (start_time, seg_dur) in enumerate(segments):
         lines.append(f"#EXTINF:{seg_dur:.1f},")
