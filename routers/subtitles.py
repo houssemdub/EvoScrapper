@@ -56,6 +56,7 @@ async def resolve_imdb_id(query: str, is_series: bool = False) -> Optional[str]:
     for cand in candidates:
         if not cand:
             continue
+        first_fallback = None
         for cat_type in cat_types:
             try:
                 endpoint = f"https://v3-cinemeta.strem.io/catalog/{cat_type}/top/search={cand}.json"
@@ -66,9 +67,12 @@ async def resolve_imdb_id(query: str, is_series: bool = False) -> Optional[str]:
                     for m in metas:
                         if m.get("name", "").strip().lower() == cand_lower:
                             return m.get("imdb_id")
-                    return metas[0].get("imdb_id")
+                    if not first_fallback and metas[0].get("imdb_id"):
+                        first_fallback = metas[0].get("imdb_id")
             except Exception:
                 pass
+        if first_fallback:
+            return first_fallback
     return None
 
 

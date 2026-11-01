@@ -419,6 +419,7 @@ Dialogue at content second 10
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_subprocess_exec)
     monkeypatch.setattr(tx, "probe_container_start", unexpected_probe)
+    monkeypatch.setattr(tx, "find_ffmpeg", lambda: "fake-ffmpeg")
 
     result = asyncio.run(tx.extract_embedded_subtitle_vtt("http://fake/stream", sub_stream_index=0))
     assert "00:00:10.000 --> 00:00:12.000" in result
