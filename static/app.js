@@ -3386,14 +3386,13 @@ function subtitleSyncStorageKey() {
 }
 
 // Master switch for automatic subtitle timing changes (saved-offset restore at
-// load, post-seek micro-sync). Default OFF: cues always play as authored by the
-// container/provider until the user syncs manually or enables this in Settings.
+// load, post-seek micro-sync, and auto-alignment). Default ON for Stremio-grade instant parity.
 function isSubtitleAutoSyncEnabled() {
   try {
     const s = JSON.parse(localStorage.getItem('evo_advanced_settings') || '{}');
-    return s.subs_autosync === true;
+    return s.subs_autosync !== false;
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -4022,7 +4021,7 @@ function resetSubtitleSync() {
   showToast('Subtitle sync reset to 0ms', 'info');
 }
 
-async function triggerAutoSyncSubtitles() {
+async function triggerAutoSyncSubtitles(silent = false) {
   const active = state.discover.activeStream;
   const cues = state.subtitles.rawCues;
   const statusEl = document.getElementById('sub-autosync-status');
@@ -4030,17 +4029,17 @@ async function triggerAutoSyncSubtitles() {
   const activeTrack = state.subtitles.activeTrack;
 
   if (!cues || cues.length === 0) {
-    showToast('No active subtitles loaded to auto-sync', 'warning');
+    if (!silent) showToast('No active subtitles loaded to auto-sync', 'warning');
     return;
   }
   if (!active || !active.infoHash) {
-    showToast('No active media stream found for auto-sync', 'warning');
+    if (!silent) showToast('No active media stream found for auto-sync', 'warning');
     return;
   }
 
   if (statusEl) statusEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-accent"></i> Syncing...';
   if (btn) btn.disabled = true;
-  showToast('Auto-syncing subtitles with audio stream & reference tracks...', 'info');
+  if (!silent) showToast('Auto-syncing subtitles with audio stream & reference tracks...', 'info');
 
   try {
     const fileIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null)
@@ -4120,10 +4119,12 @@ async function triggerAutoSyncSubtitles() {
     // confidence, so never claim "already in sync" from a weak signal.
     if (confidence < 0.35) {
       if (statusEl) statusEl.innerHTML = '<span class="text-orange font-bold">Low confidence</span>';
-      showToast(
-        `Auto-sync could not verify the timing (${confidencePct}% confidence). Keeping current sync - try selecting a matching release or use manual sync.`,
-        'warning'
-      );
+      if (!silent) {
+        showToast(
+          `Auto-sync could not verify the timing (${confidencePct}% confidence). Keeping current sync - try selecting a matching release or use manual sync.`,
+          'warning'
+        );
+      }
       return;
     }
 
@@ -4141,7 +4142,7 @@ async function triggerAutoSyncSubtitles() {
 
     // A zero/negligible correction is a valid result.
     if (Math.abs(offset) < 0.2 && !driftModel) {
-      showToast(`Subtitles are already in sync (${confidencePct}% confidence · ${modeName})`, 'success');
+      if (!silent) showToast(`Subtitles are already in sync (${confidencePct}% confidence · ${modeName})`, 'success');
       return;
     }
 
@@ -4152,7 +4153,7 @@ async function triggerAutoSyncSubtitles() {
   } catch (err) {
     console.warn('[EvoPlayer] Subtitle auto-sync error:', err);
     if (statusEl) statusEl.innerHTML = '<span class="text-red font-bold">Failed</span>';
-    showToast(`Auto-sync: ${err.message}`, 'error');
+    if (!silent) showToast(`Auto-sync: ${err.message}`, 'error');
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -4344,10 +4345,21 @@ async function autoLoadSubtitles(title, imdbId, season, episode, releaseTitle = 
     let bestMatch = null;
     if (releaseTitle && langSubs.length > 0) {
       const relLower = releaseTitle.toLowerCase();
-      bestMatch = langSubs.find((s) => {
-        const name = (s.release_name || '').toLowerCase();
-        return name && (relLower.includes(name) || name.includes(relLower.slice(0, 15)));
-      });
+      const tokens = (relLower.match(/\b(webrip|web-dl|webdl|bluray|bdrip|brrip|hdtv|1080p|720p|2160p|4k|yts|yify|rarbg|psa|qxr|sparks|ntb|evo|flux|cinevood)\b/gi) || []).map(t => t.toLowerCase());
+
+      let bestScore = -1;
+      for (const s of langSubs) {
+        const sName = (s.release_name || '').toLowerCase();
+        let score = 0;
+        if (sName && (relLower.includes(sName) || sName.includes(relLower.slice(0, 15)))) score += 100;
+        for (const token of tokens) {
+          if (sName.includes(token)) score += 15;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = s;
+        }
+      }
     }
 
     if (!bestMatch && langSubs.length > 0) {
@@ -4653,6 +4665,23 @@ async function applySubtitle(subItem, isAuto = false) {
     if (subItem.is_embedded) {
       state.subtitles.referenceCues = cues;
       state.subtitles.referenceTrack = subItem;
+      if (rawUrl.includes('&fast=true')) {
+        const fullUrl = rawUrl.replace('&fast=true', '');
+        setTimeout(async () => {
+          try {
+            const fullRes = await fetch(fullUrl);
+            if (fullRes.ok && fullRes.headers.get('X-Evo-Sub-Pending') !== '1') {
+              const fullText = await fullRes.text();
+              const fullCues = parseVttOrSrtToCues(fullText);
+              if (fullCues && fullCues.length > state.subtitles.rawCues.length && isSameSubtitleTrack(state.subtitles.activeTrack, subItem)) {
+                state.subtitles.rawCues = fullCues;
+                state.subtitles.referenceCues = fullCues;
+                renderCuesToVideo(fullCues, state.subtitles.currentOffset || 0.0);
+              }
+            }
+          } catch (_) {}
+        }, 8000);
+      }
     }
     state.subtitles.activeTrack = subItem;
     state.subtitles.activeSubName = subItem.release_name || `${subItem.language} (${subItem.provider})`;
@@ -4719,6 +4748,11 @@ async function applySubtitle(subItem, isAuto = false) {
     renderSubtitleTracksList(state.subtitles.availableSubs || []);
 
     showToast(`Active Subtitles: ${subItem.release_name || subItem.language} (${cues.length} cues, 1st at ${firstMmSs})`, 'info');
+
+    // Stremio parity: automatically align external subtitles against container ground-truth or audio VAD
+    if (!subItem.is_embedded && isSubtitleAutoSyncEnabled() && Math.abs(restoredOffset) < 0.05) {
+      setTimeout(() => triggerAutoSyncSubtitles(true), 400);
+    }
   } catch (err) {
     console.error('Subtitle apply error:', err);
     if (badge) badge.innerText = 'Subs: Failed';
@@ -8731,8 +8765,10 @@ function requestShowBufferingHUD(delayMs = 800) {
     const video = document.getElementById('evo-video-player');
     const bufferAhead = getPlayerBufferAheadSec();
     if (video && (video.paused || video.readyState < 3 || bufferAhead < 2.0)) {
-      _isInitialPrebuffering = true;
-      _prebufferStartTime = Date.now();
+      if ((!video.currentTime || video.currentTime === 0) && video.paused) {
+        _isInitialPrebuffering = true;
+        _prebufferStartTime = Date.now();
+      }
       showPlayerBufferingHUD();
       _hudMinDisplayUntil = Date.now() + 1500;
     }
@@ -8800,22 +8836,20 @@ function showPlayerBufferingHUD() {
       : (active && active.avgBitrateBps ? active.avgBitrateBps : 2500000); // 2.5 Mbps default
     const spdNum = (stats ? (stats.downloadSpeed || stats.download_speed || 0) : 0);
     const velocity = (spdNum > 0 && estBitrate > 0) ? (spdNum * 8) / estBitrate : 0;
+    const bufferAheadSec = getPlayerBufferAheadSec();
+    const elapsedPrebuffer = _prebufferStartTime > 0 ? (Date.now() - _prebufferStartTime) / 1000 : 0;
 
-    // Dynamic threshold: if velocity is high (>= 2.5x or > 2.0 MB/s), release immediately on first GOP (0.4s buffer)!
-    let dynamicTargetSec = 2.5;
-    if (velocity >= 2.5 || spdNum >= 2000000) {
-      dynamicTargetSec = 0.4;
-    } else if (velocity >= 1.4 || spdNum >= 1000000) {
-      dynamicTargetSec = 1.0;
-    } else if (velocity >= 0.9) {
-      dynamicTargetSec = 2.0;
-    } else {
-      dynamicTargetSec = 3.5;
-    }
+    // Pre-buffering window: Wait until at least 1.5 to 2.0 seconds of video time are buffered
+    // (Stremio-standard instant start: prevents browser socket throttling while avoiding underrun)
+    const dynamicTargetSec = 1.8;
 
-    // Transition out of initial pre-buffering once dynamic target is achieved
+    // Transition out of initial pre-buffering once target buffer is achieved or safety timeout reached
     if (_isInitialPrebuffering) {
-      if (bufferAheadSec >= dynamicTargetSec || (elapsedPrebuffer >= 5.0 && video && video.readyState >= 3)) {
+      const isReadyToPlay = (bufferAheadSec >= dynamicTargetSec) ||
+                            (bufferAheadSec >= 1.0 && video && video.readyState >= 3) ||
+                            (elapsedPrebuffer >= 3.5 && video && video.readyState >= 2) ||
+                            (elapsedPrebuffer >= 8.0 && video);
+      if (isReadyToPlay) {
         if (typeof window._releasePrebufferedPlayback === 'function') {
           window._releasePrebufferedPlayback();
         } else {
@@ -8828,7 +8862,7 @@ function showPlayerBufferingHUD() {
     }
 
     // Auto-dismiss HUD during normal playback if buffer is healthy
-    if (!_isInitialPrebuffering && video && !video.paused && video.currentTime > 0 && video.readyState >= 3 && bufferAheadSec >= 2.0) {
+    if (!_isInitialPrebuffering && video && !video.paused && (video.readyState >= 3 || bufferAheadSec >= 1.0)) {
       requestHideBufferingHUD();
       return;
     }
@@ -8836,16 +8870,16 @@ function showPlayerBufferingHUD() {
     // Dynamic buffer percentage based on required dynamic pre-buffer target
     let bufferPct = 10;
     if (bufferAheadSec > 0) {
-      bufferPct = Math.min(100, Math.max(25, Math.round((bufferAheadSec / dynamicTargetSec) * 100)));
+      bufferPct = Math.min(100, Math.max(10, Math.round((bufferAheadSec / dynamicTargetSec) * 100)));
     } else if (stats && stats.streamProgress !== undefined && stats.streamProgress > 0) {
       bufferPct = Math.min(95, Math.max(15, Math.round(stats.streamProgress * 100)));
     } else {
       const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
-      bufferPct = Math.min(90, Math.max(10, Math.round(elapsedSec * 35)));
+      bufferPct = Math.min(90, Math.max(10, Math.round(elapsedSec * 25)));
     }
 
     if (fill) fill.style.width = `${bufferPct}%`;
-    if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
+    if (pctBadge) pctBadge.innerText = `${bufferPct}% (${bufferAheadSec.toFixed(1)}s / ${dynamicTargetSec.toFixed(0)}s)`;
 
     if (stats) {
       const spdStr = formatSpeed(spdNum);
@@ -8855,12 +8889,8 @@ function showPlayerBufferingHUD() {
       if (stageTitle && _isInitialPrebuffering) {
         if (peers === 0) {
           stageTitle.innerHTML = '<i class="fa-solid fa-satellite-dish text-accent"></i> CONNECTING SWARM';
-        } else if (velocity >= 2.5) {
-          stageTitle.innerHTML = `<i class="fa-solid fa-bolt text-green"></i> TURBO START (${velocity.toFixed(1)}x)`;
-        } else if (velocity >= 1.4) {
-          stageTitle.innerHTML = `<i class="fa-solid fa-play text-accent"></i> FAST STREAM (${velocity.toFixed(1)}x)`;
-        } else if (bufferAheadSec < 1.0) {
-          stageTitle.innerHTML = '<i class="fa-solid fa-layer-group text-accent"></i> PRE-BUFFERING STREAM';
+        } else if (bufferAheadSec < dynamicTargetSec) {
+          stageTitle.innerHTML = `<i class="fa-solid fa-layer-group text-accent"></i> BUFFERING STREAM (${bufferAheadSec.toFixed(1)}s / ${dynamicTargetSec.toFixed(0)}s)`;
         } else {
           stageTitle.innerHTML = '<i class="fa-solid fa-play text-green"></i> PREPARING PLAYBACK';
         }
@@ -8976,6 +9006,26 @@ function seekTransmuxOffset(clamped) {
   };
 
   window._releasePrebufferedPlayback = releaseSeekPlayback;
+
+  const onSeekCanPlay = () => {
+    video.removeEventListener('canplay', onSeekCanPlay);
+    video.removeEventListener('canplaythrough', onSeekCanPlay);
+    video.removeEventListener('loadeddata', onSeekCanPlay);
+    video.removeEventListener('playing', onSeekCanPlay);
+    const bufferAhead = getPlayerBufferAheadSec();
+    if (bufferAhead >= 4.0 || !active.useTransmux) {
+      releaseSeekPlayback();
+    }
+  };
+  video.addEventListener('canplay', onSeekCanPlay, { once: true });
+  video.addEventListener('canplaythrough', onSeekCanPlay, { once: true });
+  video.addEventListener('loadeddata', onSeekCanPlay, { once: true });
+  video.addEventListener('playing', onSeekCanPlay, { once: true });
+  setTimeout(() => {
+    if (_isInitialPrebuffering) {
+      releaseSeekPlayback();
+    }
+  }, 6000);
 
   if (!active.transcodeVideo && !hasBurnSub) {
     fetch(newUrl, { method: 'HEAD' }).then((r) => {
@@ -9421,7 +9471,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             const tUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${targetIdx}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${startParam}${transcodeParam}${epParams}${magnetParam}${durParam}`;
             video.src = tUrl;
             video.load();
-            video.play().catch(() => {});
+            if (!_isInitialPrebuffering) {
+              video.play().catch(() => {});
+            }
             if (!active.transcodeVideo) {
               fetch(tUrl, { method: 'HEAD' }).then((r) => {
                 const kf = r.headers.get('X-Evo-Seek-Keyframe');
@@ -9561,7 +9613,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             const upgradedUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${targetIdx}&audio_track=${curActive.audioTrack || 0}&audio_boost=1.25${tcParam}${startParam}${epParams}${magnetParam}${durParam}`;
             video.src = upgradedUrl;
             video.load();
-            video.play().catch(() => {});
+            if (!_isInitialPrebuffering) {
+              video.play().catch(() => {});
+            }
             if (!curActive.transcodeVideo) {
               fetch(upgradedUrl, { method: 'HEAD' }).then((r) => {
                 const kf = r.headers.get('X-Evo-Seek-Keyframe');
@@ -9592,7 +9646,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
             const upgradedUrl = `/api/v1/stream/transmux?info_hash=${infoHash}&file_idx=${targetIdx}&audio_track=${curActive.audioTrack || 0}&audio_boost=1.25&transcode_video=true${startParam}${epParams}${magnetParam}${durParam}`;
             video.src = upgradedUrl;
             video.load();
-            video.play().catch(() => {});
+            if (!_isInitialPrebuffering) {
+              video.play().catch(() => {});
+            }
           }
           if (probe.subtitle_tracks && probe.subtitle_tracks.length > 0) {
             const embeddedSubs = probe.subtitle_tracks.map((st) => {
@@ -9609,7 +9665,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
                 stream_idx: st.stream_idx,
                 file_idx: probeFileIdx,
                 info_hash: infoHash,
-                download_url: `/api/v1/stream/subtitles?info_hash=${infoHash}&file_idx=${probeFileIdx}&sub_index=${st.sub_idx}${epParams}${magnetParam}`,
+                download_url: `/api/v1/stream/subtitles?info_hash=${infoHash}&file_idx=${probeFileIdx}&sub_index=${st.sub_idx}${epParams}${magnetParam}&fast=true`,
               };
             });
             const existingOnline = (state.subtitles.availableSubs || []).filter(s => !s.is_embedded);
@@ -9691,6 +9747,8 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   _prebufferStartTime = Date.now();
   showPlayerBufferingHUD();
 
+  video.style.opacity = '0';
+  video.style.transition = 'opacity 0.4s ease';
   video.pause();
   video.muted = false;
   video.volume = 1.0;
@@ -9828,6 +9886,10 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   const releasePrebufferedPlayback = () => {
     if (!_isInitialPrebuffering) return;
     _isInitialPrebuffering = false;
+    video.removeEventListener('canplay', onInitialCanPlay);
+    video.removeEventListener('canplaythrough', onInitialCanPlay);
+    video.removeEventListener('progress', onInitialCanPlay);
+    video.style.opacity = '1';
     const stageTitle = document.getElementById('buffering-stage-title');
     if (stageTitle) stageTitle.innerHTML = '<i class="fa-solid fa-circle-check text-green"></i> STREAM READY';
 
@@ -9869,11 +9931,20 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
 
   window._releasePrebufferedPlayback = releasePrebufferedPlayback;
 
-  video.addEventListener('canplaythrough', () => {
-    if (_isInitialPrebuffering && getPlayerBufferAheadSec() >= 2.0) {
-      releasePrebufferedPlayback();
+  const onInitialCanPlay = () => {
+    if (_isInitialPrebuffering) {
+      const bufferAhead = getPlayerBufferAheadSec();
+      if (bufferAhead >= 1.2 || (video && video.readyState >= 3)) {
+        video.removeEventListener('canplay', onInitialCanPlay);
+        video.removeEventListener('canplaythrough', onInitialCanPlay);
+        video.removeEventListener('progress', onInitialCanPlay);
+        releasePrebufferedPlayback();
+      }
     }
-  }, { once: true });
+  };
+  video.addEventListener('canplay', onInitialCanPlay);
+  video.addEventListener('canplaythrough', onInitialCanPlay);
+  video.addEventListener('progress', onInitialCanPlay);
 }
 
 function toggleStreamPipelineMode() {
@@ -10014,6 +10085,7 @@ function closePlayerModal() {
 
   if (video) {
     video.pause();
+    video.style.opacity = '1';
     updatePlayPauseIcon(false);
     video.onerror = null;
     video.onvolumechange = null;

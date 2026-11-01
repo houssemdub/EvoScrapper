@@ -719,7 +719,7 @@ const server = http.createServer(async (req, res) => {
                     ...evoHeaders,
                 });
 
-                const stream = engine.createReadStream(torrent, targetFile, { start, end, bufferMb });
+                const stream = engine.createReadStream(torrent, targetFile, { start, end, bufferMb, flushFirst: true });
                 stream.on('error', (err) => {
                     if (isHarmlessCloseError(err)) return;
                     console.error('[StreamServer] ReadStream range error:', err.message);
@@ -737,7 +737,7 @@ const server = http.createServer(async (req, res) => {
                     ...evoHeaders,
                 });
 
-                const stream = engine.createReadStream(torrent, targetFile, { bufferMb });
+                const stream = engine.createReadStream(torrent, targetFile, { bufferMb, flushFirst: true });
                 stream.on('error', (err) => {
                     if (isHarmlessCloseError(err)) return;
                     console.error('[StreamServer] ReadStream error:', err.message);

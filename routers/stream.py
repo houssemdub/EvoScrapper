@@ -309,7 +309,7 @@ async def stream_transmuxed_torrent(
                 need_probe = False
         if need_probe:
             try:
-                near_kfs = await probe_keyframes_near(source_url, info_hash, file_idx, target_time=start_time, timeout=3.0)
+                near_kfs = await probe_keyframes_near(source_url, info_hash, file_idx, target_time=start_time, timeout=2.5)
                 if near_kfs:
                     preceding = [k for k in near_kfs if k <= start_time]
                     if preceding and (start_time - preceding[-1]) <= 15.0:
@@ -550,7 +550,8 @@ async def get_embedded_subtitles(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
         )
 
-    cache_key = f"vtt_v4|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
+    SUB_VTT_CACHE_VERSION = "vtt_v5"
+    cache_key = f"{SUB_VTT_CACHE_VERSION}|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
     cached = load_cached_sub_vtt(cache_key)
     if cached:
         return Response(
@@ -575,11 +576,23 @@ async def get_embedded_subtitles(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
         )
 
+    from core.transmuxer import extract_embedded_subtitle_vtt
+
+    # Fast path: if local media file is already cached on disk, extract directly in < 500ms
+    if local_file:
+        vtt = await extract_embedded_subtitle_vtt(local_file, sub_index, timeout=8.0)
+        if vtt and "-->" in vtt:
+            store_cached_sub_vtt(cache_key, vtt)
+            return Response(
+                content=vtt,
+                media_type="text/vtt; charset=utf-8",
+                headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
+            )
+
     if fast is True:
-        # Fast preview: launch background full-track extraction while serving first 5 minutes immediately
-        start_sub_vtt_extraction(cache_key, target_source, sub_index)
-        from core.transmuxer import extract_embedded_subtitle_vtt
+        # Fast preview: serve first 5 minutes immediately to show cues without initial swarm contention
         vtt = await extract_embedded_subtitle_vtt(target_source, sub_index, timeout=10.0, duration=300.0)
+        start_sub_vtt_extraction(cache_key, target_source, sub_index)
         return Response(
             content=vtt,
             media_type="text/vtt; charset=utf-8",
@@ -735,7 +748,7 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
             ref_tuples = [(c.start, c.end) for c in req.reference_cues]
     elif req.reference_sub_idx is not None:
         try:
-            cache_key = f"vtt_v3|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
+            cache_key = f"vtt_v5|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
             vtt = load_cached_sub_vtt(cache_key)
             if not vtt:
                 vtt = await extract_embedded_subtitle_vtt(
@@ -859,7 +872,7 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
     # Otherwise extract the embedded reference track (cached VTT first).
     if ref_tuples is None and req.reference_sub_idx is not None:
         try:
-            cache_key = f"vtt_v3|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
+            cache_key = f"vtt_v5|{req.info_hash}|{req.file_idx}|{req.reference_sub_idx}|{req.season}|{req.episode}"
             vtt = load_cached_sub_vtt(cache_key)
             if not vtt:
                 vtt = await extract_embedded_subtitle_vtt(

@@ -388,13 +388,12 @@ async def stream_transmuxed_video(
             "-reconnect_delay_max", "15",
         ])
 
-    probe_sz = "262144" if (not start_seconds and not transcode_video) else "524288"
-    analyze_dur = "500000" if (not start_seconds and not transcode_video) else "1000000"
+    probe_sz = "1048576"
+    analyze_dur = "1500000"
     cmd.extend([
-        "-probesize", probe_sz,         # Tuned probe for ultra-low latency playback initiation
+        "-probesize", probe_sz,         # Clean probe window for SPS/PPS and GOP parsing without freeze
         "-analyzeduration", analyze_dur,
-        "-flags", "low_delay",          # Low delay packet demuxing for instant streaming release
-        "-fflags", "+genpts+discardcorrupt+igndts+nobuffer+fastseek",
+        "-fflags", "+genpts+discardcorrupt+nobuffer+fastseek",
     ])
 
     # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes.
@@ -441,10 +440,11 @@ async def stream_transmuxed_video(
     # 1. aresample=async=1000 stretches/trims audio up to 1000 samples per frame
     #    so a P2P stall lasting up to ~20 ms (at 48 kHz) is absorbed without a
     #    hard PTS jump that would desync subtitles.  min_hard_comp=0.1 s keeps the
-    #    same tolerance for intentional A/V offset correction.
+    #    same tolerance for intentional A/V offset correction. first_pts=0 ensures
+    #    initial audio PTS strictly starts at 0, aligned with video start.
     # 2. ITU-R BS.775 downmix pan matrix for surround audio (> 2 channels)
     # 3. volume boost restores centre channel dialogue
-    af_filters = ["aresample=async=1000:min_hard_comp=0.100000"]
+    af_filters = ["aresample=async=1000:min_hard_comp=0.100000:first_pts=0"]
     if channels is not None and channels > 2:
         af_filters.append("pan=stereo|FL=0.5*c0+0.7071*c2+0.7071*c4|FR=0.5*c1+0.7071*c2+0.7071*c5")
     if audio_boost and audio_boost > 0:
@@ -459,6 +459,7 @@ async def stream_transmuxed_video(
         "-dn",                          # Strip data streams
         "-avoid_negative_ts", "make_zero",  # Fix negative PTS timestamps from seek operations
         "-max_muxing_queue_size", "2048",   # Prevent queue starvation on multi-track streams
+        "-max_interleave_delta", "0",       # Eliminate packet interleaving latency on live pipes
         "-movflags", "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
         "-flush_packets", "1",
         "-f", "mp4",

@@ -158,7 +158,7 @@ async def api_manifest():
     return JSONResponse(
         {
             "name": "EvoScrapper API",
-            "version": "2.5.0",
+            "version": app.version,
             "docs": "/docs",
             "redoc": "/redoc",
             "health": "/health",

@@ -80,16 +80,24 @@ const SWARM_RESUME_BELOW_SECONDS = 60;
 const SHAPE_SOFT_MULT = 2.0;
 const SHAPE_HARD_MULT = 4.0;
 // Piece streams yield ~16 KB iterator chunks. Serving those straight into an
-// HTTP response costs a pipe iteration and socket write per chunk; merging
-// into large batches cuts that overhead by two orders of magnitude.
-const STREAM_MERGE_BYTES = Math.max(0, parseInt(process.env.EVO_STREAM_MERGE_BYTES || '1048576', 10));
+// HTTP response costs a pipe iteration and socket write per chunk; coalescing
+// into 64KB batches gives optimal socket throughput while yielding the first
+// chunk immediately for instantaneous TTFB.
+const STREAM_MERGE_BYTES = Math.max(0, parseInt(process.env.EVO_STREAM_MERGE_BYTES || '65536', 10));
 
-async function* _mergeChunks(source, targetBytes) {
+async function* _mergeChunks(source, targetBytes, flushFirst = false) {
     try {
         let pending = null;
         let pendingLen = 0;
+        let isFirst = flushFirst;
         for await (const chunk of source) {
             if (!chunk || chunk.length === 0) continue;
+            if (isFirst) {
+                // Yield the very first chunk immediately so Time To First Byte (TTFB) is instantaneous!
+                isFirst = false;
+                yield chunk;
+                continue;
+            }
             if (pending === null) {
                 pending = chunk;
                 pendingLen = chunk.length;
@@ -750,10 +758,11 @@ class TorrentEngine {
 
         const headerPieces = clamp(Math.ceil(totalPieces * 0.02), 2, 8);
         const indexPieces = Math.min(2, totalPieces);
+        const headerEnd = Math.min(fileEndPiece, fileStartPiece + headerPieces - 1);
         const intervals = [
             {
                 start: fileStartPiece,
-                end: Math.min(fileEndPiece, fileStartPiece + headerPieces - 1),
+                end: headerEnd,
                 priority: 3
             },
             {
@@ -763,7 +772,7 @@ class TorrentEngine {
             }
         ];
 
-        const urgentRanges = [];
+        const urgentRanges = [{ start: fileStartPiece, end: headerEnd }];
         const readerCursors = [];
 
         // P1 collective seek forecasting: pre-select pieces around seek
@@ -888,12 +897,20 @@ class TorrentEngine {
 
         this._clearStaleCritical(torrent, schedule.urgentRanges);
 
-        // Drop every non-stream selection we own before re-adding the tiers.
-        // Stream selections created by FileIterator are untouched and keep
-        // covering the whole read range at priority 1.
-        try {
-            torrent.deselect(schedule.fileStartPiece, schedule.fileEndPiece);
-        } catch (_) {}
+        // Stremio-grade non-disruptive selection update:
+        // Updating priorities with torrent.select() updates WebTorrent queue weights
+        // without blanket-deselecting the entire file, which causes peers to choke from
+        // rapid request-cancel packet flapping. Only deselect pieces that have fallen
+        // behind the retention window of all active readers.
+        const minCursor = schedule.readerCursors.length > 0
+            ? Math.min(...schedule.readerCursors)
+            : schedule.fileStartPiece;
+        const dropEnd = minCursor - RETENTION_PIECES - 1;
+        if (dropEnd >= schedule.fileStartPiece) {
+            try {
+                torrent.deselect(schedule.fileStartPiece, dropEnd);
+            } catch (_) {}
+        }
         for (const interval of schedule.intervals) {
             try {
                 torrent.select(interval.start, interval.end, interval.priority);
@@ -1151,7 +1168,7 @@ class TorrentEngine {
 
         let stream = file.createReadStream(opts);
         if (STREAM_MERGE_BYTES > 0 && opts.mergeChunks !== false) {
-            stream = Readable.from(_mergeChunks(stream, STREAM_MERGE_BYTES), { highWaterMark: 4 });
+            stream = Readable.from(_mergeChunks(stream, STREAM_MERGE_BYTES, opts.flushFirst === true), { highWaterMark: 4 });
         }
 
         if (sess) {
