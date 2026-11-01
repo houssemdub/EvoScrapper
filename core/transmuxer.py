@@ -689,7 +689,7 @@ def _build_hls_ffmpeg_cmd(
         "-c:a", "aac",
         "-b:a", "192k",
         "-ac", "2",
-        "-af", "aresample=async=1:first_pts=0",
+        "-af", "aresample=async=1",
         "-sn",
         "-dn",
     ])
@@ -698,6 +698,8 @@ def _build_hls_ffmpeg_cmd(
         cmd.extend([
             "-avoid_negative_ts", "make_zero",
             "-max_muxing_queue_size", "2048",
+            "-muxdelay", "0",
+            "-muxpreload", "0",
             "-movflags", "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
             "-flush_packets", "1",
             "-f", "mp4",
@@ -705,9 +707,9 @@ def _build_hls_ffmpeg_cmd(
         ])
     else:
         cmd.extend([
+            "-muxdelay", "0",
+            "-muxpreload", "0",
             "-f", "mpegts",
-            "-mpegts_copyts", "1",
-            "-output_ts_offset", f"{start_seconds:.3f}",
             "pipe:1",
         ])
     return cmd
