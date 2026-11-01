@@ -63,3 +63,36 @@ def test_stream_control_plane_env_overrides(monkeypatch):
     assert loaded.STREAM_BIND_HOST == "127.0.0.2"
     assert loaded.STREAMER_TOKEN == "configured-secret"
     assert loaded.STREAM_URL_TTL_SECONDS == 60
+
+
+def test_hls_tuning_defaults_and_env_overrides(monkeypatch):
+    default = make_settings(monkeypatch)
+    assert default.EVO_HLS_PREFETCH_AHEAD == 1
+    assert default.EVO_HLS_MAX_CONCURRENCY is None
+    assert default.EVO_HLS_CACHE_MAX_MB == 2048
+
+    overridden = make_settings(
+        monkeypatch,
+        EVO_HLS_PREFETCH_AHEAD="2",
+        EVO_HLS_MAX_CONCURRENCY="6",
+        EVO_HLS_CACHE_MAX_MB="4096",
+    )
+    assert overridden.EVO_HLS_PREFETCH_AHEAD == 2
+    assert overridden.EVO_HLS_MAX_CONCURRENCY == 6
+    assert overridden.EVO_HLS_CACHE_MAX_MB == 4096
+
+
+def test_cors_middleware_exposes_seek_and_streaming_headers():
+    from main import app
+    from starlette.middleware.cors import CORSMiddleware
+
+    cors_middleware = next(
+        (m for m in app.user_middleware if m.cls == CORSMiddleware), None
+    )
+    assert cors_middleware is not None
+    exposed = cors_middleware.kwargs.get("expose_headers", [])
+    assert "X-Evo-Seek-Keyframe" in exposed
+    assert "Content-Range" in exposed
+    assert "Accept-Ranges" in exposed
+    assert "Content-Length" in exposed
+

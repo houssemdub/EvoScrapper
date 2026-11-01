@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     STREAM_URL_TTL_SECONDS: int = 1800
     TORRENT_PORT: int = 50000
     DHT_PORT: int = 50001
+    EVO_HLS_PREFETCH_AHEAD: int = 1
+    EVO_HLS_MAX_CONCURRENCY: Optional[int] = None
+    EVO_HLS_CACHE_MAX_MB: int = 2048
 
     # Debrid Multi-IP Stream Proxy
     DEBRID_PROXY_ENABLED: bool = True

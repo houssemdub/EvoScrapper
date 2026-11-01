@@ -10,6 +10,7 @@ import time
 from typing import AsyncGenerator, Dict, List, Optional
 import aiofiles
 from fastapi import HTTPException
+from config import settings
 from core.logger import streaming_logger, subtitles_logger
 
 
@@ -524,10 +525,24 @@ async def stream_transmuxed_video(
             )
 
 
+def _resolve_hls_max_concurrency() -> int:
+    env_val = os.getenv("EVO_HLS_MAX_CONCURRENCY")
+    if env_val:
+        try:
+            return max(1, int(env_val))
+        except ValueError:
+            pass
+    setting_val = getattr(settings, "EVO_HLS_MAX_CONCURRENCY", None)
+    if setting_val is not None:
+        try:
+            return max(1, int(setting_val))
+        except (ValueError, TypeError):
+            pass
+    return min(3, max(1, (os.cpu_count() or 4) // 4))
+
+
 _HLS_SEMAPHORE = _LazySemaphore(
-    lambda: asyncio.Semaphore(
-        max(1, int(os.getenv("EVO_HLS_MAX_CONCURRENCY", str(min(3, max(1, (os.cpu_count() or 4) // 4))))))
-    )
+    lambda: asyncio.Semaphore(_resolve_hls_max_concurrency())
 )
 
 
@@ -542,7 +557,8 @@ class HlsSegmentCache:
         if cache_dir is None:
             cache_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "hls_cache"))
         self.cache_dir = cache_dir
-        self.max_bytes = (max_mb or int(os.getenv("EVO_HLS_CACHE_MAX_MB", "2048"))) * 1024 * 1024
+        cache_max_mb = max_mb or getattr(settings, "EVO_HLS_CACHE_MAX_MB", None) or int(os.getenv("EVO_HLS_CACHE_MAX_MB", "2048"))
+        self.max_bytes = int(cache_max_mb) * 1024 * 1024
         self.ttl_sec = ttl_sec
         self._in_flight: dict[str, asyncio.Future] = {}
         self._lock = asyncio.Lock()
@@ -1030,8 +1046,10 @@ def _trigger_hls_prefetch(
             _PREFETCH_QUEUED.discard(next_key)
 
     try:
-        ahead = max(1, int(os.environ.get("EVO_HLS_PREFETCH_AHEAD", "1")))
-    except ValueError:
+        configured = getattr(settings, "EVO_HLS_PREFETCH_AHEAD", None)
+        raw_val = os.environ.get("EVO_HLS_PREFETCH_AHEAD", configured if configured is not None else 1)
+        ahead = max(1, int(raw_val))
+    except (ValueError, TypeError):
         ahead = 1
 
     async def _prefetch_worker():

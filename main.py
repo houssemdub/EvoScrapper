@@ -110,6 +110,15 @@ app.add_middleware(
     allow_credentials=allow_creds,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "Content-Range",
+        "Accept-Ranges",
+        "Content-Length",
+        "X-Evo-Seek-Keyframe",
+        "X-EvoStream-Audio",
+        "X-Evo-BurnWarn",
+        "X-Evo-Buffer-State",
+    ],
 )
 
 
