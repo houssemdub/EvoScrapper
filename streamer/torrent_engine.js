@@ -928,7 +928,32 @@ class TorrentEngine {
         const cursorByte = Number.isInteger(primaryPiece)
             ? Math.max(0, primaryPiece * pieceLength - (file.offset || 0))
             : 0;
+        this.triggerGrowlerFlood(torrent, primaryPiece, schedule.fileEndPiece);
         this.checkBufferHealth(torrent, file, cursorByte);
+    }
+
+    /**
+     * Stremio-grade Swarm Growler Flood:
+     * Immediately nudges all connected unchoked wires to prioritize the first
+     * blocks of the cursor piece, eliminating single-wire tail latency.
+     */
+    triggerGrowlerFlood(torrent, cursorPiece, fileEndPiece) {
+        if (!torrent || !Array.isArray(torrent.wires) || torrent.wires.length === 0) return;
+        const targetPiece = Number.isInteger(cursorPiece) ? cursorPiece : 0;
+        const floodEnd = Math.min(fileEndPiece || (torrent.pieces ? torrent.pieces.length - 1 : targetPiece), targetPiece + 2);
+
+        // Critical selection for initial range
+        if (typeof torrent.critical === 'function') {
+            try { torrent.critical(targetPiece, floodEnd); } catch (_) {}
+        }
+
+        // Nudge unchoked wires to ensure immediate block request dispatch
+        for (const wire of torrent.wires) {
+            if (!wire || wire.destroyed || wire.peerChoking) continue;
+            if (typeof wire.unchoke === 'function' && wire.amChoking) {
+                try { wire.unchoke(); } catch (_) {}
+            }
+        }
     }
 
     checkBufferHealth(torrent, file, byteOffset = 0) {

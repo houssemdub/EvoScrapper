@@ -366,13 +366,13 @@ async def stream_transmuxed_video(
             "-reconnect_delay_max", "15",
         ])
 
+    probe_sz = "262144" if (not start_seconds and not transcode_video) else "524288"
+    analyze_dur = "500000" if (not start_seconds and not transcode_video) else "1000000"
     cmd.extend([
-        "-probesize", "524288",         # 512KB probe for ultra-low latency playback initiation
-        "-analyzeduration", "1000000",  # 1s header analysis for multi-track streams
-        # +genpts rebuilds missing timestamps; +discardcorrupt drops damaged packets
-        # rather than stalling; +igndts ignores DTS-only streams (common in P2P MKVs)
-        # so PTS drives timing and a slow swarm piece can't freeze the demuxer clock.
-        "-fflags", "+genpts+discardcorrupt+igndts",
+        "-probesize", probe_sz,         # Tuned probe for ultra-low latency playback initiation
+        "-analyzeduration", analyze_dur,
+        "-flags", "low_delay",          # Low delay packet demuxing for instant streaming release
+        "-fflags", "+genpts+discardcorrupt+igndts+nobuffer+fastseek",
     ])
 
     # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes.

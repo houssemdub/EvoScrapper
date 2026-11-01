@@ -8724,14 +8724,29 @@ function showPlayerBufferingHUD() {
     const speedLabel = document.getElementById('buffering-speed-label');
     const stageTitle = document.getElementById('buffering-stage-title');
 
-    // Calculate actual video playback buffer ahead of current playhead
-    const bufferAheadSec = getPlayerBufferAheadSec();
-    const elapsedPrebuffer = _prebufferStartTime > 0 ? (Date.now() - _prebufferStartTime) / 1000 : 0;
+    // Real-Time Playback Velocity Engine (V = Download Speed / Stream Bitrate)
+    const active = state.discover.activeStream;
+    const estBitrate = (active && active.totalDuration > 0 && active.fileSize > 0)
+      ? Math.round((active.fileSize * 8) / active.totalDuration)
+      : (active && active.avgBitrateBps ? active.avgBitrateBps : 2500000); // 2.5 Mbps default
+    const spdNum = (stats ? (stats.downloadSpeed || stats.download_speed || 0) : 0);
+    const velocity = (spdNum > 0 && estBitrate > 0) ? (spdNum * 8) / estBitrate : 0;
 
-    // Transition out of initial pre-buffering once buffer is healthy (>= 2.5s)
-    // or after fallback timeout (6s) if video has loaded data (readyState >= 3)
+    // Dynamic threshold: if velocity is high (>= 2.5x or > 2.0 MB/s), release immediately on first GOP (0.4s buffer)!
+    let dynamicTargetSec = 2.5;
+    if (velocity >= 2.5 || spdNum >= 2000000) {
+      dynamicTargetSec = 0.4;
+    } else if (velocity >= 1.4 || spdNum >= 1000000) {
+      dynamicTargetSec = 1.0;
+    } else if (velocity >= 0.9) {
+      dynamicTargetSec = 2.0;
+    } else {
+      dynamicTargetSec = 3.5;
+    }
+
+    // Transition out of initial pre-buffering once dynamic target is achieved
     if (_isInitialPrebuffering) {
-      if (bufferAheadSec >= 2.5 || (elapsedPrebuffer >= 6.0 && video && video.readyState >= 3)) {
+      if (bufferAheadSec >= dynamicTargetSec || (elapsedPrebuffer >= 5.0 && video && video.readyState >= 3)) {
         if (typeof window._releasePrebufferedPlayback === 'function') {
           window._releasePrebufferedPlayback();
         } else {
@@ -8749,22 +8764,21 @@ function showPlayerBufferingHUD() {
       return;
     }
 
-    // Dynamic buffer percentage based on required pre-buffer target (2.5 seconds)
+    // Dynamic buffer percentage based on required dynamic pre-buffer target
     let bufferPct = 10;
     if (bufferAheadSec > 0) {
-      bufferPct = Math.min(100, Math.max(25, Math.round((bufferAheadSec / 2.5) * 100)));
+      bufferPct = Math.min(100, Math.max(25, Math.round((bufferAheadSec / dynamicTargetSec) * 100)));
     } else if (stats && stats.streamProgress !== undefined && stats.streamProgress > 0) {
       bufferPct = Math.min(95, Math.max(15, Math.round(stats.streamProgress * 100)));
     } else {
       const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
-      bufferPct = Math.min(90, Math.max(10, Math.round(elapsedSec * 25)));
+      bufferPct = Math.min(90, Math.max(10, Math.round(elapsedSec * 35)));
     }
 
     if (fill) fill.style.width = `${bufferPct}%`;
     if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
 
     if (stats) {
-      const spdNum = stats.downloadSpeed || stats.download_speed || 0;
       const spdStr = formatSpeed(spdNum);
       const peers = stats.peers || 0;
       const unchoked = stats.unchoked !== undefined ? stats.unchoked : (stats.peers_list ? stats.peers_list.length : 0);
@@ -8772,6 +8786,10 @@ function showPlayerBufferingHUD() {
       if (stageTitle && _isInitialPrebuffering) {
         if (peers === 0) {
           stageTitle.innerHTML = '<i class="fa-solid fa-satellite-dish text-accent"></i> CONNECTING SWARM';
+        } else if (velocity >= 2.5) {
+          stageTitle.innerHTML = `<i class="fa-solid fa-bolt text-green"></i> TURBO START (${velocity.toFixed(1)}x)`;
+        } else if (velocity >= 1.4) {
+          stageTitle.innerHTML = `<i class="fa-solid fa-play text-accent"></i> FAST STREAM (${velocity.toFixed(1)}x)`;
         } else if (bufferAheadSec < 1.0) {
           stageTitle.innerHTML = '<i class="fa-solid fa-layer-group text-accent"></i> PRE-BUFFERING STREAM';
         } else {
@@ -8782,7 +8800,8 @@ function showPlayerBufferingHUD() {
       if (peers === 0) {
         if (speedLabel) speedLabel.innerText = 'Searching swarm (0 peers)';
       } else {
-        if (speedLabel) speedLabel.innerText = `${spdStr} · ${peers} peers (${unchoked} active)`;
+        const velTag = velocity >= 1.4 ? ` · ${velocity.toFixed(1)}x` : '';
+        if (speedLabel) speedLabel.innerText = `${spdStr}${velTag} · ${peers} peers (${unchoked} active)`;
       }
     } else {
       if (speedLabel) speedLabel.innerText = 'Connecting to P2P swarm...';
