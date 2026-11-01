@@ -159,3 +159,17 @@ def test_server_js_range_out_of_bounds_handling():
     ]
     res = subprocess.run(node_cmd, capture_output=True, text=True)
     assert res.returncode == 0, f"Node range validation failed: {res.stderr}"
+
+
+def test_mkv_routes_through_transmux(client):
+    """Verifies that MKV files are routed to /transmux rather than the raw daemon."""
+    mkv_files = [{"name": "movie.mkv", "path": "movie.mkv", "length": 1000000}]
+    with patch("routers.stream.ensure_streaming_daemon", new=AsyncMock(return_value=True)), \
+         patch("core.torrent_streamer.get_torrent_files", new=AsyncMock(return_value=mkv_files)):
+        res = client.get(
+            "/api/v1/stream/play?info_hash=2222222222222222222222222222222222222222&file_idx=0",
+            follow_redirects=False,
+            headers={"host": "127.0.0.1:8888"},
+        )
+        assert res.status_code == 307
+        assert "/api/v1/stream/transmux?info_hash=" in res.headers["location"]

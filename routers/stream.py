@@ -166,6 +166,20 @@ async def stream_raw_torrent(
     b_mb = buffer_mb if isinstance(buffer_mb, int) else None
     target_url = get_internal_stream_url(info_hash, file_idx, magnet=magnet, season=season, episode=episode, buffer_mb=b_mb)
 
+    from core.torrent_streamer import get_torrent_files, is_direct_streamable
+    files = await get_torrent_files(info_hash, magnet=magnet)
+    target_name = ""
+    if files and 0 <= file_idx < len(files):
+        target_name = files[file_idx].get("name") or files[file_idx].get("path") or ""
+    if target_name and not is_direct_streamable(target_name):
+        # MKV / HEVC / AC3 → must go through transmux
+        raise HTTPException(
+            status_code=307,
+            headers={"Location": f"/api/v1/stream/transmux?info_hash={info_hash}&file_idx={file_idx}"
+                     + (f"&magnet={magnet}" if magnet else "")},
+            detail="Redirecting to transmux pipeline (container requires remux).",
+        )
+
     # Direct-daemon 307 redirect for localhost and private LAN clients [Phase 4 / FLAW-11].
     # Default on: the daemon is loopback-bound, Host-validated, and the URL
     # carries a short-lived HMAC signature, so the proxy hop is pure overhead.
