@@ -245,6 +245,9 @@ async def search_by_hash(
                 "", imdb_id=imdb_id, video_hash=video_hash, video_size=video_size
             )
 
+    for item in results:
+        item.hash_match = True
+
     elapsed = round(time.time() - start, 3)
     return SubtitleSearchResponse(
         query=info_hash or video_hash,

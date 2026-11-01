@@ -16,6 +16,9 @@ class SubtitleItem(BaseModel):
     season: Optional[int] = None
     episode: Optional[int] = None
     fps: Optional[float] = None
+    is_embedded: bool = False
+    hash_match: bool = False
+    source: Optional[str] = None
 
 
 class SubtitleSearchResponse(BaseModel):

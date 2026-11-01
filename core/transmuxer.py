@@ -389,12 +389,12 @@ async def stream_transmuxed_video(
             "-reconnect_delay_max", "5",
         ])
 
-    probe_sz = "1048576"
-    analyze_dur = "1500000"
+    probe_sz = "5000000"
+    analyze_dur = "5000000"
     cmd.extend([
         "-probesize", probe_sz,         # Clean probe window for SPS/PPS and GOP parsing without freeze
         "-analyzeduration", analyze_dur,
-        "-fflags", "+genpts+discardcorrupt+nobuffer+fastseek",
+        "-fflags", "+genpts+discardcorrupt+igndts",
     ])
 
     # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes.
@@ -442,7 +442,7 @@ async def stream_transmuxed_video(
     #    initial audio PTS strictly starts at 0, aligned with video start.
     # 2. ITU-R BS.775 downmix pan matrix for surround audio (> 2 channels)
     # 3. volume boost restores centre channel dialogue
-    af_filters = ["aresample=async=1"]
+    af_filters = ["aresample=async=1000:first_pts=0"]
     if channels is not None and channels > 2:
         af_filters.append("pan=stereo|FL=0.5*c0+0.7071*c2+0.7071*c4|FR=0.5*c1+0.7071*c2+0.7071*c5")
     if audio_boost and audio_boost > 0:
@@ -458,8 +458,11 @@ async def stream_transmuxed_video(
         "-copyts",
         "-start_at_zero",
         "-avoid_negative_ts", "make_zero",  # Fix negative PTS timestamps from seek operations
-        "-max_muxing_queue_size", "2048",   # Prevent queue starvation on multi-track streams
-        "-movflags", "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
+        "-max_interleave_delta", "0",
+        "-muxpreload", "0",
+        "-muxdelay", "0",
+        "-max_muxing_queue_size", "4096",   # Prevent queue starvation on multi-track streams
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset+negative_cts_offsets",
         "-flush_packets", "1",
         "-f", "mp4",
         "pipe:1",
@@ -700,6 +703,9 @@ def _build_hls_ffmpeg_cmd(
         ])
 
     cmd.extend([
+        "-probesize", "5000000",
+        "-analyzeduration", "5000000",
+        "-fflags", "+genpts+discardcorrupt+igndts",
         "-ss", f"{start_seconds:.3f}",
         "-t", f"{duration_seconds:.3f}",
         "-i", source_url_or_path,
@@ -709,7 +715,7 @@ def _build_hls_ffmpeg_cmd(
         "-c:a", "aac",
         "-b:a", "192k",
         "-ac", "2",
-        "-af", "aresample=async=1",
+        "-af", "aresample=async=1000:first_pts=0",
         "-sn",
         "-dn",
     ])
@@ -717,16 +723,20 @@ def _build_hls_ffmpeg_cmd(
     if segment_format == "fmp4":
         cmd.extend([
             "-avoid_negative_ts", "make_zero",
-            "-max_muxing_queue_size", "2048",
+            "-max_interleave_delta", "0",
+            "-max_muxing_queue_size", "4096",
             "-muxdelay", "0",
             "-muxpreload", "0",
-            "-movflags", "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset+negative_cts_offsets",
             "-flush_packets", "1",
             "-f", "mp4",
             "pipe:1",
         ])
     else:
         cmd.extend([
+            "-avoid_negative_ts", "make_zero",
+            "-max_interleave_delta", "0",
+            "-max_muxing_queue_size", "4096",
             "-muxdelay", "0",
             "-muxpreload", "0",
             "-f", "mpegts",
@@ -1205,12 +1215,18 @@ async def stream_hls_subtitle_segment(
             "-reconnect_delay_max", "5",
         ])
     cmd.extend([
+        "-probesize", "5000000",
+        "-analyzeduration", "5000000",
+        "-fflags", "+genpts+discardcorrupt+igndts",
         "-ss", f"{start_seconds:.3f}",
         "-t", f"{duration_seconds:.3f}",
         "-i", source_url_or_path,
         "-vn", "-an",
         "-map", f"0:s:{sub_stream_index}",
         "-c:s", "webvtt",
+        "-copyts",
+        "-start_at_zero",
+        "-avoid_negative_ts", "make_zero",
         "-f", "webvtt",
         "pipe:1",
     ])
@@ -2035,11 +2051,14 @@ async def extract_embedded_subtitle_vtt(
             "-reconnect_delay_max", "5",
         ])
     cmd.extend([
-        "-probesize", "1000000",
-        "-analyzeduration", "1000000",
+        "-probesize", "5000000",
+        "-analyzeduration", "5000000",
+        "-fflags", "+genpts+discardcorrupt+igndts",
         "-i", source_url,
         "-vn", "-an",
         "-map", f"0:s:{sub_stream_index}",
+        "-copyts",
+        "-start_at_zero",
         "-avoid_negative_ts", "make_zero",
         "-f", "webvtt",
     ])

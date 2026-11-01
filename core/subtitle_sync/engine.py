@@ -87,6 +87,9 @@ class SubtitleSyncEngine:
         vad_duration: float = 90.0,
         start_time: float = 0.0,
         audio_track: int = 0,
+        source: Optional[str] = None,
+        hash_match: bool = False,
+        manual: bool = False,
     ) -> SyncResult:
         """
         Coordinates full multi-signal alignment pipeline.
@@ -99,6 +102,19 @@ class SubtitleSyncEngine:
                 method="none",
                 signals_used=[],
                 message="No subtitle cues provided",
+            )
+
+        # Embedded subtitles from container (0:s:*) and exact-hash matched external subtitles
+        # are frame-accurate to the video container. Bypass auto-sync unless manually forced.
+        if (source == "embedded" or hash_match) and not manual:
+            return SyncResult(
+                success=True,
+                offset=0.0,
+                confidence=1.0,
+                method="bypass_exact_match",
+                signals_used=["embedded" if source == "embedded" else "hash_match"],
+                cues_analyzed=len(subtitle_cues),
+                message="Embedded or exact-hash subtitle bypassed auto-sync (frame-accurate)",
             )
 
         # 1. Filter out forced subtitles, signs, and screen text
@@ -293,6 +309,18 @@ class SubtitleSyncEngine:
         elif vad_drift_model is not None:
             drift_model = vad_drift_model
             final_method = "audio_vad_drift"
+
+        # Clamp unreliable large offsets:
+        # If computed offset exceeds ±8.0s and confidence is low (< 0.70) or based on a single weak signal,
+        # reject the shift and fallback to 0.0s offset rather than applying an aggressive corrupt shift.
+        if abs(final_offset) > 8.0 and (final_conf < 0.70 or len(signals_used) < 2):
+            app_logger.warning(
+                f"[SubtitleSyncEngine] Rejecting unreliable large offset {final_offset}s (confidence: {final_conf:.2f}). Falling back to 0.0s"
+            )
+            final_offset = 0.0
+            final_conf = 0.0
+            final_method = "rejected_large_offset"
+            drift_model = None
 
         # 7. Adaptive Real-Time Controller instantiation
         adaptive_ctrl = AdaptiveSyncController(

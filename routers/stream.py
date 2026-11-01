@@ -762,6 +762,9 @@ class SubtitleAutoSyncRequest(BaseModel):
     max_duration_seconds: Optional[float] = 90.0
     start_time: Optional[float] = 0.0
     audio_track: Optional[int] = 0
+    source: Optional[str] = None
+    hash_match: Optional[bool] = False
+    manual: Optional[bool] = False
 
 
 @router.post("/subtitles/auto-sync")
@@ -773,6 +776,18 @@ async def auto_sync_subtitles_endpoint(req: SubtitleAutoSyncRequest):
     """
     if not req.cues:
         return {"success": False, "offset": 0.0, "confidence": 0.0, "method": "none", "message": "No cues provided"}
+
+    # Embedded and exact hash-matched subtitles are already frame-accurate to the video container
+    if (req.source == "embedded" or req.hash_match) and not req.manual:
+        return {
+            "success": True,
+            "offset": 0.0,
+            "confidence": 1.0,
+            "method": "bypass_exact_match",
+            "mode": "bypass_exact_match",
+            "signals_used": ["embedded" if req.source == "embedded" else "hash_match"],
+            "message": "Embedded or exact-hash subtitle bypassed auto-sync (frame-accurate)",
+        }
 
     from core.subtitle_sync import (
         align_to_reference_cues,
@@ -883,6 +898,9 @@ class SubtitleAutoSyncV2Request(BaseModel):
     max_duration_seconds: Optional[float] = 90.0
     start_time: Optional[float] = 0.0
     audio_track: Optional[int] = 0
+    source: Optional[str] = None
+    hash_match: Optional[bool] = False
+    manual: Optional[bool] = False
 
 
 class SubtitleAdjustRequest(BaseModel):
@@ -906,6 +924,25 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
     if not req.cues:
         return {"success": False, "offset": 0.0, "confidence": 0.0, "method": "none", "message": "No cues provided"}
 
+    analysed_seconds = max(20.0, min(float(req.max_duration_seconds or 90.0), 240.0))
+
+    # Embedded and exact hash-matched subtitles are already frame-accurate to the video container
+    if (req.source == "embedded" or req.hash_match) and not req.manual:
+        session_id = f"{req.info_hash}:{req.file_idx}:{req.episode or 0}"
+        return {
+            "success": True,
+            "offset": 0.0,
+            "confidence": 1.0,
+            "method": "bypass_exact_match",
+            "signals_used": ["embedded" if req.source == "embedded" else "hash_match"],
+            "drift_model": None,
+            "session_id": session_id,
+            "cues_analyzed": len(req.cues),
+            "max_duration_seconds": analysed_seconds,
+            "message": "Embedded or exact-hash subtitle bypassed auto-sync (frame-accurate)",
+            "piecewise": None,
+        }
+
     from core.subtitle_sync import SubtitleSyncEngine
 
     await ensure_streaming_daemon()
@@ -914,7 +951,6 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
     target_source = local_file if local_file else source_url
 
     cue_tuples = [(c.start, c.end, c.text or "") for c in req.cues]
-    analysed_seconds = max(20.0, min(float(req.max_duration_seconds or 90.0), 240.0))
 
     # Reference cues supplied by the client (preferred: avoids re-extraction).
     ref_tuples = None
@@ -953,6 +989,9 @@ async def auto_sync_v2_endpoint(req: SubtitleAutoSyncV2Request):
         vad_duration=analysed_seconds,
         start_time=req.start_time or 0.0,
         audio_track=req.audio_track or 0,
+        source=req.source,
+        hash_match=bool(req.hash_match),
+        manual=bool(req.manual),
     )
 
     session_id = f"{req.info_hash}:{req.file_idx}:{req.episode or 0}"

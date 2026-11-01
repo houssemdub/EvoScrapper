@@ -56,7 +56,15 @@ class ConsensusSync:
             return None
 
         if len(pool) == 1:
-            return pool[0]
+            cand = pool[0]
+            if abs(cand.offset) > 8.0 and cand.confidence < 0.70:
+                return SyncCandidate(
+                    offset=0.0,
+                    confidence=0.0,
+                    method="rejected_large_offset",
+                    metadata={"original_offset": cand.offset, "original_conf": cand.confidence, "rejected": True},
+                )
+            return cand
 
         offsets = [c.offset for c in pool]
         weights = [max(0.01, c.confidence) for c in pool]
@@ -75,6 +83,13 @@ class ConsensusSync:
         # If not enough candidates reached consensus, fallback to the highest confidence candidate
         if len(best_cluster) < self.min_consensus:
             highest_conf_candidate = max(pool, key=lambda c: c.confidence)
+            if abs(highest_conf_candidate.offset) > 8.0 and highest_conf_candidate.confidence < 0.70:
+                return SyncCandidate(
+                    offset=0.0,
+                    confidence=0.0,
+                    method="rejected_large_offset",
+                    metadata={"original_offset": highest_conf_candidate.offset, "original_conf": highest_conf_candidate.confidence, "rejected": True},
+                )
             return highest_conf_candidate
 
         inliers = [pool[idx] for idx in best_cluster]
@@ -88,6 +103,19 @@ class ConsensusSync:
         methods = list(set(c.method for c in inliers))
         avg_raw_conf = sum(c.confidence for c in inliers) / len(inliers)
         calibrated_conf = calibrate_confidence("consensus", avg_raw_conf, len(methods))
+
+        if abs(final_offset) > 8.0 and (calibrated_conf < 0.70 or len(methods) < 2):
+            return SyncCandidate(
+                offset=0.0,
+                confidence=0.0,
+                method="rejected_large_offset",
+                metadata={
+                    "original_offset": round(final_offset, 2),
+                    "cluster_size": len(inliers),
+                    "total_candidates": len(pool),
+                    "rejected": True,
+                },
+            )
 
         return SyncCandidate(
             offset=round(final_offset, 2),

@@ -537,13 +537,16 @@ async def extract_speech_intervals_from_stream(
             "-reconnect_delay_max", "5",
         ])
     cmd.extend([
+        "-probesize", "5000000",
+        "-analyzeduration", "5000000",
+        "-fflags", "+genpts+discardcorrupt+igndts",
         "-ss", f"{start_time:.3f}",
         "-t", str(duration),
         "-i", source_url,
         "-vn",
         "-map", f"0:a:{max(0, int(audio_track))}?",
         "-ac", "2",
-        "-af", f"aresample=async=1:first_pts=0,highpass=f=200,lowpass=f=3500,silencedetect=noise={noise_db}dB:d=0.35",
+        "-af", f"aresample=async=1000:first_pts=0,highpass=f=300,lowpass=f=3000,afftdn=nf=-25,silencedetect=noise={noise_db}dB:d=0.35",
         "-avoid_negative_ts", "make_zero",
         "-f", "null",
         "-",

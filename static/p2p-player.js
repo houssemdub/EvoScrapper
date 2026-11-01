@@ -144,20 +144,20 @@ class EvoP2PPlayerManager {
                 this.hls.loadSource(streamUrl);
                 this.hls.attachMedia(videoEl);
                 this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    videoEl.play().catch(() => {});
+                    this.safePlayWithBufferGate(videoEl);
                 });
             } catch (err) {
                 console.warn('[P2PPlayer] HLS attach failed, falling back to direct src:', err);
                 videoEl.src = streamUrl;
                 videoEl.load();
-                videoEl.play().catch(() => {});
+                this.safePlayWithBufferGate(videoEl);
             }
         } else {
             // Direct Native HTTP Stream (Transmuxed MP4 or Byte-Range 206)
             videoEl.pause();
             videoEl.src = streamUrl;
             videoEl.load();
-            videoEl.play().catch(() => {});
+            this.safePlayWithBufferGate(videoEl);
             this.peerCount = 0;
             const ratioEl = document.getElementById('p2p-ratio');
             if (ratioEl) ratioEl.textContent = streamUrl.includes('/transmux') ? 'Live Transmux (Stereo AAC)' : 'Direct Stream (Range 206)';
@@ -177,6 +177,123 @@ class EvoP2PPlayerManager {
         }
         this.resetMetrics();
     }
+
+    safePlayWithBufferGate(videoEl) {
+        return safePlayWithBufferGate(videoEl);
+    }
+
+    alignTextTracks(videoEl, startOffset = 0, userSubDelay = 0) {
+        return alignTextTracks(videoEl, startOffset, userSubDelay);
+    }
 }
 
-window.evoP2PPlayer = new EvoP2PPlayerManager();
+/**
+ * Non-blocking startup & post-seek buffer gate:
+ * Holds automatic playback until video.buffered has at least 3.0s ahead of currentTime,
+ * readyState >= 4 (HAVE_ENOUGH_DATA), or 4000ms safety timeout after canplay.
+ * On release, if currentTime is between 0 and 1.5s, briefly resyncs decoder clock.
+ */
+function safePlayWithBufferGate(videoEl) {
+    if (!videoEl) return;
+    let gateReleased = false;
+
+    const releaseGate = () => {
+        if (gateReleased) return;
+        gateReleased = true;
+        cleanup();
+        try {
+            if (videoEl.currentTime > 0 && videoEl.currentTime < 1.5) {
+                videoEl.currentTime = videoEl.currentTime;
+            }
+        } catch (_) {}
+        videoEl.play().catch(() => {});
+    };
+
+    const checkBuffer = () => {
+        if (gateReleased) return;
+        if (videoEl.readyState >= 4) {
+            releaseGate();
+            return;
+        }
+        try {
+            const cur = videoEl.currentTime || 0;
+            const b = videoEl.buffered;
+            if (b && b.length > 0) {
+                for (let i = 0; i < b.length; i++) {
+                    if (b.start(i) <= cur + 0.2 && b.end(i) >= cur) {
+                        if (b.end(i) - cur >= 3.0) {
+                            releaseGate();
+                            return;
+                        }
+                    }
+                }
+            }
+        } catch (_) {}
+    };
+
+    let safetyTimeout = null;
+    let checkInterval = null;
+
+    const onCanPlay = () => {
+        checkBuffer();
+        if (!gateReleased && !safetyTimeout) {
+            safetyTimeout = setTimeout(() => {
+                releaseGate();
+            }, 4000);
+        }
+    };
+
+    const cleanup = () => {
+        if (safetyTimeout) {
+            clearTimeout(safetyTimeout);
+            safetyTimeout = null;
+        }
+        if (checkInterval) {
+            clearInterval(checkInterval);
+            checkInterval = null;
+        }
+        videoEl.removeEventListener('progress', checkBuffer);
+        videoEl.removeEventListener('canplay', onCanPlay);
+        videoEl.removeEventListener('canplaythrough', releaseGate);
+        videoEl.removeEventListener('playing', cleanup);
+    };
+
+    videoEl.addEventListener('progress', checkBuffer);
+    videoEl.addEventListener('canplay', onCanPlay);
+    videoEl.addEventListener('canplaythrough', releaseGate);
+    videoEl.addEventListener('playing', cleanup);
+
+    checkInterval = setInterval(checkBuffer, 100);
+    checkBuffer();
+
+    setTimeout(() => {
+        if (!gateReleased) releaseGate();
+    }, 4500);
+}
+
+/**
+ * Shifts native HTML5 TextTrack VTTCues by server-side start offset and user delay
+ * so native player rendering stays sample-accurate both at 0:00 and after seeking.
+ */
+function alignTextTracks(videoEl, startOffset = 0, userSubDelay = 0) {
+    if (!videoEl || !videoEl.textTracks) return;
+    const offset = Number(startOffset) || 0;
+    const delay = Number(userSubDelay) || 0;
+    for (let i = 0; i < videoEl.textTracks.length; i++) {
+        const track = videoEl.textTracks[i];
+        if (!track || !track.cues) continue;
+        for (let j = 0; j < track.cues.length; j++) {
+            const cue = track.cues[j];
+            if (cue._origStart === undefined) cue._origStart = cue.startTime;
+            if (cue._origEnd === undefined) cue._origEnd = cue.endTime;
+            cue.startTime = Math.max(0, cue._origStart - offset + delay);
+            cue.endTime = Math.max(0, cue._origEnd - offset + delay);
+        }
+    }
+}
+
+if (typeof window !== 'undefined') {
+    window.safePlayWithBufferGate = safePlayWithBufferGate;
+    window.alignTextTracks = alignTextTracks;
+    window.evoP2PPlayer = new EvoP2PPlayerManager();
+}

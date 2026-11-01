@@ -3244,6 +3244,16 @@ function parseVttOrSrtToCues(text) {
   let curEnd = null;
   let curText = [];
 
+  // Parse X-TIMESTAMP-MAP header if present (converts relative segment cues to absolute media PTS)
+  let headerOffset = 0.0;
+  const mapMatch = text.match(/X-TIMESTAMP-MAP=MPEGTS:(\d+)/i);
+  if (mapMatch) {
+    const pts = parseInt(mapMatch[1], 10);
+    if (!isNaN(pts) && pts > 0) {
+      headerOffset = pts / 90000.0;
+    }
+  }
+
   // Direct support for Advanced SubStation Alpha (.ass / .ssa)
   if (text.includes('Dialogue:') && !text.includes('-->')) {
     return parseAssSubtitles(text);
@@ -3297,6 +3307,13 @@ function parseVttOrSrtToCues(text) {
     const cleanDia = curText.join('\n').replace(/\{[^}]*\}/g, '').trim();
     if (cleanDia && !isVectorDrawingCue(cleanDia)) {
       cues.push({ start: curStart, end: curEnd, text: cleanDia });
+    }
+  }
+
+  if (headerOffset > 0) {
+    for (const cue of cues) {
+      cue.start += headerOffset;
+      cue.end += headerOffset;
     }
   }
 
@@ -3652,6 +3669,17 @@ function updateSubtitleOverlay(framePts) {
   }
 }
 
+function syncNativeTextTracks() {
+  const video = document.getElementById('evo-video-player');
+  if (!video || !video.textTracks || video.textTracks.length === 0) return;
+  const active = state.discover.activeStream;
+  const startOffset = (active && active.useTransmux) ? (active.playbackOffset || active.anchorTime || 0) : 0;
+  const userDelay = state.subtitles.currentOffset || 0;
+  if (typeof window.alignTextTracks === 'function') {
+    window.alignTextTracks(video, startOffset, userDelay);
+  }
+}
+
 function renderCuesToVideo(rawCues, offsetSeconds) {
   const video = document.getElementById('evo-video-player');
   if (!video) return;
@@ -3867,6 +3895,7 @@ function setSubtitleSync(seconds) {
 
   // Update on-screen subtitle cues in real-time
   updateSubtitleOverlay();
+  syncNativeTextTracks();
 }
 
 function setSubtitleSyncPoint(point) {
@@ -4029,6 +4058,11 @@ async function triggerAutoSyncSubtitles(silent = false) {
   const btn = document.getElementById('btn-sub-autosync');
   const activeTrack = state.subtitles.activeTrack;
 
+  if (silent && activeTrack && (activeTrack.is_embedded || activeTrack.hash_match)) {
+    // Embedded and exact-hash matched subtitles are frame-accurate; bypass automatic VAD offset shifting
+    return;
+  }
+
   if (!cues || cues.length === 0) {
     if (!silent) showToast('No active subtitles loaded to auto-sync', 'warning');
     return;
@@ -4091,6 +4125,9 @@ async function triggerAutoSyncSubtitles(silent = false) {
       reference_sub_idx: refSubIdx,
       max_duration_seconds: 120.0,
       start_time: effectiveStartTime,
+      source: activeTrack && activeTrack.is_embedded ? 'embedded' : (activeTrack ? activeTrack.source : null),
+      hash_match: Boolean(activeTrack && activeTrack.hash_match),
+      manual: !silent,
     };
 
     const res = await fetch('/api/v1/stream/subtitles/auto-sync-v2', {
@@ -4751,7 +4788,7 @@ async function applySubtitle(subItem, isAuto = false) {
     showToast(`Active Subtitles: ${subItem.release_name || subItem.language} (${cues.length} cues, 1st at ${firstMmSs})`, 'info');
 
     // Stremio parity: automatically align external subtitles against container ground-truth or audio VAD
-    if (!subItem.is_embedded && isSubtitleAutoSyncEnabled() && Math.abs(restoredOffset) < 0.05) {
+    if (!subItem.is_embedded && !subItem.hash_match && isSubtitleAutoSyncEnabled() && Math.abs(restoredOffset) < 0.05) {
       setTimeout(() => triggerAutoSyncSubtitles(true), 400);
     }
   } catch (err) {
@@ -8990,6 +9027,90 @@ async function applySeekSnap(seekTime) {
   }
 }
 
+/**
+ * Startup Video Head-Buffer Gate:
+ * Holds automatic playback until video.buffered has at least 3.0s ahead of currentTime,
+ * readyState >= 4 (HAVE_ENOUGH_DATA), or 4000ms safety timeout after canplay.
+ * On release, if currentTime is between 0 and 1.5s, briefly resyncs decoder clock.
+ */
+function safePlayWithBufferGate(video) {
+  if (!video) return;
+  let gateReleased = false;
+
+  const releaseGate = () => {
+    if (gateReleased) return;
+    gateReleased = true;
+    cleanup();
+    try {
+      if (video.currentTime > 0 && video.currentTime < 1.5) {
+        video.currentTime = video.currentTime;
+      }
+    } catch (_) {}
+    video.play().catch(() => {});
+  };
+
+  const checkBuffer = () => {
+    if (gateReleased) return;
+    if (video.readyState >= 4) {
+      releaseGate();
+      return;
+    }
+    try {
+      const cur = video.currentTime || 0;
+      const b = video.buffered;
+      if (b && b.length > 0) {
+        for (let i = 0; i < b.length; i++) {
+          if (b.start(i) <= cur + 0.2 && b.end(i) >= cur) {
+            if (b.end(i) - cur >= 3.0) {
+              releaseGate();
+              return;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  };
+
+  let safetyTimeout = null;
+  let checkInterval = null;
+
+  const onCanPlay = () => {
+    checkBuffer();
+    if (!gateReleased && !safetyTimeout) {
+      safetyTimeout = setTimeout(() => {
+        releaseGate();
+      }, 4000);
+    }
+  };
+
+  const cleanup = () => {
+    if (safetyTimeout) {
+      clearTimeout(safetyTimeout);
+      safetyTimeout = null;
+    }
+    if (checkInterval) {
+      clearInterval(checkInterval);
+      checkInterval = null;
+    }
+    video.removeEventListener('progress', checkBuffer);
+    video.removeEventListener('canplay', onCanPlay);
+    video.removeEventListener('canplaythrough', releaseGate);
+    video.removeEventListener('playing', cleanup);
+  };
+
+  video.addEventListener('progress', checkBuffer);
+  video.addEventListener('canplay', onCanPlay);
+  video.addEventListener('canplaythrough', releaseGate);
+  video.addEventListener('playing', cleanup);
+
+  checkInterval = setInterval(checkBuffer, 100);
+  checkBuffer();
+
+  setTimeout(() => {
+    if (!gateReleased) releaseGate();
+  }, 4500);
+}
+
 async function seekTransmuxOffset(clamped) {
   const video = document.getElementById('evo-video-player');
   const active = state.discover.activeStream;
@@ -9037,33 +9158,50 @@ async function seekTransmuxOffset(clamped) {
   const releaseSeekPlayback = () => {
     if (!_isInitialPrebuffering) return;
     _isInitialPrebuffering = false;
+    try {
+      if (video.currentTime > 0 && video.currentTime < 1.5) {
+        video.currentTime = video.currentTime;
+      }
+    } catch (_) {}
     video.play().then(() => {
       updatePlayPauseIcon(true);
       setTimeout(() => requestHideBufferingHUD(true), 350);
     }).catch(() => {});
+    syncNativeTextTracks();
   };
 
   window._releasePrebufferedPlayback = releaseSeekPlayback;
 
+  let seekSafetyTimeout = null;
   const onSeekCanPlay = () => {
-    video.removeEventListener('canplay', onSeekCanPlay);
-    video.removeEventListener('canplaythrough', onSeekCanPlay);
-    video.removeEventListener('loadeddata', onSeekCanPlay);
-    video.removeEventListener('playing', onSeekCanPlay);
     const bufferAhead = getPlayerBufferAheadSec();
-    if (bufferAhead >= 4.0 || !active.useTransmux) {
+    if (bufferAhead >= 3.0 || (video && video.readyState >= 4) || !active.useTransmux) {
+      if (seekSafetyTimeout) {
+        clearTimeout(seekSafetyTimeout);
+        seekSafetyTimeout = null;
+      }
+      video.removeEventListener('canplay', onSeekCanPlay);
+      video.removeEventListener('canplaythrough', onSeekCanPlay);
+      video.removeEventListener('loadeddata', onSeekCanPlay);
+      video.removeEventListener('playing', onSeekCanPlay);
+      video.removeEventListener('progress', onSeekCanPlay);
       releaseSeekPlayback();
+    } else if (!seekSafetyTimeout) {
+      seekSafetyTimeout = setTimeout(() => {
+        if (_isInitialPrebuffering) releaseSeekPlayback();
+      }, 4000);
     }
   };
-  video.addEventListener('canplay', onSeekCanPlay, { once: true });
-  video.addEventListener('canplaythrough', onSeekCanPlay, { once: true });
-  video.addEventListener('loadeddata', onSeekCanPlay, { once: true });
-  video.addEventListener('playing', onSeekCanPlay, { once: true });
+  video.addEventListener('canplay', onSeekCanPlay);
+  video.addEventListener('canplaythrough', onSeekCanPlay);
+  video.addEventListener('loadeddata', onSeekCanPlay);
+  video.addEventListener('progress', onSeekCanPlay);
+  video.addEventListener('playing', onSeekCanPlay);
   setTimeout(() => {
     if (_isInitialPrebuffering) {
       releaseSeekPlayback();
     }
-  }, 6000);
+  }, 4500);
 
   if (!active.transcodeVideo && !hasBurnSub) {
     fetch(newUrl, { method: 'HEAD' }).then((r) => {
@@ -9931,6 +10069,12 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     const stageTitle = document.getElementById('buffering-stage-title');
     if (stageTitle) stageTitle.innerHTML = '<i class="fa-solid fa-circle-check text-green"></i> STREAM READY';
 
+    try {
+      if (video.currentTime > 0 && video.currentTime < 1.5) {
+        video.currentTime = video.currentTime;
+      }
+    } catch (_) {}
+
     video.play().then(() => {
       showToast(`Streaming: ${title}`, 'info');
       video.muted = false;
@@ -9969,14 +10113,23 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
 
   window._releasePrebufferedPlayback = releasePrebufferedPlayback;
 
+  let initialSafetyTimeout = null;
   const onInitialCanPlay = () => {
     if (_isInitialPrebuffering) {
       const bufferAhead = getPlayerBufferAheadSec();
-      if (bufferAhead >= 1.2 || (video && video.readyState >= 3)) {
+      if (bufferAhead >= 3.0 || (video && video.readyState >= 4)) {
+        if (initialSafetyTimeout) {
+          clearTimeout(initialSafetyTimeout);
+          initialSafetyTimeout = null;
+        }
         video.removeEventListener('canplay', onInitialCanPlay);
         video.removeEventListener('canplaythrough', onInitialCanPlay);
         video.removeEventListener('progress', onInitialCanPlay);
         releasePrebufferedPlayback();
+      } else if (!initialSafetyTimeout) {
+        initialSafetyTimeout = setTimeout(() => {
+          if (_isInitialPrebuffering) releasePrebufferedPlayback();
+        }, 4000);
       }
     }
   };

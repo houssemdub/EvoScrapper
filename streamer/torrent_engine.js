@@ -642,10 +642,11 @@ class TorrentEngine {
                 ? 0.7
                 : 1.0;
 
+        const minTenMbPieces = Math.max(4, Math.ceil((10 * 1024 * 1024) / pieceLength));
         const urgentPieces = clamp(
-            Math.ceil((URGENT_SECONDS * bytesPerSec) / pieceLength),
-            URGENT_MIN_PIECES,
-            URGENT_MAX_PIECES
+            Math.max(minTenMbPieces, Math.ceil((URGENT_SECONDS * bytesPerSec) / pieceLength)),
+            minTenMbPieces,
+            Math.max(minTenMbPieces, URGENT_MAX_PIECES)
         );
         // Deep staging (P6): a warm-up call may extend the urgent window to
         // cover the opening seconds of the next episode with real bytes.
@@ -757,7 +758,8 @@ class TorrentEngine {
         const pieceLength = positiveNumber(torrent.pieceLength, 256 * 1024);
 
         const headerPieces = clamp(Math.ceil(totalPieces * 0.02), 2, 8);
-        const indexPieces = Math.min(2, totalPieces);
+        const twoMbPieces = Math.max(2, Math.ceil((2 * 1024 * 1024) / pieceLength));
+        const indexPieces = Math.min(twoMbPieces, totalPieces);
         const headerEnd = Math.min(fileEndPiece, fileStartPiece + headerPieces - 1);
         const intervals = [
             {
@@ -917,28 +919,28 @@ class TorrentEngine {
             } catch (_) {}
         }
 
-        // FileIterator flags the three pieces it is about to read as critical.
-        // Mirror that for the near edge of each reader's urgent window so
-        // request pipelining starts as soon as bytes become available.
+        // Critical priority for contiguous head/cursor pieces (at least 10 MB)
+        const pieceLength = positiveNumber(torrent.pieceLength, 256 * 1024);
+        const criticalPieces = Math.max(7, Math.ceil((10 * 1024 * 1024) / pieceLength));
         for (const range of schedule.urgentRanges) {
             if (typeof torrent.critical === 'function') {
                 try {
-                    torrent.critical(range.start, Math.min(range.end, range.start + 7));
+                    torrent.critical(range.start, Math.min(range.end, range.start + criticalPieces));
                 } catch (_) {}
             }
         }
 
         // Container seek tables (MP4 moov, MKV cues) often live at the tail of
-        // the file. Keep the final index pieces critical so probing and seeking
+        // the file. Keep the final index pieces (at least 2 MB) critical so probing and seeking
         // do not have to wait for the whole download to reach them.
-        const indexPieces = Math.min(2, schedule.fileEndPiece - schedule.fileStartPiece + 1);
+        const twoMbPieces = Math.max(2, Math.ceil((2 * 1024 * 1024) / pieceLength));
+        const indexPieces = Math.min(twoMbPieces, schedule.fileEndPiece - schedule.fileStartPiece + 1);
         if (indexPieces > 0 && typeof torrent.critical === 'function') {
             try {
                 torrent.critical(schedule.fileEndPiece - indexPieces + 1, schedule.fileEndPiece);
             } catch (_) {}
         }
 
-        const pieceLength = positiveNumber(torrent.pieceLength, 256 * 1024);
         const primaryPiece = reader && Number.isInteger(reader.cursorPiece)
             ? reader.cursorPiece
             : schedule.readerCursors[schedule.readerCursors.length - 1];
@@ -957,7 +959,9 @@ class TorrentEngine {
     triggerGrowlerFlood(torrent, cursorPiece, fileEndPiece) {
         if (!torrent || !Array.isArray(torrent.wires) || torrent.wires.length === 0) return;
         const targetPiece = Number.isInteger(cursorPiece) ? cursorPiece : 0;
-        const floodEnd = Math.min(fileEndPiece || (torrent.pieces ? torrent.pieces.length - 1 : targetPiece), targetPiece + 2);
+        const pieceLen = positiveNumber(torrent.pieceLength, 256 * 1024);
+        const floodSpan = Math.max(4, Math.ceil((10 * 1024 * 1024) / pieceLen));
+        const floodEnd = Math.min(fileEndPiece || (torrent.pieces ? torrent.pieces.length - 1 : targetPiece), targetPiece + floodSpan);
 
         // Critical selection for initial range
         if (typeof torrent.critical === 'function') {

@@ -12,6 +12,25 @@ IGNORECASE_PATTERNS = [
     r"^\d{1,2}:\d{2}(:\d{2})?$",               # Timecodes on screen
     r"^♪.*♪$",                                 # Musical notes
     r"^#.*#$",                                 # Lyrics
+    r"synced\s*(and|&)?\s*corrected\s*by",
+    r"subtitles?\s*(by|downloaded|ripped|edited|encoded|created)",
+    r"sync(ed)?\s*by",
+    r"translated\s*by",
+    r"encoded\s*by",
+    r"rip(ped)?\s*by",
+    r"captioning\s*by",
+    r"resync(ed)?\s*by",
+    r"opensubtitles(\.org)?",
+    r"subscene(\.com)?",
+    r"addic7ed(\.com)?",
+    r"yify(\.is|\.tv|\.org|\.ch)?",
+    r"subsource(\.net)?",
+    r"animetosho(\.org)?",
+    r"podnapisi(\.net)?",
+    r"bsplayer",
+    r"www\.[a-z0-9\-]+\.[a-z]{2,}",
+    r"https?://[^\s]+",
+    r"\b(downloaded\s+from|visit\s+us|advertise|promo\s*code)\b",
 ]
 
 # Case-sensitive patterns (e.g. ALL CAPS signs / title cards)
@@ -49,6 +68,12 @@ def detect_forced_subtitles(cues: List[Tuple[float, float, str]]) -> List[bool]:
         words = clean.split()
         if not is_forced and dur <= 1.0 and len(words) <= 2 and not any(c in clean for c in "?!.,"):
             is_forced = True
+
+        # Check early credit/watermark heuristics (cues in the first 15 seconds)
+        if not is_forced and start <= 15.0:
+            lower = clean.lower()
+            if any(term in lower for term in ("synced", "subtitles", "opensubtitles", "addic7ed", "yify", "www.", "http", "release", "fps", "encoded")):
+                is_forced = True
 
         forced.append(is_forced)
 
