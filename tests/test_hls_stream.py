@@ -71,6 +71,7 @@ async def test_hls_prefetch_muxes_lookahead_segments_concurrently(tmp_path, monk
     import core.transmuxer as tm
     from core.transmuxer import HlsSegmentCache
 
+    monkeypatch.setenv("EVO_HLS_PREFETCH_AHEAD", "3")
     monkeypatch.setattr(tm, "_hls_cache", HlsSegmentCache(cache_dir=str(tmp_path / "hls_cache")))
 
     events = {"active": 0, "max_active": 0, "starts": []}

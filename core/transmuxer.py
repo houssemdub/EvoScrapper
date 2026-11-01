@@ -524,7 +524,11 @@ async def stream_transmuxed_video(
             )
 
 
-_HLS_SEMAPHORE = _LazySemaphore(lambda: asyncio.Semaphore(max(1, int(os.getenv("EVO_HLS_MAX_CONCURRENCY", "3")))))
+_HLS_SEMAPHORE = _LazySemaphore(
+    lambda: asyncio.Semaphore(
+        max(1, int(os.getenv("EVO_HLS_MAX_CONCURRENCY", str(min(3, max(1, (os.cpu_count() or 4) // 4))))))
+    )
+)
 
 
 class HlsSegmentCache:
@@ -1025,11 +1029,16 @@ def _trigger_hls_prefetch(
         finally:
             _PREFETCH_QUEUED.discard(next_key)
 
+    try:
+        ahead = max(1, int(os.environ.get("EVO_HLS_PREFETCH_AHEAD", "1")))
+    except ValueError:
+        ahead = 1
+
     async def _prefetch_worker():
         await asyncio.gather(
             *(
                 _prefetch_one(current_start + i * duration_seconds)
-                for i in range(1, 4)
+                for i in range(1, ahead + 1)
             )
         )
 
