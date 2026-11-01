@@ -12,6 +12,7 @@ from core.stream_resolver import resolve_streams
 from core.torrent_streamer import (
     ensure_streaming_daemon,
     get_daemon_status,
+    get_stremio_statistics,
     get_http_session,
     get_internal_stream_url,
     get_torrent_files,
@@ -928,6 +929,21 @@ async def get_torrent_engine_stats():
     """
     status = await get_daemon_status()
     return status or {"status": "offline", "engine": "webtorrent-v3", "sessions": []}
+
+
+@router.get("/{info_hash}/{file_idx}/stats.json")
+@router.get("/stats.json")
+async def get_stremio_stats_endpoint(
+    info_hash: Optional[str] = None,
+    file_idx: int = 0,
+):
+    """
+    Returns real-time Stremio-compatible torrent & swarm statistics conforming to
+    stremio-core-development /src/types/streaming_server/statistics.rs.
+    """
+    if not info_hash:
+        return {"error": "missing_info_hash"}
+    return await get_stremio_statistics(info_hash, file_idx)
 
 
 @router.get("/cache/status")

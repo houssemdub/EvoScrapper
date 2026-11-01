@@ -403,7 +403,8 @@ class TorrentEngine {
                 deselect: true,
                 strategy: 'sequential',
                 maxWebConns: maxWebConns,
-                storeCacheSlots: storeSlots
+                storeCacheSlots: storeSlots,
+                maxConns: parseInt(process.env.MAX_CONNS || '200', 10)
             };
 
             let settled = false;
@@ -1316,6 +1317,61 @@ class TorrentEngine {
             clientUploadSpeed: ((this.client?.uploadSpeed || 0) / 1024 / 1024).toFixed(2) + ' MB/s',
             active_torrents: this.sessions.size,
             sessions: active
+        };
+    }
+
+    /**
+     * Stremio-compatible torrent & swarm statistics conforming to
+     * stremio-core-development /src/types/streaming_server/statistics.rs
+     */
+    getStremioStatistics(targetHash, fileIdx = 0) {
+        const hash = this.canonicalHash(targetHash);
+        if (!hash) return null;
+        const sess = this.sessions.get(hash);
+        if (!sess || !sess.torrent) return null;
+        const t = sess.torrent;
+
+        const files = (t.files || []).map((f, i) => ({
+            name: f.name,
+            path: f.path,
+            length: f.length,
+            offset: f.offset || 0
+        }));
+
+        const numIdx = Number(fileIdx) || 0;
+        const targetFile = t.files && t.files[numIdx] ? t.files[numIdx] : (t.files && t.files[0] ? t.files[0] : null);
+
+        const unchoked = (t.wires || []).filter(w => !w.peerChoking).length;
+        const totalUnique = sess.sourceStats instanceof Map
+            ? Array.from(sess.sourceStats.values()).reduce((sum, s) => sum + (s.uniq?.size || 0), 0)
+            : (t.numPeers || 0);
+
+        let streamProgress = t.progress || 0;
+        if (targetFile && targetFile.length > 0 && targetFile.downloaded !== undefined) {
+            streamProgress = Math.min(1.0, targetFile.downloaded / targetFile.length);
+        }
+
+        return {
+            name: t.name || '',
+            infoHash: hash,
+            files: files,
+            downloadSpeed: t.downloadSpeed || 0,
+            uploadSpeed: t.uploadSpeed || 0,
+            downloaded: t.downloaded || 0,
+            uploaded: t.uploaded || 0,
+            unchoked: unchoked,
+            peers: t.numPeers || 0,
+            queued: 0,
+            unique: Math.max(totalUnique, t.numPeers || 0),
+            connectionTries: (t.wires || []).length,
+            peerSearchRunning: (t.numPeers || 0) < 40,
+            streamLen: targetFile ? targetFile.length : t.length,
+            streamName: targetFile ? targetFile.name : t.name,
+            streamProgress: streamProgress,
+            swarmConnections: (t.wires || []).length,
+            swarmPaused: Boolean(sess.swarmPaused),
+            secondsAhead: sess.secondsAhead || 0,
+            healthState: sess.healthState || 'healthy'
         };
     }
 }

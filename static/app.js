@@ -5005,57 +5005,60 @@ function formatSpeed(bytesPerSec) {
   return `${(bytesPerSec / 1024).toFixed(0)} KB/s`;
 }
 
-function startSwarmStatsMonitor(infoHash) {
+function startSwarmStatsMonitor(infoHash, fileIdx = 0) {
   stopSwarmStatsMonitor();
   const canonical = (infoHash || '').toLowerCase();
 
   const poll = async () => {
     try {
-      const res = await fetch('/api/v1/stream/status');
+      // Query Stremio statistics endpoint directly (stremio-core-development)
+      const res = await fetch(`/api/v1/stream/${canonical}/${fileIdx}/stats.json`);
       if (!res.ok) return;
-      const data = await res.json();
-      const sessions = data.sessions || [];
-      const session = sessions.find(s => (s.info_hash || '').toLowerCase() === canonical);
+      const stats = await res.json();
+      if (!stats || stats.error) return;
+
+      window._lastStremioStats = stats;
+      window._lastSwarmSession = {
+        info_hash: stats.infoHash,
+        download_speed: stats.downloadSpeed,
+        upload_speed: stats.uploadSpeed,
+        peers: stats.peers,
+        unchoked: stats.unchoked,
+        buffer_pct: ((stats.streamProgress || 0) * 100).toFixed(1),
+        stream_progress: stats.streamProgress,
+        swarm_paused: stats.swarmPaused,
+        seconds_ahead: stats.secondsAhead || 0
+      };
 
       const swarmStat = document.getElementById('player-swarm-stat');
-      if (!swarmStat) return;
-
-      if (session) {
-        window._lastSwarmSession = session;
-        updateSwarmInspectorModal(session);
-
-        const speed = formatSpeed(session.download_speed);
-        const peers = session.peers || 0;
-        const pct = session.buffer_pct || '0.0';
-        const downloaded = session.pieces_downloaded || 0;
-        const total = session.pieces_total || 0;
+      if (swarmStat) {
+        const speed = formatSpeed(stats.downloadSpeed);
+        const peers = stats.peers || 0;
+        const unchoked = stats.unchoked || 0;
+        const pct = ((stats.streamProgress || 0) * 100).toFixed(1);
 
         const peersBadge = document.getElementById('p2p-peers-count');
-        if (peersBadge) peersBadge.innerText = `${peers} Peers`;
+        if (peersBadge) peersBadge.innerText = `${peers} Peers (${unchoked} active)`;
 
         const hudP2p = document.getElementById('player-hud-p2p-text');
-        if (hudP2p) hudP2p.innerText = `${speed} · ${peers} peers · ${pct}%`;
+        if (hudP2p) hudP2p.innerText = `${speed} · ${peers} peers (${unchoked} active) · ${pct}%`;
 
         swarmStat.innerHTML = `
           <span class="mono text-xs flex items-center gap-2" style="cursor:pointer;" onclick="toggleSwarmInspectorModal(true)" title="Click to open P2P Swarm & Piece Map Inspector">
             <i class="fa-solid fa-satellite-dish text-green"></i>
             <span class="text-accent font-bold"><i class="fa-solid fa-download"></i> ${speed}</span>
             <span class="text-dim">|</span>
-            <span><i class="fa-solid fa-network-wired text-blue"></i> ${peers} peers</span>
+            <span><i class="fa-solid fa-network-wired text-blue"></i> ${peers} peers (${unchoked} active)</span>
             <span class="text-dim">|</span>
-            <span class="text-green"><i class="fa-solid fa-layer-group"></i> ${pct}% (${downloaded}/${total} pcs)</span>
+            <span class="text-green"><i class="fa-solid fa-layer-group"></i> ${pct}%</span>
           </span>
         `;
-      } else {
-        swarmStat.innerHTML = '<span class="mono text-xs text-dim"><i class="fa-solid fa-spinner fa-spin text-accent"></i> Connecting to P2P Swarm & Allocating Multi-Buffer...</span>';
-        const hudP2p = document.getElementById('player-hud-p2p-text');
-        if (hudP2p) hudP2p.innerText = 'Connecting...';
       }
     } catch (_) {}
   };
 
   poll();
-  swarmMonitorTimer = setInterval(poll, 1500);
+  swarmMonitorTimer = setInterval(poll, 800);
 }
 
 function stopSwarmStatsMonitor() {
@@ -8717,10 +8720,12 @@ function showPlayerBufferingHUD() {
 
   playerBufferingInterval = setInterval(() => {
     const video = document.getElementById('evo-video-player');
-    const session = window._lastSwarmSession;
+    const stats = window._lastStremioStats || window._lastSwarmSession;
     const fill = document.getElementById('buffering-progress-fill');
     const pctBadge = document.getElementById('buffering-pct-badge');
     const speedLabel = document.getElementById('buffering-speed-label');
+    const bytesLabel = document.getElementById('buffering-bytes-label');
+    const countdownLabel = document.getElementById('buffering-countdown-label');
 
     // Calculate actual video playback buffer ahead of current playhead
     const bufferAheadSec = getPlayerBufferAheadSec();
@@ -8736,6 +8741,7 @@ function showPlayerBufferingHUD() {
 
     // Auto-dismiss HUD only once video is actively advancing with a healthy playback buffer (>= 2.0s)
     if (!_isInitialPrebuffering && video && !video.paused && video.currentTime > 0 && video.readyState >= 3 && bufferAheadSec >= 2.0) {
+      if (countdownLabel) countdownLabel.innerHTML = '<i class="fa-solid fa-circle-check text-green"></i> Stream Ready';
       requestHideBufferingHUD();
       return;
     }
@@ -8744,19 +8750,31 @@ function showPlayerBufferingHUD() {
     let bufferPct = 15;
     if (bufferAheadSec > 0) {
       bufferPct = Math.min(100, Math.max(30, Math.round((bufferAheadSec / 2.0) * 100)));
+    } else if (stats && stats.streamProgress !== undefined && stats.streamProgress > 0) {
+      bufferPct = Math.min(95, Math.max(15, Math.round(stats.streamProgress * 100)));
     } else {
       const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
       bufferPct = Math.min(95, Math.max(15, Math.round(elapsedSec * 40)));
     }
 
-    if (session && session.download_speed !== undefined) {
-      const spdNum = session.download_speed || 0;
+    if (stats) {
+      const spdNum = stats.downloadSpeed || stats.download_speed || 0;
       const spdStr = formatSpeed(spdNum);
-      const peers = session.peers || 0;
+      const peers = stats.peers || 0;
+      const unchoked = stats.unchoked !== undefined ? stats.unchoked : (stats.peers_list ? stats.peers_list.length : 0);
 
       if (fill) fill.style.width = `${bufferPct}%`;
       if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
-      if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${spdStr} (${peers} peers)`;
+
+      if (peers === 0) {
+        if (bytesLabel) bytesLabel.innerHTML = '<i class="fa-solid fa-circle-nodes"></i> Connecting to P2P Swarm...';
+        if (speedLabel) speedLabel.innerHTML = '<i class="fa-solid fa-satellite-dish"></i> Searching DHT & Trackers (0 peers)';
+        if (countdownLabel) countdownLabel.innerHTML = '<i class="fa-solid fa-hourglass-start"></i> Contacting swarm sources...';
+      } else {
+        if (bytesLabel) bytesLabel.innerHTML = '<i class="fa-solid fa-layer-group"></i> Buffering P2P Stream...';
+        if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${spdStr} (${peers} peers, ${unchoked} active)`;
+        if (countdownLabel) countdownLabel.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Buffering playback (${bufferPct}%)...`;
+      }
     } else {
       if (fill) fill.style.width = `${bufferPct}%`;
       if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
@@ -9342,7 +9360,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     swarmStat.innerHTML = '<span class="mono text-xs text-dim flex items-center gap-2"><i class="fa-solid fa-circle-nodes text-green"></i> Initializing P2P Swarm & Allocating Multi-Buffer...</span>';
   }
 
-  startSwarmStatsMonitor(infoHash);
+  startSwarmStatsMonitor(infoHash, effectiveFileIdx);
 
   // Probe stream metadata in background for exact duration, multi-audio tracks, and embedded subtitles
   let probeAttempts = 0;

@@ -370,6 +370,17 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // ── Stremio Statistics Endpoint (stremio-core-development) ────────────────
+    const stremioStatsMatch = pathname.match(/^\/([0-9a-fA-F]{40})(?:\/(\d+))?\/stats\.json$/i);
+    if (stremioStatsMatch || pathname === '/stats.json') {
+        const hash = stremioStatsMatch ? stremioStatsMatch[1].toLowerCase() : (query.get('info_hash') || query.get('hash') || '').toLowerCase();
+        const fileIdx = stremioStatsMatch && stremioStatsMatch[2] ? parseInt(stremioStatsMatch[2], 10) : (parseInt(query.get('file_idx') || query.get('idx') || '0', 10));
+        const stats = engine.getStremioStatistics(hash, fileIdx);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(stats || { error: 'session_not_found', infoHash: hash }));
+        return;
+    }
+
     // ── File Info & Bitrate Metadata [Phase 2] ────────────────────────────────
     if (pathname === '/file-info') {
         const infoHash = query.get('hash') || query.get('info_hash');

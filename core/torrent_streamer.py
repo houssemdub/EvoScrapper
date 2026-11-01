@@ -549,6 +549,44 @@ async def get_daemon_status() -> Dict[str, Any]:
     return {"status": "error", "active_torrents": 0, "sessions": []}
 
 
+async def get_stremio_statistics(info_hash: str, file_idx: int = 0) -> Dict[str, Any]:
+    """Returns Stremio-compatible torrent & swarm statistics conforming to stremio-core-development."""
+    if not info_hash or info_hash.startswith("cdn_"):
+        return {"error": "invalid_info_hash", "infoHash": info_hash}
+    await ensure_streaming_daemon()
+    try:
+        session = await get_http_session()
+        async with session.get(
+            f"{DAEMON_URL}/{info_hash}/{file_idx}/stats.json",
+            headers=streamer_auth_headers(),
+            timeout=aiohttp.ClientTimeout(total=2.0),
+        ) as resp:
+            if resp.status == 200:
+                return await resp.json()
+    except Exception:
+        pass
+    return {
+        "name": "",
+        "infoHash": info_hash,
+        "files": [],
+        "downloadSpeed": 0,
+        "uploadSpeed": 0,
+        "downloaded": 0,
+        "uploaded": 0,
+        "unchoked": 0,
+        "peers": 0,
+        "queued": 0,
+        "unique": 0,
+        "connectionTries": 0,
+        "peerSearchRunning": True,
+        "streamLen": None,
+        "streamName": None,
+        "streamProgress": 0.0,
+        "swarmConnections": 0,
+        "swarmPaused": False,
+    }
+
+
 def get_internal_stream_url(
     info_hash: str,
     file_idx: int = 0,
