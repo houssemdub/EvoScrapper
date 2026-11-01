@@ -538,12 +538,18 @@ async def get_embedded_subtitles(
     season: Optional[int] = Query(None),
     episode: Optional[int] = Query(None),
     fast: bool = Query(False, description="Extract only first 5 minutes for instant preview"),
+    start_seconds: float = Query(0.0, ge=0, description="Cue time origin (matches transmux seek)"),
 ):
     """
     Extracts embedded Matroska/MP4 subtitles into WebVTT format.
     - With fast=true: extracts only first 5 minutes for instant preview (no cache wait)
     - Without fast: full extraction with disk caching (clients poll until ready)
     """
+    if not isinstance(start_seconds, (int, float)):
+        try:
+            start_seconds = float(getattr(start_seconds, "default", 0.0))
+        except (ValueError, TypeError):
+            start_seconds = 0.0
     if info_hash.startswith("cdn_"):
         return Response(
             content="WEBVTT\n\nNOTE Web-CDN streams do not have embedded subtitles\n",
@@ -552,7 +558,7 @@ async def get_embedded_subtitles(
         )
 
     SUB_VTT_CACHE_VERSION = "vtt_v5"
-    cache_key = f"{SUB_VTT_CACHE_VERSION}|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
+    cache_key = f"{SUB_VTT_CACHE_VERSION}|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}|{start_seconds}"
     cached = load_cached_sub_vtt(cache_key)
     if cached:
         return Response(
@@ -570,7 +576,10 @@ async def get_embedded_subtitles(
     if failed:
         # A past failure is not terminal: relaunch the single-flight job so the
         # track recovers on a later poll once the swarm warms up.
-        start_sub_vtt_extraction(cache_key, target_source, sub_index)
+        if start_seconds and start_seconds > 0:
+            start_sub_vtt_extraction(cache_key, target_source, sub_index, start_seconds=start_seconds)
+        else:
+            start_sub_vtt_extraction(cache_key, target_source, sub_index)
         return Response(
             content=failed,
             media_type="text/vtt; charset=utf-8",
@@ -581,7 +590,10 @@ async def get_embedded_subtitles(
 
     # Fast path: if local media file is already cached on disk, extract directly in < 500ms
     if local_file:
-        vtt = await extract_embedded_subtitle_vtt(local_file, sub_index, timeout=8.0)
+        if start_seconds and start_seconds > 0:
+            vtt = await extract_embedded_subtitle_vtt(local_file, sub_index, timeout=8.0, start_seconds=start_seconds)
+        else:
+            vtt = await extract_embedded_subtitle_vtt(local_file, sub_index, timeout=8.0)
         if vtt and "-->" in vtt:
             store_cached_sub_vtt(cache_key, vtt)
             return Response(
@@ -592,8 +604,12 @@ async def get_embedded_subtitles(
 
     if fast is True:
         # Fast preview: serve first 5 minutes immediately to show cues without initial swarm contention
-        vtt = await extract_embedded_subtitle_vtt(target_source, sub_index, timeout=10.0, duration=300.0)
-        start_sub_vtt_extraction(cache_key, target_source, sub_index)
+        if start_seconds and start_seconds > 0:
+            vtt = await extract_embedded_subtitle_vtt(target_source, sub_index, timeout=10.0, duration=300.0, start_seconds=start_seconds)
+            start_sub_vtt_extraction(cache_key, target_source, sub_index, start_seconds=start_seconds)
+        else:
+            vtt = await extract_embedded_subtitle_vtt(target_source, sub_index, timeout=10.0, duration=300.0)
+            start_sub_vtt_extraction(cache_key, target_source, sub_index)
         return Response(
             content=vtt,
             media_type="text/vtt; charset=utf-8",
@@ -604,10 +620,16 @@ async def get_embedded_subtitles(
     # retry, so returning "pending" permanently hides the track from the client.
     from core.transmuxer import extract_embedded_subtitle_vtt as _extract
     try:
-        vtt = await asyncio.wait_for(
-            _extract(target_source, sub_index, timeout=25.0),
-            timeout=30.0,
-        )
+        if start_seconds and start_seconds > 0:
+            vtt = await asyncio.wait_for(
+                _extract(target_source, sub_index, timeout=25.0, start_seconds=start_seconds),
+                timeout=30.0,
+            )
+        else:
+            vtt = await asyncio.wait_for(
+                _extract(target_source, sub_index, timeout=25.0),
+                timeout=30.0,
+            )
     except Exception as exc:
         streaming_logger.warning(f"[Subtitles] synchronous extract failed: {exc}")
         vtt = ""

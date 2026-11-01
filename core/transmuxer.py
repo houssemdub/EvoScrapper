@@ -1959,6 +1959,7 @@ def start_sub_vtt_extraction(
     key: str,
     source_url: str,
     sub_index: int = 0,
+    start_seconds: float = 0.0,
 ) -> bool:
     """Launches a single-flight background extraction job. Returns False if one is already running."""
     if sub_vtt_job_running(key):
@@ -1970,7 +1971,7 @@ def start_sub_vtt_extraction(
     except RuntimeError:
         loop = asyncio.get_event_loop()
     _sub_vtt_jobs[key] = loop.create_task(
-        _run_sub_vtt_extraction(key, source_url, sub_index)
+        _run_sub_vtt_extraction(key, source_url, sub_index, start_seconds=start_seconds)
     )
     return True
 
@@ -1979,11 +1980,17 @@ async def _run_sub_vtt_extraction(
     key: str,
     source_url: str,
     sub_index: int = 0,
+    start_seconds: float = 0.0,
 ) -> None:
     try:
-        vtt = await extract_embedded_subtitle_vtt(
-            source_url, sub_index, timeout=SUB_EXTRACT_TIMEOUT
-        )
+        if start_seconds and start_seconds > 0:
+            vtt = await extract_embedded_subtitle_vtt(
+                source_url, sub_index, timeout=SUB_EXTRACT_TIMEOUT, start_seconds=start_seconds
+            )
+        else:
+            vtt = await extract_embedded_subtitle_vtt(
+                source_url, sub_index, timeout=SUB_EXTRACT_TIMEOUT
+            )
         stored = store_cached_sub_vtt(key, vtt)
         if not stored:
             _sub_vtt_failed[key] = vtt or "WEBVTT\n\nNOTE Empty or unsupported embedded subtitle track\n"
@@ -1998,6 +2005,7 @@ async def extract_embedded_subtitle_vtt(
     sub_stream_index: int = 0,
     timeout: float = 8.0,
     duration: Optional[float] = None,
+    start_seconds: float = 0.0,
 ) -> str:
     """
     Extracts an embedded subtitle stream from MKV/MP4 using FFmpeg and converts it to WebVTT format on stdout.
@@ -2032,6 +2040,9 @@ async def extract_embedded_subtitle_vtt(
         "-avoid_negative_ts", "make_zero",
         "-f", "webvtt",
     ])
+    if start_seconds and start_seconds > 0:
+        cmd.insert(cmd.index("-i"), "-ss")
+        cmd.insert(cmd.index("-i"), f"{start_seconds:.3f}")
     if duration is not None and duration > 0:
         cmd.extend(["-t", f"{duration:.1f}"])
     cmd.append("-")
@@ -2054,7 +2065,15 @@ async def extract_embedded_subtitle_vtt(
         text = stdout.decode("utf-8", errors="replace") if stdout else ""
         err_text = stderr.decode("utf-8", errors="replace").lower() if stderr else ""
         if text.strip() and ("-->" in text or "WEBVTT" in text):
-            return sanitize_webvtt_content(text)
+            sanitized = sanitize_webvtt_content(text)
+            if start_seconds > 0 and sanitized.lstrip().startswith("WEBVTT"):
+                lines = sanitized.split("\n", 1)
+                map_line = (
+                    f"X-TIMESTAMP-MAP=MPEGTS:{int(start_seconds * 90000)},"
+                    f"LOCAL:00:00:00.000"
+                )
+                sanitized = lines[0] + "\n" + map_line + "\n" + (lines[1] if len(lines) > 1 else "")
+            return sanitized
         if "bitmap" in err_text or "pgs" in err_text:
             return "WEBVTT\n\nNOTE Codec: hdmv_pgs (Bitmap PGS Subtitle)\n"
         return "WEBVTT\n\nNOTE Empty or unsupported embedded subtitle track\n"
