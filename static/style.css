@@ -4873,3 +4873,20 @@ p, span, div {
   margin-top: 3px;
   font-size: 0.75rem;
 }
+
+/* ── Streaming Engine Selector (v2.7.0) ── */
+.engine-option-box {
+  transition: all 0.2s ease;
+  position: relative;
+}
+.engine-option-box:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(56, 189, 248, 0.3) !important;
+  transform: translateY(-1px);
+}
+.engine-option-box.active {
+  background: rgba(56, 189, 248, 0.08) !important;
+  border-color: var(--color-accent, #38bdf8) !important;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.15);
+}
+

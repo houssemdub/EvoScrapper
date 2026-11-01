@@ -5429,6 +5429,7 @@ async function toggleSettingsModal(open = null) {
     loadAllSettings();
     switchSettingsTab(activeSettingsTab);
     await fetchCacheStatus();
+    refreshEngineStatus();
     loadInstalledAddons();
   }
 }
@@ -5449,6 +5450,8 @@ function switchSettingsTab(tabName) {
     fetchCacheStatus();
   } else if (tabName === 'addons') {
     loadInstalledAddons();
+  } else if (tabName === 'network') {
+    refreshEngineStatus();
   }
 }
 
@@ -5728,18 +5731,98 @@ async function testCinemetaEndpoint() {
 }
 
 async function pingDaemonDirect() {
-  showToast('Pinging WebTorrent Daemon (127.0.0.1:8889)...', 'info');
+  showToast('Pinging Streaming Daemon...', 'info');
   const t0 = performance.now();
   try {
     const res = await fetch('/api/v1/stream/stats');
     const lat = Math.round(performance.now() - t0);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    showToast(`Daemon Online (${data.engine || 'webtorrent'}): ${lat}ms | DL: ${data.clientDownloadSpeed || '0 MB/s'}`, 'success');
+    showToast(`Daemon Online (${data.engine || 'active'}): ${lat}ms | DL: ${data.clientDownloadSpeed || '0 MB/s'}`, 'success');
   } catch (err) {
     showToast(`Daemon unreachable: ${err.message}`, 'error');
   }
 }
+
+async function refreshEngineStatus() {
+  try {
+    const [engineRes, listRes] = await Promise.all([
+      fetch('/api/v1/stream/engine'),
+      fetch('/api/v1/stream/engine/list'),
+    ]);
+    if (!engineRes.ok || !listRes.ok) return;
+    const current = await engineRes.json();
+    const engines = await listRes.json();
+
+    const badge = document.getElementById('settings-active-engine-badge');
+    const endpoint = document.getElementById('engine-active-endpoint');
+    const ram = document.getElementById('engine-active-ram');
+    const hudSelect = document.getElementById('select-hud-engine-backend');
+
+    if (badge) {
+      badge.innerHTML = `<i class="fa-solid fa-bolt"></i> ${current.display_name || current.active_engine}`;
+    }
+    if (endpoint) {
+      endpoint.textContent = current.url;
+    }
+    if (hudSelect) {
+      hudSelect.value = current.configured_engine || current.active_engine;
+    }
+
+    ['rust', 'node', 'python', 'auto'].forEach(name => {
+      const el = document.getElementById(`engine-opt-${name}`);
+      if (el) {
+        if (name === (current.configured_engine || current.active_engine)) {
+          el.classList.add('active');
+        } else {
+          el.classList.remove('active');
+        }
+      }
+    });
+
+    engines.forEach(eng => {
+      const statusEl = document.getElementById(`engine-status-${eng.name}`);
+      if (statusEl) {
+        if (eng.active) {
+          statusEl.textContent = 'Active';
+          statusEl.className = 'tag tag-xs tag-green mono text-2xs';
+          if (ram) ram.textContent = eng.memory_mb ? `${eng.memory_mb} MB` : 'Optimal';
+        } else if (eng.available) {
+          statusEl.textContent = 'Ready';
+          statusEl.className = 'tag tag-xs tag-blue mono text-2xs';
+        } else {
+          statusEl.textContent = 'Uncompiled';
+          statusEl.className = 'tag tag-xs tag-dim mono text-2xs';
+        }
+      }
+    });
+  } catch (e) {
+    console.warn('[EngineUI] Failed to refresh engine status:', e);
+  }
+}
+
+async function selectStreamingEngine(engineName) {
+  showToast(`Switching streaming engine to ${engineName}...`, 'info');
+  try {
+    const res = await fetch('/api/v1/stream/engine/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: engineName }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Switch failed');
+
+    showToast(`Streaming engine switched to ${data.active_engine}`, 'success');
+    await refreshEngineStatus();
+  } catch (err) {
+    showToast(`Engine switch error: ${err.message}`, 'error');
+  }
+}
+
+async function handleHudEngineSwitch(engineName) {
+  await selectStreamingEngine(engineName);
+}
+
 
 async function fetchCacheStatus() {
   const usageEl = document.getElementById('settings-cache-usage');

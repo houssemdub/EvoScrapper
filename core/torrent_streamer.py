@@ -171,9 +171,22 @@ def is_direct_streamable(filename_or_title: str) -> bool:
 
 
 async def get_http_session() -> aiohttp.ClientSession:
-    """Returns a module-level persistent aiohttp ClientSession."""
+    """Returns a module-level persistent aiohttp ClientSession bound to the current running event loop."""
     global _session
-    if _session is None or _session.closed:
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    session_loop_stale = False
+    if _session is not None:
+        try:
+            sess_loop = getattr(_session, "_loop", None)
+            session_loop_stale = sess_loop is None or sess_loop.is_closed() or (sess_loop != current_loop)
+        except Exception:
+            session_loop_stale = True
+
+    if _session is None or _session.closed or session_loop_stale:
         connector = aiohttp.TCPConnector(limit=100, keepalive_timeout=30)
         _session = aiohttp.ClientSession(connector=connector)
     return _session

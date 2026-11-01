@@ -60,9 +60,20 @@ async def health_check():
     except Exception:
         pass
 
+    try:
+        from core.engine_manager import get_engine_manager
+        mgr = get_engine_manager()
+        subsystems["streaming_engine"] = {
+            "active": mgr.active_engine_name,
+            "configured": mgr.configured_engine,
+            "fallback_occurred": mgr.fallback_occurred,
+        }
+    except Exception:
+        pass
+
     return HealthResponse(
         app="EvoScrapper",
-        version="2.0.0",
+        version="2.7.0",
         status="healthy" if healthy_count > 0 else "degraded",
         uptime_seconds=uptime,
         total_providers=len(provider_stats),

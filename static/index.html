@@ -1466,6 +1466,20 @@
                     </button>
                   </div>
 
+                  <!-- Streaming Backend Daemon Engine Selector -->
+                  <div class="popover-row">
+                    <div class="popover-label">
+                      <span class="popover-title">Engine Backend</span>
+                      <span class="popover-desc">P2P buffering daemon (Rust / Node / Python)</span>
+                    </div>
+                    <select id="select-hud-engine-backend" class="search-input mono text-2xs p-1" style="width:115px; font-size:0.7rem; background:rgba(0,0,0,0.4);" onchange="handleHudEngineSwitch(this.value)">
+                      <option value="rust">⚡ Rust</option>
+                      <option value="node" selected>🟢 Node.js</option>
+                      <option value="python">🐍 Python</option>
+                      <option value="auto">🔄 Auto</option>
+                    </select>
+                  </div>
+
                   <!-- Playback Speed Grid -->
                   <div class="popover-section">
                     <div class="popover-label-sm">Playback Speed</div>
@@ -2308,17 +2322,61 @@
 
           <!-- ── TAB 3: NETWORK & TRACKERS ── -->
           <div id="settings-tab-network" class="settings-pane hidden">
-            <div class="settings-card">
+            <!-- P2P Streaming Engine Selector Card -->
+            <div class="settings-card" id="settings-engine-card">
               <div class="settings-card-header">
-                <span class="settings-card-title"><i class="fa-solid fa-satellite-dish text-accent"></i> WebTorrent Streaming Micro-Daemon</span>
-                <span class="tag tag-green mono text-xs"><i class="fa-solid fa-check"></i> 127.0.0.1:8889</span>
-              </div>
-              <div class="mono text-xs text-dim mb-2">Loopback streaming endpoint powering the HTML5 HTTP 206 byte-range media player.</div>
-              <div class="flex items-center justify-between p-2 rounded" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06);">
-                <div class="mono text-xs">
-                  <span class="text-dim">Daemon URL:</span> <span class="text-accent">http://127.0.0.1:8889</span>
+                <div>
+                  <span class="settings-card-title"><i class="fa-solid fa-microchip text-accent"></i> Streaming Engine Architecture</span>
+                  <div class="settings-field-desc">Choose between ultra-fast native Rust, Node.js WebTorrent, or pure Python fallback engines.</div>
                 </div>
-                <button class="btn btn-xs btn-outline" onclick="pingDaemonDirect()"><i class="fa-solid fa-heart-pulse"></i> Ping Daemon</button>
+                <span id="settings-active-engine-badge" class="tag tag-green mono text-xs"><i class="fa-solid fa-bolt"></i> Auto (Rust/Node)</span>
+              </div>
+
+              <!-- Engine Selection Options -->
+              <div class="grid grid-2 gap-2 mb-3">
+                <div class="engine-option-box p-2.5 rounded cursor-pointer" id="engine-opt-rust" onclick="selectStreamingEngine('rust')" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="mono font-bold text-xs text-bright"><i class="fa-brands fa-rust text-orange-400"></i> Rust Engine (evostreamer-rs)</span>
+                    <span class="tag tag-xs tag-accent mono text-2xs" id="engine-status-rust">Recommended</span>
+                  </div>
+                  <div class="text-2xs text-dim" style="font-size:0.7rem;">Native zero-copy mmap buffer, ~15MB RAM, 0ms GC pause. Instant 4K seeking.</div>
+                </div>
+
+                <div class="engine-option-box p-2.5 rounded cursor-pointer" id="engine-opt-node" onclick="selectStreamingEngine('node')" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="mono font-bold text-xs text-bright"><i class="fa-brands fa-node-js text-green"></i> Node.js WebTorrent</span>
+                    <span class="tag tag-xs tag-green mono text-2xs" id="engine-status-node">Active</span>
+                  </div>
+                  <div class="text-2xs text-dim" style="font-size:0.7rem;">Battle-tested sliding piece window engine on WebTorrent v3 micro-daemon.</div>
+                </div>
+
+                <div class="engine-option-box p-2.5 rounded cursor-pointer" id="engine-opt-python" onclick="selectStreamingEngine('python')" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="mono font-bold text-xs text-bright"><i class="fa-brands fa-python text-blue-400"></i> Python Asyncio Fallback</span>
+                    <span class="tag tag-xs tag-blue mono text-2xs" id="engine-status-python">Zero Binaries</span>
+                  </div>
+                  <div class="text-2xs text-dim" style="font-size:0.7rem;">Lightweight in-process HTTP 206 range server for constrained environments.</div>
+                </div>
+
+                <div class="engine-option-box p-2.5 rounded cursor-pointer" id="engine-opt-auto" onclick="selectStreamingEngine('auto')" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="mono font-bold text-xs text-bright"><i class="fa-solid fa-arrows-rotate text-purple-400"></i> Auto-Adaptive Multi-Engine</span>
+                    <span class="tag tag-xs tag-purple mono text-2xs">Fault Tolerant</span>
+                  </div>
+                  <div class="text-2xs text-dim" style="font-size:0.7rem;">Prefers Rust native, gracefully degrades to Node.js, falls back to Python.</div>
+                </div>
+              </div>
+
+              <!-- Active Engine Telemetry Bar -->
+              <div class="flex items-center justify-between p-2 rounded" style="background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.06);">
+                <div class="mono text-xs flex items-center gap-3">
+                  <div><span class="text-dim">Active Endpoint:</span> <span class="text-accent" id="engine-active-endpoint">http://127.0.0.1:8889</span></div>
+                  <div><span class="text-dim">Engine RAM:</span> <span class="text-green font-bold" id="engine-active-ram">Checking...</span></div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button class="btn btn-xs btn-outline" onclick="pingDaemonDirect()"><i class="fa-solid fa-heart-pulse"></i> Ping</button>
+                  <button class="btn btn-xs btn-ghost text-accent" onclick="refreshEngineStatus()"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                </div>
               </div>
             </div>
 

@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     JACKETT_API_KEY: Optional[str] = None
 
     # Streaming & Transmuxing Settings
+    STREAMING_ENGINE: str = "auto"  # "rust", "node", "python", "auto"
+    STREAM_PORT_RUST: int = 8891
+    STREAM_PORT_NODE: int = 8889
+    STREAM_PORT_PYTHON: int = 8892
+    RUST_STREAMER_BIN: Optional[str] = None
+    AUTO_FALLBACK_ENGINES: bool = True
     STREAM_CACHE_DIR: str = ".stream_cache"
     MAX_DISK_CACHE_GB: float = 15.0
     MAX_CONCURRENT_FFMPEG: int = 4

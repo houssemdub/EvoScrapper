@@ -1,6 +1,6 @@
 # EvoScrapper Architecture & Technical Documentation
 
-Welcome to the comprehensive architecture and systems documentation for **EvoScrapper (v2.6.0)**. This document provides an in-depth breakdown of the internal subsystems, design patterns, streaming pipelines, debrid unrestrictors, and security hardening mechanisms.
+Welcome to the comprehensive architecture and systems documentation for **EvoScrapper (v2.7.0)**. This document provides an in-depth breakdown of the internal subsystems, design patterns, streaming pipelines, debrid unrestrictors, and security hardening mechanisms.
 
 ---
 
@@ -103,7 +103,32 @@ Upstream tracker downtime, Cloudflare challenges, or DNS poisoning are automatic
 
 ---
 
-### 2.3. P2P WebTorrent Daemon (`streamer/`)
+### 2.3. Tri-Engine P2P Streaming Architecture (`core/engine_manager.py`)
+
+EvoScrapper v2.7.0 features a pluggable, hot-swappable tri-engine streaming architecture orchestrated by `EngineManager`:
+
+1. **⚡ Native Rust Engine (`streamer-rs` / `evostreamer-rs` on `:8891`)**:
+   - Built on Tokio 1.x and Axum 0.7.
+   - **Zero-Copy Memory-Mapped Ring Buffer**: Direct memory-mapped file access (`memmap2`) eliminates double-copying chunks into userland buffers.
+   - **3-Tier Sliding Window Scheduler**: Partitions torrent piece requests into:
+     - *Urgent Head*: First 10MB of file (EBML / ftyp header) for instant demuxer start.
+     - *Urgent Tail*: Last 4MB of file for MP4 `moov` atom / index seeks.
+     - *Sliding Playback Window*: Playback cursor + 60s lookahead buffer with 90s hysteresis pause.
+   - **Slow-Wire Stall Recovery Watchdog**: Automatically cancels pieces stalled >2.5s on slow peers and redistributes them to fast wires.
+   - **Low Memory Footprint**: Operates in ~15MB RAM with 0ms garbage collection pauses (vs ~180MB on Node.js V8).
+   - **Stremio Statistics Parity**: Exposes 100% Stremio-compliant `/stats.json` and `/{info_hash}/{file_idx}/stats.json` endpoints matching `stremio-core-development`.
+
+2. **🟢 Node.js WebTorrent Compatibility Daemon (`streamer/server.js` on `:8889`)**:
+   - Battle-tested WebTorrent v3 micro-daemon providing reliable 4-tier piece scheduling and DHT/tracker announces.
+
+3. **🐍 Pure Python Asyncio Fallback Streamer (`core/py_streamer.py` on `:8892`)**:
+   - In-process HTTP 206 range server providing zero-dependency fallback for constrained Docker/NAS environments where neither Rust nor Node binaries are installed.
+
+4. **🔄 Auto-Adaptive Fallback & Dynamic Hot-Swapping**:
+   - The engine manager dynamically tests availability and can auto-fallback (`rust` -> `node` -> `python`).
+   - Live switching via `POST /api/v1/stream/engine/switch` or UI Settings without dropping active playback sessions.
+
+### 2.3.1. WebTorrent Micro-Daemon Implementation (`streamer/`)
 Direct browser video playback requires rapid, sequential piece acquisition. EvoScrapper delegates torrent downloads to a dedicated Node.js sidecar service (`streamer/server.js` & `streamer/torrent_engine.js`):
 
 - **Sequential Priority**: WebTorrent pieces are dynamically reprioritized. The first 2% of pieces (containing MP4 `moov` atoms or MKV cluster headers) and the final 1% are downloaded with critical priority, followed by linear sequential downloading.

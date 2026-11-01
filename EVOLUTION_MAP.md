@@ -1,9 +1,9 @@
 # EvoScrapper Deep Architectural Audit & Evolution Map (v2.6)
 
-> **Document Version:** 2.6.0-PROD  
+> **Document Version:** 2.7.0-PROD  
 > **Target Workspace:** [`F:/Projects/Torrent scrapping Apis/EvoScrapper`](file:///F:/Projects/Torrent%20scrapping%20Apis/EvoScrapper)  
 > **Scope:** Full-Workspace Exhaustive Code Audit, Flaw Matrix, Concurrency Hazards, Latency Breakdown, and Actionable 5-Phase Evolution Roadmap.  
-> **Status:** Fully Hardened Production Release (v2.6.0)  
+> **Status:** Fully Hardened Production Release (v2.7.0)  
 
 ---
 
@@ -336,7 +336,16 @@ Based on the deep audit, the buffering on-and-off loop observed at movie start i
   2. **Atomic Player Initialization:** Pre-determine direct vs transmux pipeline *before* assigning `video.src`, completely eliminating mid-flight pipeline reloads that flash the buffering animation.
   3. Implement unified timer lifecycle registry (`TimerManager`) that cleanly disposes of all timers on modal close or track change.
 
-### Phase 4: Zero-Copy WebTransport Daemon Bypass & Distributed Mesh
+### Phase 4 (v2.7.0): Native Rust Streaming Engine (`evostreamer-rs`) & Multi-Engine Architecture
+
+**Status: COMPLETED (v2.7.0)**
+- **Native Rust Streaming Daemon (`streamer-rs` / `evostreamer-rs` on `:8891`)**: Axum 0.7 / Tokio 1.x micro-daemon implementing zero-copy memory-mapped file I/O (`memmap2`), 3-tier sliding window piece scheduler (Urgent Head 10MB, Urgent Tail 4MB, Sliding Window, Lookahead with 90s hysteresis pause), slow-wire stall recovery watchdog, and Stremio statistics wire parity (`/stats.json`, `/stream`, `/warm`). Reduces RAM from ~180MB (Node V8) to ~15MB with 0ms GC pause.
+- **Pluggable Multi-Engine Manager (`core/engine_manager.py`)**: Abstract base engine with concrete `RustStreamingEngine`, `NodeStreamingEngine`, and `PythonStreamingEngine` implementations, auto-adaptive degradation chain (`rust` -> `node` -> `python`), and zero-downtime hot-swapping.
+- **Zero-Dependency Python Streaming Fallback (`core/py_streamer.py`)**: Lightweight RFC 7233 range streaming server on port 8892 for constrained environments.
+- **Engine Switching & Diagnostics REST API (`routers/stream.py`)**: Endpoints `/engine`, `/engine/list`, `/engine/switch`, and enriched `/diagnostics`.
+- **Interactive UI Engine Selector (`static/index.html`, `static/app.js`, `static/style.css`)**: 4-card engine selector in Settings Modal and quick-switch dropdown in Player HUD Studio popover.
+
+### Phase 4 (Original Roadmap): Zero-Copy WebTransport Daemon Bypass & Distributed Mesh
 - **Objective:** Remove the Python loopback proxy hop and enable peer-assisted seek pre-warming.
 - **Milestones:**
   1. Implement direct browser-to-Node byte delivery via signed WebTransport / HTTP/3 or optimized localhost 307 range redirects that work seamlessly across Docker, LAN, and localhost.

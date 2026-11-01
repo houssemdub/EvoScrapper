@@ -1,6 +1,6 @@
 # RUSTING.md — Rust Streaming Engine & Multi-Engine Architecture for EvoScrapper
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build a native, ultra-low-latency Rust streaming engine (`evostreamer-rs`) inspired by Stremio's Rust core architecture (`stremio-core-development`), evolve it with zero-copy ring buffering, 3-tier sliding window piece scheduling, and RFC 7233 byte-range streaming, and integrate a hot-swappable multi-engine manager in EvoScrapper allowing users to choose between Rust, Node.js, and Python engines directly from Settings and the Player HUD.
 
@@ -137,24 +137,24 @@ AUTO_FALLBACK_ENGINES: bool = True
 - Consumes: Environment variables `PORT`, `STREAM_PORT`, `EVO_STREAM_BIND_HOST`, `EVO_STREAM_CACHE_DIR`, `EVO_STREAMER_TOKEN`.
 - Produces: Native binary `evostreamer` (or `evostreamer.exe`) listening on HTTP, serving authenticated `/health` and `/status` endpoints.
 
-- [ ] **Step 1: Create `streamer-rs/Cargo.toml` with dependencies**
+- [x] **Step 1: Create `streamer-rs/Cargo.toml` with dependencies**
   Configure workspace crate with:
   `tokio` (features = ["full"]), `axum` (0.7), `tower-http`, `serde`, `serde_json`, `hmac`, `sha2`, `hex`, `clap` (cli parser), `tracing`, `tracing-subscriber`, `memmap2`, `anyhow`, `thiserror`.
 
-- [ ] **Step 2: Write failing unit test for HMAC token validation and signed URL verification**
+- [x] **Step 2: Write failing unit test for HMAC token validation and signed URL verification**
   File: `streamer-rs/tests/auth_tests.rs`
   Assert that matching SHA-256 HMAC of timestamp expires returns `true`, expired timestamp or forged signature returns `false`.
 
-- [ ] **Step 3: Implement `src/server/auth.rs` and CLI entry in `src/main.rs`**
+- [x] **Step 3: Implement `src/server/auth.rs` and CLI entry in `src/main.rs`**
   Implement timing-safe HMAC validation matching Python/Node EvoScrapper secret token logic.
   Implement Axum router with:
   - `GET /health` -> returns `{"status":"ok","engine":"evostreamer-rust","version":"1.0.0","auth_required":true}`
   - `GET /status` -> returns memory usage, uptime, active torrents count.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
   Command: `cargo test --test auth_tests` (when cargo is available) or local test harness.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add streamer-rs
   git commit -m "feat(rust): initialize streamer-rs crate with CLI and HMAC auth"
@@ -173,7 +173,7 @@ AUTO_FALLBACK_ENGINES: bool = True
 - Consumes: `Range: bytes=start-end` HTTP header from video player or FFmpeg.
 - Produces: HTTP 206 Partial Content response with `Content-Range`, `Accept-Ranges: bytes`, `Content-Length`, and zero-copy chunked body stream.
 
-- [ ] **Step 1: Write failing test for Range header parser**
+- [x] **Step 1: Write failing test for Range header parser**
   File: `streamer-rs/tests/range_tests.rs`
   Test cases:
   - `bytes=0-` -> start 0, end file_size - 1
@@ -181,21 +181,21 @@ AUTO_FALLBACK_ENGINES: bool = True
   - `bytes=-500` -> last 500 bytes
   - Invalid range or out-of-bounds -> 416 Range Not Satisfiable (`bytes */file_size`)
 
-- [ ] **Step 2: Implement RFC 7233 range parser and 206 response builder**
+- [x] **Step 2: Implement RFC 7233 range parser and 206 response builder**
   Implement in `src/server/range.rs`:
   ```rust
   pub struct ByteRange { pub start: u64, pub end: u64 }
   pub fn parse_range_header(header: &str, file_size: u64) -> Result<ByteRange, RangeError>;
   ```
 
-- [ ] **Step 3: Implement streaming route in `src/server/routes.rs`**
+- [x] **Step 3: Implement streaming route in `src/server/routes.rs`**
   Route: `GET /stream?info_hash=...&file_idx=...&expires=...&sig=...`
   Validates signature, locates file in active session, acquires read lease on sliding window, and pipes data in 64KB coalesced chunks with immediate first-chunk flush.
 
-- [ ] **Step 4: Verify range parsing tests pass**
+- [x] **Step 4: Verify range parsing tests pass**
   Run range test suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add streamer-rs/src/server/range.rs streamer-rs/src/server/routes.rs streamer-rs/tests/range_tests.rs
   git commit -m "feat(rust): implement RFC 7233 byte-range parser and HTTP 206 stream handler"
@@ -218,7 +218,7 @@ AUTO_FALLBACK_ENGINES: bool = True
   3. *Sliding Playback Window*: Current piece to +60s estimated playback buffer (Priority 2).
   4. *Lookahead Buffer*: +60s to +120s buffer (Priority 1, paused if buffer > 90s).
 
-- [ ] **Step 1: Write failing test for 3-tier sliding piece scheduling**
+- [x] **Step 1: Write failing test for 3-tier sliding piece scheduling**
   File: `streamer-rs/tests/picker_tests.rs`
   Verify that when cursor is at 0MB of a 2GB file:
   - Head pieces (0 to 10MB) are Urgent (Priority 3).
@@ -227,7 +227,7 @@ AUTO_FALLBACK_ENGINES: bool = True
   - Rest of torrent pieces are unselected (Priority 0).
   - Verify that when cursor seeks to 1GB, previous pieces behind retention window (10 pieces back) are deselected to prevent packet flapping.
 
-- [ ] **Step 2: Implement `PiecePicker` and `SlidingWindow` state machines**
+- [x] **Step 2: Implement `PiecePicker` and `SlidingWindow` state machines**
   Implement in `src/engine/piece_picker.rs`.
   Include stall watchdog:
   ```rust
@@ -240,13 +240,13 @@ AUTO_FALLBACK_ENGINES: bool = True
   // If requested_at > 2500ms on slow wire (<1024 B/s), cancel and re-assign.
   ```
 
-- [ ] **Step 3: Integrate with `SessionManager` in `src/engine/session.rs`**
+- [x] **Step 3: Integrate with `SessionManager` in `src/engine/session.rs`**
   Manage active torrent handles with LRU eviction when exceeding `MAX_ACTIVE_TORRENTS` (default: 3).
 
-- [ ] **Step 4: Verify picker tests pass**
+- [x] **Step 4: Verify picker tests pass**
   Run unit tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add streamer-rs/src/engine/piece_picker.rs streamer-rs/src/engine/session.rs streamer-rs/tests/picker_tests.rs
   git commit -m "feat(rust): implement 3-tier sliding window piece scheduler with stall recovery"
@@ -271,20 +271,20 @@ AUTO_FALLBACK_ENGINES: bool = True
   - `GET /warm?info_hash=...`
   - `GET /seek-hints?info_hash=...`
 
-- [ ] **Step 1: Write failing test verifying JSON schema matches Stremio `Statistics` struct**
+- [x] **Step 1: Write failing test verifying JSON schema matches Stremio `Statistics` struct**
   File: `streamer-rs/tests/stremio_parity_tests.rs`
   Verify required keys: `name`, `infoHash`, `downloadSpeed`, `uploadSpeed`, `downloaded`, `uploaded`, `peers`, `unchoked`, `queued`, `unique`, `streamLen`, `streamName`, `streamProgress`, `swarmConnections`, `swarmPaused`, `files` (with `name`, `path`, `length`, `offset`).
 
-- [ ] **Step 2: Implement Stremio serde serialization in `src/stats/mod.rs`**
+- [x] **Step 2: Implement Stremio serde serialization in `src/stats/mod.rs`**
   Implement exact camelCase serialization identical to `stremio-core-development/src/types/streaming_server/statistics.rs`.
 
-- [ ] **Step 3: Wire metadata endpoints into Axum router**
+- [x] **Step 3: Wire metadata endpoints into Axum router**
   Implement `/files`, `/file-info`, `/warm`, `/seek-hints` in `src/server/routes.rs`.
 
-- [ ] **Step 4: Verify Stremio parity tests pass**
+- [x] **Step 4: Verify Stremio parity tests pass**
   Verify complete serialization parity.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add streamer-rs/src/stats streamer-rs/src/server/routes.rs streamer-rs/tests/stremio_parity_tests.rs
   git commit -m "feat(rust): add Stremio-compatible statistics and metadata endpoints"
@@ -304,7 +304,7 @@ AUTO_FALLBACK_ENGINES: bool = True
 - Consumes: Settings (`STREAMING_ENGINE`, ports, cache dir, streamer token).
 - Produces: `EngineManager` singleton managing `RustStreamingEngine`, `NodeStreamingEngine`, and `PythonStreamingEngine` with `get_active_engine()`, `switch_engine(name)`, `get_active_stream_url()`, and automatic fallback.
 
-- [ ] **Step 1: Write failing pytest for `EngineManager`**
+- [x] **Step 1: Write failing pytest for `EngineManager`**
   File: `tests/test_engine_manager.py`
   Test cases:
   - Default selection returns configured engine.
@@ -312,7 +312,7 @@ AUTO_FALLBACK_ENGINES: bool = True
   - `switch_engine("node")` switches the active daemon port and endpoint cleanly.
   - Diagnostics return health and memory stats of available engines.
 
-- [ ] **Step 2: Add engine settings to `config.py`**
+- [x] **Step 2: Add engine settings to `config.py`**
   Add:
   - `STREAMING_ENGINE: str = "auto"`
   - `STREAM_PORT_RUST: int = 8891`
@@ -321,7 +321,7 @@ AUTO_FALLBACK_ENGINES: bool = True
   - `RUST_STREAMER_BIN: Optional[str] = None`
   - `AUTO_FALLBACK_ENGINES: bool = True`
 
-- [ ] **Step 3: Implement `core/engine_manager.py`**
+- [x] **Step 3: Implement `core/engine_manager.py`**
   Define `BaseStreamingEngine` abstract class:
   ```python
   class BaseStreamingEngine(ABC):
@@ -339,14 +339,14 @@ AUTO_FALLBACK_ENGINES: bool = True
   Implement `RustStreamingEngine`, `NodeStreamingEngine`, and `PythonStreamingEngine`.
   Implement `EngineManager` with hot-swapping and fallback logic.
 
-- [ ] **Step 4: Update `core/torrent_streamer.py` to delegate to `EngineManager`**
+- [x] **Step 4: Update `core/torrent_streamer.py` to delegate to `EngineManager`**
   Ensure all legacy calls (`ensure_streaming_daemon()`, `get_daemon_status()`, `warm_torrent()`) route through `get_engine_manager().get_active_engine()`.
 
-- [ ] **Step 5: Run pytest to verify test passes**
+- [x] **Step 5: Run pytest to verify test passes**
   Run: `pytest tests/test_engine_manager.py -v`
   Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   ```bash
   git add core/engine_manager.py config.py core/torrent_streamer.py tests/test_engine_manager.py
   git commit -m "feat(stream): add multi-engine manager supporting Rust, Node, and Python engines"
@@ -364,19 +364,19 @@ AUTO_FALLBACK_ENGINES: bool = True
 - Consumes: Torrent files from cache or HTTP range requests.
 - Produces: Lightweight pure-Python HTTP 206 range server running on `STREAM_PORT_PYTHON` (8892) as a zero-external-binary fallback.
 
-- [ ] **Step 1: Write failing test for Python streaming fallback**
+- [x] **Step 1: Write failing test for Python streaming fallback**
   File: `tests/test_py_streamer.py`
   Verify that `PythonStreamingEngine` can respond to `/health`, `/status`, and stream an existing cached media file with HTTP 206 partial content.
 
-- [ ] **Step 2: Implement `core/py_streamer.py`**
+- [x] **Step 2: Implement `core/py_streamer.py`**
   Implement an asyncio-based lightweight micro-server using `aiohttp.web` or `FastAPI` sub-app.
   Supports RFC 7233 range parsing, `.stream_cache` file reads, and basic torrent metadata introspection.
 
-- [ ] **Step 3: Run pytest to verify test passes**
+- [x] **Step 3: Run pytest to verify test passes**
   Run: `pytest tests/test_py_streamer.py -v`
   Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   ```bash
   git add core/py_streamer.py tests/test_py_streamer.py
   git commit -m "feat(stream): add zero-dependency pure Python streaming engine fallback"
@@ -399,14 +399,14 @@ AUTO_FALLBACK_ENGINES: bool = True
   - `POST /api/v1/stream/engine/switch` -> Body: `{"engine": "rust" | "node" | "python" | "auto"}`.
   - Updated `/api/v1/stream/diagnostics` -> Detailed engine telemetry.
 
-- [ ] **Step 1: Write failing test for engine switching API**
+- [x] **Step 1: Write failing test for engine switching API**
   File: `tests/test_engine_api.py`
   Test:
   - `GET /api/v1/stream/engine` returns 200 with engine details.
   - `POST /api/v1/stream/engine/switch` with valid engine returns `{"status":"switched","engine":"node"}`.
   - Switching to an invalid engine returns 400 Bad Request.
 
-- [ ] **Step 2: Define Pydantic request/response models in `models/stream.py`**
+- [x] **Step 2: Define Pydantic request/response models in `models/stream.py`**
   ```python
   class EngineInfo(BaseModel):
       name: str
@@ -422,14 +422,14 @@ AUTO_FALLBACK_ENGINES: bool = True
       engine: str  # "rust", "node", "python", "auto"
   ```
 
-- [ ] **Step 3: Implement endpoints in `routers/stream.py`**
+- [x] **Step 3: Implement endpoints in `routers/stream.py`**
   Implement `/engine`, `/engine/list`, `/engine/switch`, and update `/diagnostics`.
 
-- [ ] **Step 4: Run pytest to verify test passes**
+- [x] **Step 4: Run pytest to verify test passes**
   Run: `pytest tests/test_engine_api.py -v`
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add routers/stream.py models/stream.py tests/test_engine_api.py
   git commit -m "feat(api): add engine inspection, switching, and telemetry endpoints"
@@ -455,22 +455,22 @@ AUTO_FALLBACK_ENGINES: bool = True
   2. Live status indicator with RAM usage, port, and compile status button (`"How to compile Rust engine"`).
   3. Player HUD Settings Popover: Quick "Streaming Engine" dropdown allowing live switching without leaving fullscreen video playback.
 
-- [ ] **Step 1: Add HTML markup in `static/index.html`**
+- [x] **Step 1: Add HTML markup in `static/index.html`**
   Insert engine selection radio/card group in `settings-tab-network` and player popover.
 
-- [ ] **Step 2: Add CSS styling in `static/style.css`**
+- [x] **Step 2: Add CSS styling in `static/style.css`**
   Add styles for `.engine-badge`, `.engine-card-active`, and `.engine-selector-pill`.
 
-- [ ] **Step 3: Implement JS controller logic in `static/app.js`**
+- [x] **Step 3: Implement JS controller logic in `static/app.js`**
   Add:
   - `loadStreamingEngines()`: queries `/api/v1/stream/engine/list` on settings open.
   - `handleEngineSelection(engineName)`: calls `/api/v1/stream/engine/switch`, shows toast, and refreshes status badge.
   - `syncPlayerEngineSelector()`: updates player HUD engine toggle.
 
-- [ ] **Step 4: Verify frontend changes**
+- [x] **Step 4: Verify frontend changes**
   Open browser, check settings modal tab 3, switch engines, verify toast notification and status update.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add static/index.html static/app.js static/style.css
   git commit -m "feat(ui): add interactive streaming engine selector in Settings and Player HUD"
@@ -491,16 +491,16 @@ AUTO_FALLBACK_ENGINES: bool = True
 - Consumes: Rust toolchain (`cargo build --release`).
 - Produces: Optimized release binary placed in `streamer-rs/target/release/evostreamer.exe` (or `evostreamer`), auto-detected by EvoScrapper.
 
-- [ ] **Step 1: Create `scripts/build_rust_engine.ps1`**
+- [x] **Step 1: Create `scripts/build_rust_engine.ps1`**
   Automates checking for `rustup`/`cargo`, installing if requested via winget, building `--release`, and placing binary in expected path.
 
-- [ ] **Step 2: Create `scripts/build_rust_engine.sh`**
+- [x] **Step 2: Create `scripts/build_rust_engine.sh`**
   Equivalent automated POSIX build script.
 
-- [ ] **Step 3: Update documentation in `README.md` and `DOCS.md`**
+- [x] **Step 3: Update documentation in `README.md` and `DOCS.md`**
   Add "Streaming Engines" section explaining Rust, Node, and Python engines, performance benchmarks, and build commands.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   ```bash
   git add scripts/build_rust_engine.* README.md DOCS.md
   git commit -m "docs(stream): add build automation scripts and multi-engine documentation"
@@ -522,14 +522,14 @@ AUTO_FALLBACK_ENGINES: bool = True
   3. Statistics endpoint (`/stats.json`) returns compliant Stremio format across all engines.
   4. Process cleanup: shutting down EvoScrapper terminates all child engine processes with zero orphaned daemons.
 
-- [ ] **Step 1: Write integration parity test**
+- [x] **Step 1: Write integration parity test**
   File: `tests/test_multi_engine_parity.py`
 
-- [ ] **Step 2: Run complete test suite**
+- [x] **Step 2: Run complete test suite**
   Run: `pytest tests/test_multi_engine_parity.py tests/test_engine_manager.py tests/test_engine_api.py -v`
   Expected: All tests pass.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
   ```bash
   git add tests/test_multi_engine_parity.py tests/test_streaming.py
   git commit -m "test(stream): add multi-engine parity and end-to-end integration test suite"

@@ -40,7 +40,7 @@ from core.transmuxer import (
     probe_media_stream,
 )
 from core.logger import debrid_logger, streaming_logger
-from models.stream import LaunchVlcRequest, StreamResolveResponse
+from models.stream import EngineSwitchRequest, LaunchVlcRequest, StreamResolveResponse
 
 router = APIRouter(prefix="/api/v1/stream", tags=["Streaming"], dependencies=[Depends(verify_api_key)])
 
@@ -1160,6 +1160,43 @@ async def get_streaming_status():
     return await get_daemon_status()
 
 
+@router.get("/engine")
+async def get_active_streaming_engine():
+    """Returns currently active and configured streaming engine."""
+    from core.engine_manager import get_engine_manager
+    mgr = get_engine_manager()
+    active = await mgr.get_active_engine()
+    return {
+        "status": "online",
+        "active_engine": active.name,
+        "display_name": active.display_name,
+        "configured_engine": mgr.configured_engine,
+        "port": active.port,
+        "url": active.url,
+        "fallback_occurred": mgr.fallback_occurred,
+        "fallback_reason": mgr.last_fallback_reason,
+    }
+
+
+@router.get("/engine/list")
+async def list_streaming_engines():
+    """Lists all available streaming engines with availability and memory status."""
+    from core.engine_manager import get_engine_manager
+    mgr = get_engine_manager()
+    return await mgr.list_engines()
+
+
+@router.post("/engine/switch")
+async def switch_streaming_engine(req: EngineSwitchRequest):
+    """Dynamically switches active streaming engine with automatic port re-binding."""
+    from core.engine_manager import get_engine_manager
+    mgr = get_engine_manager()
+    try:
+        return await mgr.switch_engine(req.engine)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/debrid/resolve")
 async def resolve_debrid_stream(
     info_hash: str = Query(..., description="Torrent info hash"),
@@ -1781,23 +1818,27 @@ async def get_system_diagnostics():
     from core.torrent_streamer import DAEMON_URL
 
     start_time = time.time()
+    from core.engine_manager import get_engine_manager
+    mgr = get_engine_manager()
+    active_eng = await mgr.get_active_engine()
     diag = {
         "timestamp": time.time(),
         "backend": {
             "status": "online",
-            "version": "2.2.0",
+            "version": "2.7.0",
             "python": platform.python_version(),
             "os": f"{platform.system()} {platform.release()}",
             "arch": platform.machine(),
             "port": 8009,
         },
         "daemon": {
-            "status": "offline",
-            "url": DAEMON_URL,
+            "status": "online" if await active_eng.is_healthy() else "offline",
+            "url": active_eng.url,
             "latency_ms": None,
-            "engine": "webtorrent-v3",
+            "engine": active_eng.name,
             "active_torrents": 0,
         },
+        "engines": await mgr.list_engines(),
         "ffmpeg": {
             "available": False,
             "version": None,

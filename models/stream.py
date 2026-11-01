@@ -47,3 +47,28 @@ class LaunchVlcRequest(BaseModel):
     season: Optional[int] = None
     episode: Optional[int] = None
     player: Optional[str] = "vlc"
+
+
+class EngineInfo(BaseModel):
+    name: str
+    display_name: str
+    available: bool
+    active: bool
+    port: int
+    url: str
+    pid: Optional[int] = None
+    memory_mb: Optional[float] = None
+    description: str
+
+
+class EngineSwitchRequest(BaseModel):
+    engine: str
+
+
+class EngineSwitchResponse(BaseModel):
+    status: str
+    requested_engine: str
+    active_engine: str
+    url: str
+    fallback_occurred: bool = False
+    reason: Optional[str] = None

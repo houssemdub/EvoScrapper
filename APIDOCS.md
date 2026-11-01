@@ -1,4 +1,4 @@
-# EvoScrapper REST API Documentation (v2.6.0)
+# EvoScrapper REST API Documentation (v2.7.0)
 
 EvoScrapper exposes a high-performance REST and Server-Sent Events (SSE) API for torrent indexing, subtitle extraction, media discovery, debrid unrestriction, and sequential P2P streaming.
 
@@ -234,6 +234,94 @@ Returns real-time telemetry from the P2P streaming daemon for a specific active 
   "buffer_ready": true,
   "buffer_reserve_bytes": 74317824,
   "critical_pieces": [12, 13, 14, 15]
+}
+```
+
+---
+
+#### `GET /api/v1/stream/engine`
+Returns the active streaming engine, its binding port, connection URL, and auto-fallback status.
+
+**Example Response (200 OK):**
+```json
+{
+  "status": "online",
+  "active_engine": "rust",
+  "display_name": "⚡ Rust Native Engine (evostreamer-rs)",
+  "configured_engine": "auto",
+  "port": 8891,
+  "url": "http://127.0.0.1:8891",
+  "fallback_occurred": false,
+  "fallback_reason": null
+}
+```
+
+---
+
+#### `GET /api/v1/stream/engine/list`
+Returns an inventory of all supported streaming engines (Rust, Node.js, Python), disk presence, running state, and memory metrics.
+
+**Example Response (200 OK):**
+```json
+[
+  {
+    "name": "rust",
+    "display_name": "⚡ Rust Native Engine (evostreamer-rs)",
+    "available": true,
+    "active": true,
+    "port": 8891,
+    "url": "http://127.0.0.1:8891",
+    "pid": 4210,
+    "memory_mb": 14.8,
+    "description": "Ultra-fast zero-copy memory-mapped stream daemon (<15MB RAM, 0ms GC pauses)"
+  },
+  {
+    "name": "node",
+    "display_name": "🟢 Node.js WebTorrent Daemon",
+    "available": true,
+    "active": false,
+    "port": 8889,
+    "url": "http://127.0.0.1:8889",
+    "pid": null,
+    "memory_mb": null,
+    "description": "Standard compatibility daemon using WebTorrent v3 sliding-window piece engine"
+  },
+  {
+    "name": "python",
+    "display_name": "🐍 Python Asyncio Fallback Streamer",
+    "available": true,
+    "active": false,
+    "port": 8892,
+    "url": "http://127.0.0.1:8892",
+    "pid": null,
+    "memory_mb": null,
+    "description": "Zero-dependency pure Python streaming engine with RFC 7233 range parsing"
+  }
+]
+```
+
+---
+
+#### `POST /api/v1/stream/engine/switch`
+Dynamically switches the active streaming daemon without restarting EvoScrapper.
+
+**Request Body:**
+```json
+{
+  "engine": "rust"
+}
+```
+*Options: `"rust"`, `"node"`, `"python"`, `"auto"`*
+
+**Example Response (200 OK):**
+```json
+{
+  "status": "switched",
+  "requested_engine": "rust",
+  "active_engine": "rust",
+  "url": "http://127.0.0.1:8891",
+  "fallback_occurred": false,
+  "reason": null
 }
 ```
 

@@ -35,13 +35,14 @@
 - **Batch Instant Cache Checking**: Optimized multi-hash queries verify cached status across all providers in sub-second intervals.
 - **Tokenized Stream Proxy**: Resolves and proxies Debrid streams via signed HMAC tokens (`/api/v1/debrid/proxy/{token}`), providing byte-range seeking while shielding credentials.
 
-### 🎬 3. Multi-Tier Concurrent P2P WebTorrent Streaming
-- **4-Tier Concurrent Swarm Buffering**: Node.js WebTorrent micro-daemon orchestrates a dynamic 100+ piece sliding window across 4 concurrent tiers (Critical Header Lock, Immediate Playback Horizon, Multi-Peer Swarm Horizon, and Deep Predictive Reservoir).
-- **Fast Urgent-Piece Stall Recovery & Hotswapping**: Low-latency stall cancellation (2.5s timeout, 4 cancels/sweep) aggressively redistributes urgent playback pieces from throttled peers to faster unchoked wires before demuxer starvation occurs.
-- **Throughput-Aware Swarm Ranking**: Stream resolver factors bitrate demands vs active seeders, penalising thin swarms on massive 4K/REMUX releases to prioritize playable, stall-free streams over unviable peers.
+### ⚡ 3. Tri-Engine P2P Streaming Architecture (Rust / Node.js / Python)
+- **⚡ Native Rust Engine (`streamer-rs`)**: High-performance Axum/Tokio daemon (`:8891`) featuring zero-copy memory-mapped file reading (`memmap2`), 3-tier sliding window piece scheduler, slow-wire stall recovery watchdog, and Stremio statistics wire parity (`/stats.json`, `/stream`). Drops RAM usage from ~180MB (Node.js V8) to ~15MB with 0ms garbage collection pauses.
+- **🟢 Node.js WebTorrent Micro-Daemon**: Robust compatibility engine orchestrating dynamic 100+ piece sliding windows across 4 concurrent tiers (Critical Header Lock, Immediate Playback Horizon, Multi-Peer Swarm Horizon, and Deep Predictive Reservoir).
+- **🐍 Pure Python Asyncio Fallback Streamer**: Zero-external-binary fallback server (`core/py_streamer.py`, `:8892`) with RFC 7233 range parsing for constrained Docker, NAS, or headless setups.
+- **🔄 Live Multi-Engine Hot-Swapping**: Switch active engines on the fly via Settings ("Network & Trackers" tab) or Player HUD Studio popover without dropping playback. Supports auto-adaptive degradation (`STREAMING_ENGINE="auto"`: Rust → Node → Python).
+- **Fast Urgent-Piece Stall Recovery & Hotswapping**: Low-latency stall cancellation (2.5s timeout) aggressively redistributes urgent playback pieces from throttled peers to faster unchoked wires before demuxer starvation occurs.
 - **Demuxer Sync Continuity**: FFmpeg transmux pipeline applies `+genpts+discardcorrupt+igndts` and `aresample=async=1000` to smoothly bridge transient P2P piece delivery jitter without presentation timestamp (PTS) skips or subtitle desync.
 - **Deterministic NAT Traversal (Ports 50000 TCP / 50001 UDP)**: Fixed inbound listener ports support both direct UPnP port mapping and double-NAT forwarding topologies (modem DMZ + router port forwarding), unlocking full bilateral peer connectivity and multi-megabyte swarm throughput.
-- **Continuous Rolling Sliding Window**: Dynamically rolls priority pieces forward as video data streams to guarantee uninterrupted buffer reserves.
 - **Dynamic Virtual HLS**: On-the-fly MPEG-TS segment generation (`/api/v1/stream/hls/segment`) preserving PTS timestamp continuity (`-output_ts_offset`) for uninterrupted Hls.js streaming.
 - **Native VLC Launcher**: Seamless one-click desktop streaming directly to VLC media player with tracked child process PID lifecycle management.
 
@@ -85,7 +86,8 @@
 
 ### Prerequisites
 - **Python 3.10+**
-- **Node.js 18+** (for WebTorrent streaming daemon)
+- **Rust 1.75+ (Cargo)** (optional, recommended for ultra-fast native streaming daemon)
+- **Node.js 18+** (for WebTorrent compatibility streaming daemon)
 - **FFmpeg** (optional, recommended for HLS and local subtitle extraction)
 - **VLC Media Player** (optional, for external desktop playback)
 
@@ -100,7 +102,16 @@ cd EvoScrapper
 pip install -r requirements.txt
 ```
 
-### 3. Install WebTorrent Streamer Dependencies
+### 3. Build Native Rust Engine (Optional - Recommended)
+```bash
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts/build_rust_engine.ps1
+
+# Linux / macOS
+chmod +x scripts/build_rust_engine.sh && ./scripts/build_rust_engine.sh
+```
+
+### 4. Install Node.js Streamer Dependencies (Fallback Compatibility)
 ```bash
 cd streamer
 npm install

@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     host_display = "localhost" if settings.HOST in ("0.0.0.0", "127.0.0.1") else settings.HOST
     url = f"http://{host_display}:{settings.PORT}"
     print("\n" + "=" * 58, flush=True)
-    print("  [+] EvoScrapper v2.6.0 is live!", flush=True)
+    print("  [+] EvoScrapper v2.7.0 is live!", flush=True)
     print(f"  -> Web UI:   {url}", flush=True)
     print(f"  -> API Docs: {url}/docs", flush=True)
     if not settings.API_KEY:
@@ -39,21 +39,20 @@ async def lifespan(app: FastAPI):
     if settings.DEBRID_PROXY_SECRET == "evoscrapper-debrid-proxy-secret-key":
         print("  [!] Security Advisory: DEBRID_PROXY_SECRET is using default placeholder.", flush=True)
     print("=" * 58 + "\n", flush=True)
-    app_logger.info(f"EvoScrapper v2.6.0 live on http://{host_display}:{settings.PORT}")
+    app_logger.info(f"EvoScrapper v2.7.0 live on http://{host_display}:{settings.PORT}")
 
-    # Start Node.js WebTorrent streaming micro-daemon
+    # Start Active Streaming Engine (Rust / Node / Python) via EngineManager
     try:
-        from core.torrent_streamer import ensure_streaming_daemon, DAEMON_URL
-        daemon_ok = await ensure_streaming_daemon()
-        if daemon_ok:
-            app_logger.info(f"WebTorrent streaming daemon online at {DAEMON_URL}")
-            print(f"[+] WebTorrent streaming daemon online at {DAEMON_URL}", flush=True)
-        else:
-            app_logger.warning("Streaming daemon not responding at startup")
-            print("[!] Warning: Streaming daemon not responding at startup", flush=True)
+        from core.engine_manager import get_engine_manager
+        eng_mgr = get_engine_manager()
+        active_engine = await eng_mgr.get_active_engine()
+        app_logger.info(f"Active streaming engine: {active_engine.display_name} at {active_engine.url}")
+        print(f"[+] Active streaming engine: {active_engine.display_name} at {active_engine.url}", flush=True)
+        if eng_mgr.fallback_occurred:
+            print(f"[!] Engine notice: {eng_mgr.last_fallback_reason}", flush=True)
     except Exception as e:
-        app_logger.error(f"Streaming daemon startup notice: {e}")
-        print(f"[!] Streaming daemon startup notice: {e}", flush=True)
+        app_logger.error(f"Streaming engine startup notice: {e}")
+        print(f"[!] Streaming engine startup notice: {e}", flush=True)
 
     # Start CometNet P2P mesh networking node
     if getattr(settings, "COMETNET_ENABLED", False):
@@ -83,16 +82,18 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     try:
-        from core.torrent_streamer import stop_daemon_process
-        stop_daemon_process()
+        from core.engine_manager import get_engine_manager
+        mgr = get_engine_manager()
+        for engine in mgr.engines.values():
+            engine.stop()
     except Exception:
         pass
 
 
 app = FastAPI(
     title="EvoScrapper API",
-    version="2.6.0",
-    description="Next-Generation Fault-Tolerant Torrent & Subtitle Scraping Engine",
+    version="2.7.0",
+    description="Next-Generation Fault-Tolerant Torrent & Subtitle Scraping Engine with Multi-Engine Rust/Node/Python Architecture",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
