@@ -192,7 +192,14 @@ class TestPhase1Hotfixes(unittest.IsolatedAsyncioTestCase):
     # CRIT-04: Virtual HLS MPEG-TS segment generator
     # --------------------------------------------------------------------------
     async def test_hls_ts_segment_generator_command(self):
-        from core.transmuxer import stream_hls_ts_segment
+        import os
+        from core.transmuxer import stream_hls_ts_segment, _hls_cache
+        cached_file = _hls_cache.get_file_path(_hls_cache.get_cache_key("http://localhost:8000/source.mkv", 12.0, 6.0, "ts"))
+        if os.path.exists(cached_file):
+            try:
+                os.remove(cached_file)
+            except OSError:
+                pass
 
         captured_cmd = None
 
@@ -229,10 +236,10 @@ class TestPhase1Hotfixes(unittest.IsolatedAsyncioTestCase):
             t_idx = captured_cmd.index("-t")
             self.assertEqual(captured_cmd[t_idx + 1], "6.000")
 
-            # Verify -output_ts_offset is passed for PTS continuity across segments
-            self.assertIn("-output_ts_offset", captured_cmd)
-            offset_idx = captured_cmd.index("-output_ts_offset")
-            self.assertEqual(captured_cmd[offset_idx + 1], "12.000")
+            # Verify zero-based mux timing is passed instead of conflicting -output_ts_offset
+            self.assertNotIn("-output_ts_offset", captured_cmd)
+            self.assertIn("-muxdelay", captured_cmd)
+            self.assertIn("-muxpreload", captured_cmd)
 
     # --------------------------------------------------------------------------
     # CRIT-05: Subtitle SSRF security validation

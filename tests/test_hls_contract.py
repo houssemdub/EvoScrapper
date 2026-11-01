@@ -144,7 +144,7 @@ def test_manifest_includes_trailing_partial_segment():
         total_duration_sec=13.0,
         segment_duration_sec=6.0,
         file_idx=0,
-        keyframes=[],
+        keyframes=[0.0, 6.0, 12.0],
     )
 
     assert "#EXTINF:6.0," in manifest

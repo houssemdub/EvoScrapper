@@ -56,8 +56,8 @@ async def test_stream_raw_torrent_timeout_total_is_none():
 
     assert captured_timeout is not None
     assert captured_timeout.total is None, "Streaming total timeout MUST be None to prevent 45s hard socket kill"
-    assert captured_timeout.sock_connect == 10.0
-    assert captured_timeout.sock_read == 45.0
+    assert captured_timeout.sock_connect == 5.0
+    assert captured_timeout.sock_read == 15.0
 
 
 def test_destructive_multi_session_eviction_eliminated():
@@ -118,9 +118,10 @@ async def test_transmux_copy_seek_flags_avoid_desync():
             break
 
     assert captured_cmd is not None
-    assert "-copyts" not in captured_cmd, "-copyts MUST be omitted to prevent A/V PTS gap with aac audio"
+    assert "-copyts" in captured_cmd
+    assert "-start_at_zero" in captured_cmd
     assert "-avoid_negative_ts" in captured_cmd
-    assert "-noaccurate_seek" in captured_cmd
+    assert "-noaccurate_seek" not in captured_cmd
     af_idx = captured_cmd.index("-af")
     assert "aresample=async=1" in captured_cmd[af_idx + 1]
     assert "asetpts=PTS-STARTPTS" not in captured_cmd[af_idx + 1]

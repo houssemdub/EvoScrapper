@@ -312,19 +312,21 @@ function readJsonBody(req) {
 }
 
 const server = http.createServer(async (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "Range, X-Evo-Streamer-Token");
-    res.setHeader("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
-    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-    if (req.method === "OPTIONS") {
-        res.writeHead(204);
-        res.end();
-        return;
-    }
-
     const parsedUrl = new URL(req.url, `http://localhost:${PORT}`);
     const pathname = parsedUrl.pathname;
     const query = parsedUrl.searchParams;
+
+    if (pathname === '/stream') {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Headers', 'Range, X-Evo-Streamer-Token');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+        if (req.method === 'OPTIONS') {
+            res.writeHead(204);
+            res.end();
+            return;
+        }
+    }
 
     // The daemon is an internal control plane, not a browser-facing API. No
     // CORS headers are emitted, and DNS-rebinding hostnames are rejected.

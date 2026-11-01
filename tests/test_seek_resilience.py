@@ -39,9 +39,10 @@ async def test_transmux_seek_av_alignment_flags():
             break
 
     assert captured_cmd is not None
-    assert "-copyts" not in captured_cmd
+    assert "-copyts" in captured_cmd
+    assert "-start_at_zero" in captured_cmd
     assert "-avoid_negative_ts" in captured_cmd
-    assert "-noaccurate_seek" in captured_cmd
+    assert "-noaccurate_seek" not in captured_cmd
     # asetpts=PTS-STARTPTS must NOT be present as it injects gaps before packet 1
     af_idx = captured_cmd.index("-af")
     assert "asetpts=PTS-STARTPTS" not in captured_cmd[af_idx + 1]

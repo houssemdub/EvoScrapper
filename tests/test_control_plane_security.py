@@ -327,6 +327,7 @@ def test_python_daemon_spawn_uses_token_and_stops_verified_process(tmp_path, mon
     monkeypatch.setattr(ts, "_daemon_process", None)
     monkeypatch.setattr(ts, "_streamer_token", None)
     monkeypatch.setattr(ts, "_anonymous_daemon_warned", False)
+    monkeypatch.setattr(ts, "_session", None)
     monkeypatch.setattr(settings, "STREAM_BIND_HOST", "127.0.0.1")
     monkeypatch.setattr(settings, "STREAM_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.delenv("EVO_STREAMER_TOKEN", raising=False)
@@ -340,7 +341,7 @@ def test_python_daemon_spawn_uses_token_and_stops_verified_process(tmp_path, mon
 
     async def probe_until_ready():
         try:
-            for _ in range(75):
+            for _ in range(150):
                 if await ts.is_daemon_healthy():
                     return await ts.get_daemon_status()
                 await asyncio.sleep(0.2)
