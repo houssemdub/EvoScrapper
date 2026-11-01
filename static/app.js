@@ -5015,7 +5015,7 @@ function startSwarmStatsMonitor(infoHash, fileIdx = 0) {
       const res = await fetch(`/api/v1/stream/${canonical}/${fileIdx}/stats.json`);
       if (!res.ok) return;
       const stats = await res.json();
-      if (!stats || stats.error) return;
+      if (!stats) return;
 
       window._lastStremioStats = stats;
       window._lastSwarmSession = {
@@ -5058,7 +5058,7 @@ function startSwarmStatsMonitor(infoHash, fileIdx = 0) {
   };
 
   poll();
-  swarmMonitorTimer = setInterval(poll, 800);
+  swarmMonitorTimer = setInterval(poll, 500);
 }
 
 function stopSwarmStatsMonitor() {
@@ -6109,6 +6109,9 @@ function initPlayerTimelineControls() {
       startPlayerTicker();
     });
     video.addEventListener('playing', () => {
+      if (_isInitialPrebuffering) {
+        return;
+      }
       requestHideBufferingHUD();
       updatePlayPauseIcon(true);
       startPlayerTicker();
@@ -8703,20 +8706,15 @@ function showPlayerBufferingHUD() {
 
   const fill = document.getElementById('buffering-progress-fill');
   const pctBadge = document.getElementById('buffering-pct-badge');
-  const bytesLabel = document.getElementById('buffering-bytes-label');
   const speedLabel = document.getElementById('buffering-speed-label');
-  const countdownLabel = document.getElementById('buffering-countdown-label');
+  const stageTitle = document.getElementById('buffering-stage-title');
 
-  if (fill) fill.style.width = '15%';
-  if (pctBadge) pctBadge.innerText = '15%';
-  if (bytesLabel) bytesLabel.innerHTML = '<i class="fa-solid fa-layer-group"></i> Allocating buffer...';
-  if (speedLabel) speedLabel.innerHTML = '<i class="fa-solid fa-gauge-high"></i> Connecting P2P swarm...';
-  if (countdownLabel) countdownLabel.innerHTML = '<i class="fa-solid fa-hourglass-start"></i> Starting playback...';
+  if (fill) fill.style.width = '10%';
+  if (pctBadge) pctBadge.innerText = '10%';
+  if (speedLabel) speedLabel.innerText = 'Connecting to P2P swarm...';
+  if (stageTitle) stageTitle.innerHTML = '<i class="fa-solid fa-satellite-dish text-accent"></i> BUFFERING SWARM';
 
   clearInterval(playerBufferingInterval);
-
-  let currentBytes = 0.5;
-  const targetBytes = 4.0;
 
   playerBufferingInterval = setInterval(() => {
     const video = document.getElementById('evo-video-player');
@@ -8724,38 +8722,46 @@ function showPlayerBufferingHUD() {
     const fill = document.getElementById('buffering-progress-fill');
     const pctBadge = document.getElementById('buffering-pct-badge');
     const speedLabel = document.getElementById('buffering-speed-label');
-    const bytesLabel = document.getElementById('buffering-bytes-label');
-    const countdownLabel = document.getElementById('buffering-countdown-label');
+    const stageTitle = document.getElementById('buffering-stage-title');
 
     // Calculate actual video playback buffer ahead of current playhead
     const bufferAheadSec = getPlayerBufferAheadSec();
     const elapsedPrebuffer = _prebufferStartTime > 0 ? (Date.now() - _prebufferStartTime) / 1000 : 0;
 
-    // Transition out of initial pre-buffering once buffer is healthy (>= 2.0s)
-    // or after fallback timeout (8s) if video is advancing
+    // Transition out of initial pre-buffering once buffer is healthy (>= 2.5s)
+    // or after fallback timeout (6s) if video has loaded data (readyState >= 3)
     if (_isInitialPrebuffering) {
-      if (bufferAheadSec >= 2.0 || (elapsedPrebuffer >= 8.0 && video && video.readyState >= 3 && video.currentTime > 0)) {
-        _isInitialPrebuffering = false;
+      if (bufferAheadSec >= 2.5 || (elapsedPrebuffer >= 6.0 && video && video.readyState >= 3)) {
+        if (typeof window._releasePrebufferedPlayback === 'function') {
+          window._releasePrebufferedPlayback();
+        } else {
+          _isInitialPrebuffering = false;
+          if (video && video.paused) video.play().catch(() => {});
+          requestHideBufferingHUD(true);
+        }
+        return;
       }
     }
 
-    // Auto-dismiss HUD only once video is actively advancing with a healthy playback buffer (>= 2.0s)
+    // Auto-dismiss HUD during normal playback if buffer is healthy
     if (!_isInitialPrebuffering && video && !video.paused && video.currentTime > 0 && video.readyState >= 3 && bufferAheadSec >= 2.0) {
-      if (countdownLabel) countdownLabel.innerHTML = '<i class="fa-solid fa-circle-check text-green"></i> Stream Ready';
       requestHideBufferingHUD();
       return;
     }
 
-    // Dynamic buffer percentage: measures immediate playback readiness buffer ahead of current playhead
-    let bufferPct = 15;
+    // Dynamic buffer percentage based on required pre-buffer target (2.5 seconds)
+    let bufferPct = 10;
     if (bufferAheadSec > 0) {
-      bufferPct = Math.min(100, Math.max(30, Math.round((bufferAheadSec / 2.0) * 100)));
+      bufferPct = Math.min(100, Math.max(25, Math.round((bufferAheadSec / 2.5) * 100)));
     } else if (stats && stats.streamProgress !== undefined && stats.streamProgress > 0) {
       bufferPct = Math.min(95, Math.max(15, Math.round(stats.streamProgress * 100)));
     } else {
       const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
-      bufferPct = Math.min(95, Math.max(15, Math.round(elapsedSec * 40)));
+      bufferPct = Math.min(90, Math.max(10, Math.round(elapsedSec * 25)));
     }
+
+    if (fill) fill.style.width = `${bufferPct}%`;
+    if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
 
     if (stats) {
       const spdNum = stats.downloadSpeed || stats.download_speed || 0;
@@ -8763,24 +8769,25 @@ function showPlayerBufferingHUD() {
       const peers = stats.peers || 0;
       const unchoked = stats.unchoked !== undefined ? stats.unchoked : (stats.peers_list ? stats.peers_list.length : 0);
 
-      if (fill) fill.style.width = `${bufferPct}%`;
-      if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
+      if (stageTitle && _isInitialPrebuffering) {
+        if (peers === 0) {
+          stageTitle.innerHTML = '<i class="fa-solid fa-satellite-dish text-accent"></i> CONNECTING SWARM';
+        } else if (bufferAheadSec < 1.0) {
+          stageTitle.innerHTML = '<i class="fa-solid fa-layer-group text-accent"></i> PRE-BUFFERING STREAM';
+        } else {
+          stageTitle.innerHTML = '<i class="fa-solid fa-play text-green"></i> PREPARING PLAYBACK';
+        }
+      }
 
       if (peers === 0) {
-        if (bytesLabel) bytesLabel.innerHTML = '<i class="fa-solid fa-circle-nodes"></i> Connecting to P2P Swarm...';
-        if (speedLabel) speedLabel.innerHTML = '<i class="fa-solid fa-satellite-dish"></i> Searching DHT & Trackers (0 peers)';
-        if (countdownLabel) countdownLabel.innerHTML = '<i class="fa-solid fa-hourglass-start"></i> Contacting swarm sources...';
+        if (speedLabel) speedLabel.innerText = 'Searching swarm (0 peers)';
       } else {
-        if (bytesLabel) bytesLabel.innerHTML = '<i class="fa-solid fa-layer-group"></i> Buffering P2P Stream...';
-        if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${spdStr} (${peers} peers, ${unchoked} active)`;
-        if (countdownLabel) countdownLabel.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Buffering playback (${bufferPct}%)...`;
+        if (speedLabel) speedLabel.innerText = `${spdStr} · ${peers} peers (${unchoked} active)`;
       }
     } else {
-      if (fill) fill.style.width = `${bufferPct}%`;
-      if (pctBadge) pctBadge.innerText = `${bufferPct}%`;
-      if (speedLabel) speedLabel.innerHTML = `<i class="fa-solid fa-gauge-high"></i> Connecting P2P swarm...`;
+      if (speedLabel) speedLabel.innerText = 'Connecting to P2P swarm...';
     }
-  }, 300);
+  }, 250);
 }
 
 function hidePlayerBufferingHUD() {
@@ -8870,9 +8877,17 @@ function seekTransmuxOffset(clamped) {
   video.pause();
   video.src = newUrl;
   video.load();
-  video.play().then(() => {
-    updatePlayPauseIcon(true);
-  }).catch(() => {});
+
+  const releaseSeekPlayback = () => {
+    if (!_isInitialPrebuffering) return;
+    _isInitialPrebuffering = false;
+    video.play().then(() => {
+      updatePlayPauseIcon(true);
+      setTimeout(() => requestHideBufferingHUD(true), 350);
+    }).catch(() => {});
+  };
+
+  window._releasePrebufferedPlayback = releaseSeekPlayback;
 
   if (!active.transcodeVideo && !hasBurnSub) {
     fetch(newUrl, { method: 'HEAD' }).then((r) => {
@@ -9651,6 +9666,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     }
   };
   video.onplaying = () => {
+    if (_isInitialPrebuffering) return;
     requestHideBufferingHUD();
     checkMuteState();
   };
@@ -9721,37 +9737,55 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
     }
   };
 
-  video.play().then(() => {
-    showToast(`Streaming: ${title}`, 'info');
-    video.muted = false;
-    video.volume = 1.0;
-    checkMuteState();
-    updatePlayPauseIcon(true);
+  const releasePrebufferedPlayback = () => {
+    if (!_isInitialPrebuffering) return;
+    _isInitialPrebuffering = false;
+    const stageTitle = document.getElementById('buffering-stage-title');
+    if (stageTitle) stageTitle.innerHTML = '<i class="fa-solid fa-circle-check text-green"></i> STREAM READY';
 
-    // Check resume history
-    const historyItem = getWatchHistory().find(h => {
-      if (season !== null && episode !== null) {
-        return h.key === `${(mediaTitle || '').toLowerCase().trim()}_s${season}e${episode}`;
+    video.play().then(() => {
+      showToast(`Streaming: ${title}`, 'info');
+      video.muted = false;
+      video.volume = 1.0;
+      checkMuteState();
+      updatePlayPauseIcon(true);
+
+      // Check resume history
+      const historyItem = getWatchHistory().find(h => {
+        if (season !== null && episode !== null) {
+          return h.key === `${(mediaTitle || '').toLowerCase().trim()}_s${season}e${episode}`;
+        }
+        return h.key === (mediaTitle || '').toLowerCase().trim();
+      });
+      if (historyItem && historyItem.currentTime > 15 && historyItem.pct < 90) {
+        const resSec = historyItem.currentTime;
+        const resTimeStr = formatPlayerDuration(resSec);
+        promptResumePlayback(resSec, resTimeStr);
       }
-      return h.key === (mediaTitle || '').toLowerCase().trim();
+      setTimeout(() => requestHideBufferingHUD(true), 350);
+    }).catch((err) => {
+      console.log('[EvoPlayer] Autoplay notice:', err ? err.message : '');
+      if (err && err.name === 'NotAllowedError') {
+        video.muted = true;
+        video.play().then(() => {
+          checkMuteState();
+          updatePlayPauseIcon(true);
+          setTimeout(() => requestHideBufferingHUD(true), 350);
+        }).catch(() => {});
+      } else {
+        requestHideBufferingHUD(true);
+      }
+      checkMuteState();
     });
-    if (historyItem && historyItem.currentTime > 15 && historyItem.pct < 90) {
-      const resSec = historyItem.currentTime;
-      const resTimeStr = formatPlayerDuration(resSec);
-      promptResumePlayback(resSec, resTimeStr);
+  };
+
+  window._releasePrebufferedPlayback = releasePrebufferedPlayback;
+
+  video.addEventListener('canplaythrough', () => {
+    if (_isInitialPrebuffering && getPlayerBufferAheadSec() >= 2.0) {
+      releasePrebufferedPlayback();
     }
-  }).catch((err) => {
-    console.log('[EvoPlayer] Autoplay notice:', err ? err.message : '');
-    if (err && err.name === 'NotAllowedError') {
-      video.muted = true;
-      video.play().then(() => {
-        checkMuteState();
-        updatePlayPauseIcon(true);
-      }).catch(() => {});
-    }
-    checkMuteState();
-    hidePlayerBufferingHUD();
-  });
+  }, { once: true });
 }
 
 function toggleStreamPipelineMode() {
@@ -9807,7 +9841,13 @@ function toggleStreamPipelineMode() {
     const newUrl = `/api/v1/stream/transmux?info_hash=${active.infoHash}&file_idx=${fileIdxToUse}${startParam}&audio_track=${active.audioTrack || 0}&audio_boost=1.25${burnParam}${tcParam}${epParams}${magnetParam}${durationParam}`;
     video.src = newUrl;
     video.load();
-    video.play().catch(() => {});
+    window._releasePrebufferedPlayback = () => {
+      if (!_isInitialPrebuffering) return;
+      _isInitialPrebuffering = false;
+      video.play().then(() => {
+        setTimeout(() => requestHideBufferingHUD(true), 350);
+      }).catch(() => {});
+    };
   } else {
     active.playbackOffset = 0;
     active.anchorTime = 0;
@@ -9818,7 +9858,13 @@ function toggleStreamPipelineMode() {
     video.src = newUrl;
     video.load();
     video.currentTime = curTime;
-    video.play().catch(() => {});
+    window._releasePrebufferedPlayback = () => {
+      if (!_isInitialPrebuffering) return;
+      _isInitialPrebuffering = false;
+      video.play().then(() => {
+        setTimeout(() => requestHideBufferingHUD(true), 350);
+      }).catch(() => {});
+    };
   }
 
   updateAudioHudButtons();

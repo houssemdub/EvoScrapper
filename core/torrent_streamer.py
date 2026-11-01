@@ -403,7 +403,9 @@ async def warm_torrent(
             timeout=aiohttp.ClientTimeout(total=4.0),
         ) as resp:
             if resp.status == 200:
-                return await resp.json()
+                data = await resp.json()
+                if isinstance(data, dict) and not data.get("error"):
+                    return data
             return None
     except Exception:
         return None
@@ -441,7 +443,9 @@ async def push_stream_metadata(
             timeout=aiohttp.ClientTimeout(total=3.0),
         ) as resp:
             if resp.status == 200:
-                return await resp.json()
+                data = await resp.json()
+                if isinstance(data, dict) and not data.get("error"):
+                    return data
             return None
     except Exception:
         return None
@@ -543,7 +547,9 @@ async def get_daemon_status() -> Dict[str, Any]:
             timeout=aiohttp.ClientTimeout(total=2.0),
         ) as resp:
             if resp.status == 200:
-                return await resp.json()
+                data = await resp.json()
+                if isinstance(data, dict) and not data.get("error"):
+                    return data
     except Exception:
         pass
     return {"status": "error", "active_torrents": 0, "sessions": []}
@@ -562,7 +568,9 @@ async def get_stremio_statistics(info_hash: str, file_idx: int = 0) -> Dict[str,
             timeout=aiohttp.ClientTimeout(total=2.0),
         ) as resp:
             if resp.status == 200:
-                return await resp.json()
+                data = await resp.json()
+                if isinstance(data, dict) and not data.get("error"):
+                    return data
     except Exception:
         pass
     return {

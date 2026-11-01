@@ -537,7 +537,7 @@ async def get_embedded_subtitles(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
         )
 
-    cache_key = f"vtt_v3|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
+    cache_key = f"vtt_v4|{info_hash}|{file_idx}|{sub_index}|{season}|{episode}"
     cached = load_cached_sub_vtt(cache_key)
     if cached:
         return Response(

@@ -375,9 +375,34 @@ const server = http.createServer(async (req, res) => {
     if (stremioStatsMatch || pathname === '/stats.json') {
         const hash = stremioStatsMatch ? stremioStatsMatch[1].toLowerCase() : (query.get('info_hash') || query.get('hash') || '').toLowerCase();
         const fileIdx = stremioStatsMatch && stremioStatsMatch[2] ? parseInt(stremioStatsMatch[2], 10) : (parseInt(query.get('file_idx') || query.get('idx') || '0', 10));
-        const stats = engine.getStremioStatistics(hash, fileIdx);
+        let stats = engine.getStremioStatistics(hash, fileIdx);
+        if (!stats) {
+            stats = {
+                name: '',
+                infoHash: hash,
+                files: [],
+                sources: [],
+                opts: {},
+                downloadSpeed: 0,
+                uploadSpeed: 0,
+                downloaded: 0,
+                uploaded: 0,
+                unchoked: 0,
+                peers: 0,
+                queued: 0,
+                unique: 0,
+                connectionTries: 0,
+                peerSearchRunning: true,
+                streamLen: null,
+                streamName: null,
+                streamProgress: 0.0,
+                swarmConnections: 0,
+                swarmPaused: false,
+                swarmSize: 0
+            };
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(stats || { error: 'session_not_found', infoHash: hash }));
+        res.end(JSON.stringify(stats));
         return;
     }
 

@@ -1976,6 +1976,7 @@ async def extract_embedded_subtitle_vtt(
         "-i", source_url,
         "-vn", "-an",
         "-map", f"0:s:{sub_stream_index}",
+        "-avoid_negative_ts", "make_zero",
         "-f", "webvtt",
     ])
     if duration is not None and duration > 0:
