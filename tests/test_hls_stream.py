@@ -16,6 +16,7 @@ def test_generate_hls_manifest_structure():
         total_duration_sec=120.0,
         segment_duration_sec=6.0,
         file_idx=0,
+        keyframes=[0.0, 6.0, 12.0, 120.0],
     )
     assert manifest.startswith("#EXTM3U")
     assert "#EXT-X-VERSION:3" in manifest

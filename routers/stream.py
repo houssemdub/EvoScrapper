@@ -1209,17 +1209,41 @@ async def get_hls_playlist(
                         "codec": track["codec"],
                     })
 
-    manifest = generate_hls_manifest(
-        info_hash=info_hash,
-        total_duration_sec=duration,
-        segment_duration_sec=segment_duration,
-        file_idx=file_idx,
-        magnet=magnet,
-        season=season,
-        episode=episode,
-        prefer_fmp4=(format == "fmp4"),
-        subtitle_tracks=subtitle_tracks,
-    )
+    # Always keyframe-align: probe if cache is cold (bounded).
+    from core.transmuxer import load_cached_keyframes, probe_keyframes
+    cached_kfs = load_cached_keyframes(info_hash, file_idx)
+    if not cached_kfs:
+        try:
+            await ensure_streaming_daemon()
+            source_url = get_internal_stream_url(
+                info_hash, file_idx, magnet=magnet, season=season, episode=episode
+            )
+            await asyncio.wait_for(
+                probe_keyframes(source_url, info_hash, file_idx, timeout=6.0),
+                timeout=8.0,
+            )
+        except Exception as exc:
+            streaming_logger.warning(
+                f"[HLS] Keyframe probe failed; HLS may not be perfectly aligned: {exc}"
+            )
+
+    try:
+        manifest = generate_hls_manifest(
+            info_hash=info_hash,
+            total_duration_sec=duration,
+            segment_duration_sec=segment_duration,
+            file_idx=file_idx,
+            magnet=magnet,
+            season=season,
+            episode=episode,
+            prefer_fmp4=(format == "fmp4"),
+            subtitle_tracks=subtitle_tracks,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=503,
+            detail="HLS unavailable — keyframe probe did not complete. Use /transmux.",
+        )
     return Response(
         content=manifest,
         media_type="application/vnd.apple.mpegurl",

@@ -1746,8 +1746,12 @@ def generate_hls_manifest(
 
     if keyframes is None:
         keyframes = load_cached_keyframes(info_hash, file_idx)
-    elif isinstance(keyframes, dict):
-        keyframes = keyframes.get("keyframes")
+
+    if not keyframes or len(keyframes) < 2:
+        raise ValueError(
+            "HLS manifest requested without keyframe data. "
+            "Caller must probe keyframes first; use /transmux as a fallback."
+        )
 
     segments: List[tuple[float, float]] = []
 

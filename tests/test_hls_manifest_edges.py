@@ -31,6 +31,16 @@ DURATIONS = [0.5, 6.0, 30.0, 123.456, 3600.0, 7200.0, 8699.607]
 @pytest.mark.parametrize("keyframes", PATHOLOGICAL_KEYFRAME_SETS, ids=lambda kf: f"n={len(kf)}")
 @pytest.mark.parametrize("duration", DURATIONS)
 def test_manifest_never_raises_on_pathological_keyframe_shapes(keyframes, duration):
+    if not keyframes or len(keyframes) < 2:
+        with pytest.raises(ValueError, match="HLS manifest requested without keyframe data"):
+            generate_hls_manifest(
+                info_hash=HASH,
+                total_duration_sec=duration,
+                segment_duration_sec=6.0,
+                file_idx=0,
+                keyframes=keyframes,
+            )
+        return
     manifest = generate_hls_manifest(
         info_hash=HASH,
         total_duration_sec=duration,
@@ -73,7 +83,9 @@ def test_playlist_route_serves_cached_keyframe_hash():
     """Route-level: the exact endpoint that crashed must 200 with playlist content."""
     from fastapi.testclient import TestClient
     from main import app
+    from core.transmuxer import save_cached_keyframes
 
+    save_cached_keyframes(HASH, 0, [0.0, 6.0, 12.0, 18.0, 24.0, 3600.0])
     client = TestClient(app)
     res = client.get(f"/api/v1/stream/hls/playlist.m3u8?info_hash={HASH}&duration=3600")
     assert res.status_code == 200

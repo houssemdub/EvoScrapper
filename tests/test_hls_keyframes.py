@@ -38,21 +38,16 @@ def test_manifest_snaps_to_keyframes():
 
 
 def test_manifest_fallback_when_no_keyframes():
-    """Verifies that generate_hls_manifest cleanly falls back to fixed 6.0s intervals when keyframes are absent."""
+    """Verifies that generate_hls_manifest refuses to build unaligned manifest when keyframes are absent."""
     info_hash = "0000000000000000000000000000000000000000"
-    manifest = generate_hls_manifest(
-        info_hash=info_hash,
-        total_duration_sec=18.0,
-        segment_duration_sec=6.0,
-        file_idx=0,
-        keyframes=None,
-    )
-
-    assert "#EXT-X-VERSION:3" in manifest
-    assert "#EXTINF:6.0," in manifest
-    assert "start=0.00" in manifest
-    assert "start=6.00" in manifest
-    assert "start=12.00" in manifest
+    with pytest.raises(ValueError, match="HLS manifest requested without keyframe data"):
+        generate_hls_manifest(
+            info_hash=info_hash,
+            total_duration_sec=18.0,
+            segment_duration_sec=6.0,
+            file_idx=0,
+            keyframes=None,
+        )
 
 
 def test_keyframe_cache_persistence(tmp_path, monkeypatch):
@@ -82,6 +77,7 @@ def test_manifest_prefer_fmp4():
         total_duration_sec=12.0,
         segment_duration_sec=6.0,
         file_idx=0,
+        keyframes=[0.0, 6.0, 12.0],
         prefer_fmp4=True,
     )
 
