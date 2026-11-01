@@ -397,10 +397,7 @@ async def stream_transmuxed_video(
     ])
 
     # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes.
-    # In video copy mode, -noaccurate_seek forces both audio and video demuxers to seek together to the nearest preceding keyframe container boundary, eliminating GOP asymmetry A/V desync.
     if start_seconds and start_seconds > 0:
-        if not transcode_video and burn_sub_idx is None:
-            cmd.append("-noaccurate_seek")
         cmd.extend(["-ss", f"{start_seconds:.3f}"])
 
     if duration_seconds and duration_seconds > 0:
@@ -444,7 +441,7 @@ async def stream_transmuxed_video(
     #    initial audio PTS strictly starts at 0, aligned with video start.
     # 2. ITU-R BS.775 downmix pan matrix for surround audio (> 2 channels)
     # 3. volume boost restores centre channel dialogue
-    af_filters = ["aresample=async=1000:min_hard_comp=0.100000:first_pts=0"]
+    af_filters = ["aresample=async=1"]
     if channels is not None and channels > 2:
         af_filters.append("pan=stereo|FL=0.5*c0+0.7071*c2+0.7071*c4|FR=0.5*c1+0.7071*c2+0.7071*c5")
     if audio_boost and audio_boost > 0:
@@ -457,9 +454,10 @@ async def stream_transmuxed_video(
         "-af", ",".join(af_filters),
         "-sn",                          # Strip embedded subtitles to prevent MP4 container muxing errors
         "-dn",                          # Strip data streams
+        "-copyts",
+        "-start_at_zero",
         "-avoid_negative_ts", "make_zero",  # Fix negative PTS timestamps from seek operations
         "-max_muxing_queue_size", "2048",   # Prevent queue starvation on multi-track streams
-        "-max_interleave_delta", "0",       # Eliminate packet interleaving latency on live pipes
         "-movflags", "frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets",
         "-flush_packets", "1",
         "-f", "mp4",
