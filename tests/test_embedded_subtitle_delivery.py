@@ -82,39 +82,37 @@ def test_extract_supports_configurable_timeout():
 # ── 2. /api/v1/stream/subtitles pending protocol ──────────────────────────────
 
 def test_stream_subtitles_endpoint_pending_protocol():
-    """Contract: the endpoint must serve cache hits immediately and return a pollable pending marker otherwise."""
+    """Contract: the endpoint must serve cache hits immediately and extract synchronously on cache miss."""
     with open(STREAM_ROUTER_PY_PATH, "r", encoding="utf-8") as f:
         code = f.read()
     assert "load_cached_sub_vtt" in code, "endpoint must check the VTT disk cache first"
-    assert "start_sub_vtt_extraction" in code, "endpoint must launch background extraction on cache miss"
-    assert "X-Evo-Sub-Pending" in code, "pending responses must be marked so clients can poll"
-    assert "no-store" in code, "pending responses must never be cached"
+    assert "extract_embedded_subtitle_vtt" in code, "endpoint must synchronously extract on cache miss"
+    assert "store_cached_sub_vtt" in code, "extracted cues must be stored in cache"
 
 
 def test_stream_subtitles_endpoint_serves_cache_and_pending(tmp_path, monkeypatch):
-    """Functional: cache hit returns VTT; miss returns pending response and starts a job."""
+    """Functional: cache hit returns VTT; miss performs synchronous extraction and returns VTT."""
     import routers.stream as stream_router
 
     async def noop_daemon():
         return True
 
+    async def fake_extract(target_source, sub_index, timeout=25.0, **kw):
+        return VALID_VTT
+
     monkeypatch.setattr(stream_router, "load_cached_sub_vtt", lambda key: None)
     monkeypatch.setattr(stream_router, "_find_cached_media_path", lambda **kw: None)
     monkeypatch.setattr(stream_router, "ensure_streaming_daemon", noop_daemon)
-    started = {}
-    monkeypatch.setattr(stream_router, "start_sub_vtt_extraction",
-                        lambda key, src, idx: started.setdefault("args", (key, src, idx)) or True)
+    monkeypatch.setattr("core.transmuxer.extract_embedded_subtitle_vtt", fake_extract)
     monkeypatch.setattr(stream_router, "get_internal_stream_url",
                         lambda info_hash, file_idx, **kw: f"http://daemon/{info_hash}/{file_idx}")
 
     resp = asyncio.run(stream_router.get_embedded_subtitles(info_hash="abc123", file_idx=0, sub_index=0))
-    assert resp.headers.get("X-Evo-Sub-Pending") == "1"
-    assert "abc123" in started["args"][1]
-    assert started["args"][2] == 0
+    assert resp.status_code == 200
+    assert VALID_VTT in resp.body.decode("utf-8")
 
     monkeypatch.setattr(stream_router, "load_cached_sub_vtt", lambda key: VALID_VTT)
     resp2 = asyncio.run(stream_router.get_embedded_subtitles(info_hash="abc123", file_idx=0, sub_index=0))
-    assert resp2.headers.get("X-Evo-Sub-Pending") != "1"
     assert resp2.body.decode("utf-8") == VALID_VTT
 
 

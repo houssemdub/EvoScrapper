@@ -30,6 +30,7 @@ from core.transmuxer import (
     launch_external_player_process,
     launch_vlc_process,
     load_cached_sub_vtt,
+    store_cached_sub_vtt,
     get_failed_sub_vtt,
     start_sub_vtt_extraction,
     stream_hls_fmp4_init,
@@ -599,16 +600,31 @@ async def get_embedded_subtitles(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
         )
 
-    # Full extraction with caching (background job)
-    start_sub_vtt_extraction(cache_key, target_source, sub_index)
+    # Synchronous extraction with a bounded timeout — a <track> element will not
+    # retry, so returning "pending" permanently hides the track from the client.
+    from core.transmuxer import extract_embedded_subtitle_vtt as _extract
+    try:
+        vtt = await asyncio.wait_for(
+            _extract(target_source, sub_index, timeout=25.0),
+            timeout=30.0,
+        )
+    except Exception as exc:
+        streaming_logger.warning(f"[Subtitles] synchronous extract failed: {exc}")
+        vtt = ""
+
+    if vtt and "-->" in vtt:
+        store_cached_sub_vtt(cache_key, vtt)
+        return Response(
+            content=vtt,
+            media_type="text/vtt; charset=utf-8",
+            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"},
+        )
+
+    # Empty track with a note — the client may retry manually via ?fast=0 later.
     return Response(
-        content="WEBVTT\n\nNOTE Extraction pending\n",
+        content="WEBVTT\n\nNOTE No cues extracted for this track\n",
         media_type="text/vtt; charset=utf-8",
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Cache-Control": "no-store",
-            "X-Evo-Sub-Pending": "1",
-        },
+        headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
     )
 
 
