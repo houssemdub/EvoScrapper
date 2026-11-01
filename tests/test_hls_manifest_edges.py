@@ -88,3 +88,45 @@ def test_playlist_route_rejects_invalid_durations():
     for bad in ("0", "-5", "nan", "inf"):
         res = client.get(f"/api/v1/stream/hls/playlist.m3u8?info_hash={HASH}&duration={bad}")
         assert res.status_code in (400, 422), f"duration={bad} returned {res.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_single_flight_failure_surfaces_502_without_respawn(tmp_path):
+    """When the initiator fails, waiting requests must surface a 502 instead of re-spawning FFmpeg."""
+    from unittest.mock import patch
+    from fastapi import HTTPException
+    import asyncio
+    from core.transmuxer import stream_hls_ts_segment, _hls_cache
+
+    test_cache = str(tmp_path / "hls_cache_fail")
+    _hls_cache.cache_dir = test_cache
+    os.makedirs(test_cache, exist_ok=True)
+
+    spawn_count = 0
+
+    async def mock_subprocess_exec(*cmd, **kwargs):
+        nonlocal spawn_count
+        spawn_count += 1
+        await asyncio.sleep(0.05)
+        raise RuntimeError("Simulated FFmpeg crash")
+
+    source_url = "http://127.0.0.1:8889/stream?info_hash=failtest000000000000000000000000000000000&file_idx=0"
+
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_subprocess_exec):
+        async def consume():
+            async for _ in stream_hls_ts_segment(source_url, start_seconds=0.0, duration_seconds=6.0, prefetch=False):
+                pass
+
+        task1 = asyncio.create_task(consume())
+        await asyncio.sleep(0.01)
+        task2 = asyncio.create_task(consume())
+
+        res1 = await asyncio.gather(task1, return_exceptions=True)
+        res2 = await asyncio.gather(task2, return_exceptions=True)
+
+        assert isinstance(res1[0], RuntimeError)
+        assert isinstance(res2[0], HTTPException)
+        assert res2[0].status_code == 502
+        assert "Segment generation failed" in res2[0].detail
+        assert spawn_count == 1
+

@@ -1091,12 +1091,21 @@ async def stream_hls_ts_segment(
     if not is_initiator:
         try:
             await asyncio.wait_for(asyncio.shield(fut), timeout=30.0)
-        except Exception:
-            pass
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Segment generation failed for {key}: {e}",
+            )
         if _hls_cache.has(key, extension):
-            async for chunk in _hls_cache.get_cached_chunks(key, chunk_size=chunk_size, extension=extension):
+            async for chunk in _hls_cache.get_cached_chunks(
+                key, chunk_size=chunk_size, extension=extension
+            ):
                 yield chunk
             return
+        raise HTTPException(
+            status_code=502,
+            detail=f"Segment {key} was not cached after generation",
+        )
 
     # 3. Cache miss initiator: spawn bounded FFmpeg, stream chunks to caller, and write to cache
     ts_path = _hls_cache.get_file_path(key, extension)
