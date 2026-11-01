@@ -107,6 +107,7 @@ const state = {
     },
   },
 };
+window.state = state;
 
 // ── High-Performance DOM Query Cache [FLAW-12 / Phase 3] ────────────────────
 const _domCache = new Map();
@@ -8956,7 +8957,40 @@ function snapTransmuxSeekTime(active, seconds) {
   return clamped;
 }
 
-function seekTransmuxOffset(clamped) {
+// After issuing the /transmux request (before assigning src), read the
+// snapped keyframe and re-align the playhead + subtitle cues.
+async function applySeekSnap(seekTime) {
+  const active = (window.state || state)?.discover?.activeStream;
+  if (!active) return seekTime;
+  const activeHash = active.infoHash || '';
+  const activeFileIdx = (active.playingFileIdx !== undefined && active.playingFileIdx !== null)
+    ? active.playingFileIdx
+    : (active.fileIdx || 0);
+  const probeUrl =
+    `/api/v1/stream/transmux?info_hash=${encodeURIComponent(activeHash)}` +
+    `&file_idx=${activeFileIdx}&start_time=${seekTime}&duration_slice=1`;
+  try {
+    const resp = await fetch(probeUrl, { method: "HEAD", credentials: "include" });
+    const snapped = parseFloat(resp.headers.get("X-Evo-Seek-Keyframe") || "");
+    if (!Number.isFinite(snapped) || Math.abs(snapped - seekTime) < 0.05) {
+      return seekTime;
+    }
+    // Rebase subtitles by the delta.
+    const delta = seekTime - snapped; // positive when we seeked past the keyframe
+    if ((window.state || state)?.subtitles) {
+      (window.state || state).subtitles.currentOffset =
+        ((window.state || state).subtitles.currentOffset || 0) - delta;
+    }
+    if (typeof setSubtitleSync === "function") {
+      setSubtitleSync((window.state || state).subtitles.currentOffset);
+    }
+    return snapped;
+  } catch (_) {
+    return seekTime;
+  }
+}
+
+async function seekTransmuxOffset(clamped) {
   const video = document.getElementById('evo-video-player');
   const active = state.discover.activeStream;
   if (!video || !active) return;
@@ -8966,9 +9000,13 @@ function seekTransmuxOffset(clamped) {
   // Copy mode is served from the preceding keyframe so active.playbackOffset must equal that
   // keyframe's PTS (backend /transmux uses the same 15s snapping contract). Transcode and
   // burn-in streams honour exact seeks, so use the requested time unchanged.
-  const effectiveSeek = (active.transcodeVideo || hasBurnSub)
+  let effectiveSeek = (active.transcodeVideo || hasBurnSub)
     ? Math.max(0, Number(clamped) || 0)
     : snapTransmuxSeekTime(active, clamped);
+
+  if (!active.transcodeVideo && !hasBurnSub) {
+    effectiveSeek = await applySeekSnap(effectiveSeek);
+  }
 
   setTransmuxClockAnchor(active, effectiveSeek);
 
