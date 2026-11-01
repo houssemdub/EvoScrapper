@@ -327,7 +327,29 @@ def get_ffmpeg_max_concurrency() -> int:
     return min(8, max(2, cpu // 2))
 
 
-_FFMPEG_SEMAPHORE = asyncio.Semaphore(get_ffmpeg_max_concurrency())
+class _LazySemaphore:
+    """Lazy event-loop bound semaphore proxy preventing import-time loop attachment."""
+    def __init__(self, factory):
+        self._factory = factory
+        self._sem = None
+
+    def _get_sem(self) -> asyncio.Semaphore:
+        if self._sem is None:
+            self._sem = self._factory()
+        return self._sem
+
+    async def __aenter__(self):
+        return await self._get_sem().__aenter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return await self._get_sem().__aexit__(exc_type, exc_val, exc_tb)
+
+    @property
+    def _value(self):
+        return self._get_sem()._value
+
+
+_FFMPEG_SEMAPHORE = _LazySemaphore(lambda: asyncio.Semaphore(get_ffmpeg_max_concurrency()))
 
 
 async def stream_transmuxed_video(
@@ -503,7 +525,7 @@ async def stream_transmuxed_video(
             )
 
 
-_HLS_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("EVO_HLS_MAX_CONCURRENCY", "3"))))
+_HLS_SEMAPHORE = _LazySemaphore(lambda: asyncio.Semaphore(max(1, int(os.getenv("EVO_HLS_MAX_CONCURRENCY", "3")))))
 
 
 class HlsSegmentCache:

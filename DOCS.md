@@ -1,6 +1,6 @@
 # EvoScrapper Architecture & Technical Documentation
 
-Welcome to the comprehensive architecture and systems documentation for **EvoScrapper (v2.4.0)**. This document provides an in-depth breakdown of the internal subsystems, design patterns, streaming pipelines, debrid unrestrictors, and security hardening mechanisms.
+Welcome to the comprehensive architecture and systems documentation for **EvoScrapper (v2.5.0)**. This document provides an in-depth breakdown of the internal subsystems, design patterns, streaming pipelines, debrid unrestrictors, and security hardening mechanisms.
 
 ---
 

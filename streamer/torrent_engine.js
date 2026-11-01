@@ -1160,8 +1160,16 @@ class TorrentEngine {
             }, SLIDE_INTERVAL_MS);
             reader.slideTimer.unref?.();
 
+            let wireDebounceTimer = null;
             reader.wireListener = () => {
-                this.applySlidingWindow(torrent, file, undefined, opts, reader);
+                if (wireDebounceTimer) return;
+                wireDebounceTimer = setTimeout(() => {
+                    wireDebounceTimer = null;
+                    if (!reader.released) {
+                        this.applySlidingWindow(torrent, file, undefined, opts, reader);
+                    }
+                }, 250);
+                wireDebounceTimer.unref?.();
             };
             torrent.on('wire', reader.wireListener);
 
@@ -1169,6 +1177,10 @@ class TorrentEngine {
                 if (reader.released) return;
                 reader.released = true;
 
+                if (wireDebounceTimer) {
+                    clearTimeout(wireDebounceTimer);
+                    wireDebounceTimer = null;
+                }
                 clearInterval(reader.slideTimer);
                 reader.slideTimer = null;
                 if (reader.wireListener) {

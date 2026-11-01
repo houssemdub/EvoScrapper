@@ -9,6 +9,7 @@ Design note: a thin async DAL instead of SQLAlchemy/SQLModel — the models are
 already pydantic, the schema is small, and this keeps the dependency surface
 and query behavior explicit.
 """
+import asyncio
 import json
 import os
 import time
@@ -85,29 +86,36 @@ CREATE TABLE IF NOT EXISTS profiles (
 
 
 class Database:
-    """Singleton async SQLite connection with schema management and helpers."""
+    """Singleton async SQLite connection with schema management, serialized query locking, and helpers."""
 
     def __init__(self, db_path: str = DEFAULT_DB_PATH):
         self.db_path = db_path
         self._conn: Optional[aiosqlite.Connection] = None
+        self._lock: Optional[asyncio.Lock] = None
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
     async def connect(self) -> None:
-        if self._conn is not None:
-            return
-        conn = await aiosqlite.connect(self.db_path)
-        conn.row_factory = aiosqlite.Row
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA foreign_keys=ON")
-        await conn.executescript(_SCHEMA)
-        row = await (await conn.execute("SELECT version FROM schema_version")).fetchone()
-        if row is None:
-            await conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
-        elif row["version"] < _SCHEMA_VERSION:
-            await conn.execute("UPDATE schema_version SET version = ?", (_SCHEMA_VERSION,))
-        await conn.commit()
-        self._conn = conn
-        app_logger.info(f"[Database] SQLite ready at {self.db_path} (schema v{_SCHEMA_VERSION})")
+        async with self._get_lock():
+            if self._conn is not None:
+                return
+            conn = await aiosqlite.connect(self.db_path)
+            conn.row_factory = aiosqlite.Row
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA foreign_keys=ON")
+            await conn.executescript(_SCHEMA)
+            row = await (await conn.execute("SELECT version FROM schema_version")).fetchone()
+            if row is None:
+                await conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
+            elif row["version"] < _SCHEMA_VERSION:
+                await conn.execute("UPDATE schema_version SET version = ?", (_SCHEMA_VERSION,))
+            await conn.commit()
+            self._conn = conn
+            app_logger.info(f"[Database] SQLite ready at {self.db_path} (schema v{_SCHEMA_VERSION})")
 
     def _require(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -115,29 +123,39 @@ class Database:
         return self._conn
 
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
-        conn = self._require()
-        await conn.execute(sql, tuple(params))
-        await conn.commit()
+        async with self._get_lock():
+            conn = self._require()
+            await conn.execute(sql, tuple(params))
+            await conn.commit()
+
+    async def execute_many(self, sql: str, params_seq: Iterable[Iterable[Any]]) -> None:
+        async with self._get_lock():
+            conn = self._require()
+            await conn.executemany(sql, [tuple(p) for p in params_seq])
+            await conn.commit()
 
     async def fetch_all(self, sql: str, params: Iterable[Any] = ()) -> List[Dict[str, Any]]:
-        conn = self._require()
-        async with conn.execute(sql, tuple(params)) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+        async with self._get_lock():
+            conn = self._require()
+            async with conn.execute(sql, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(r) for r in rows]
 
     async def fetch_one(self, sql: str, params: Iterable[Any] = ()) -> Optional[Dict[str, Any]]:
-        conn = self._require()
-        async with conn.execute(sql, tuple(params)) as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row is not None else None
+        async with self._get_lock():
+            conn = self._require()
+            async with conn.execute(sql, tuple(params)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row is not None else None
 
     async def close(self) -> None:
-        if self._conn is not None:
-            try:
-                await self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
+        async with self._get_lock():
+            if self._conn is not None:
+                try:
+                    await self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
 
 
 _database: Optional[Database] = None
@@ -171,16 +189,11 @@ async def migrate_legacy_json_library(db: Database, json_path: str) -> int:
         return 0
 
     now = time.time()
-    count = 0
+    batch = []
     for item_id, raw in data.items():
         if not isinstance(raw, dict) or not item_id or not raw.get("title"):
             continue
-        await db.execute(
-            """INSERT OR REPLACE INTO library_items
-               (id, title, type, poster, backdrop, year, rating, status,
-                current_season, current_episode, total_episodes, progress_percent,
-                playback_seconds, duration_seconds, episode_progress, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        batch.append(
             (
                 item_id,
                 raw.get("title", "Unknown"),
@@ -199,9 +212,19 @@ async def migrate_legacy_json_library(db: Database, json_path: str) -> int:
                 json.dumps(raw.get("episode_progress") or {}),
                 raw.get("created_at", now),
                 raw.get("updated_at", now),
-            ),
+            )
         )
-        count += 1
+
+    if batch:
+        await db.execute_many(
+            """INSERT OR REPLACE INTO library_items
+               (id, title, type, poster, backdrop, year, rating, status,
+                current_season, current_episode, total_episodes, progress_percent,
+                playback_seconds, duration_seconds, episode_progress, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            batch,
+        )
+    count = len(batch)
 
     try:
         os.replace(json_path, json_path + ".migrated")

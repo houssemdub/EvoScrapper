@@ -633,15 +633,6 @@ async def resolve_streams(
             )
         )
 
-    gathered = await asyncio.gather(*tasks, return_exceptions=True)
-    raw_results: List[TorrentItem] = []
-    for r in gathered:
-        if isinstance(r, list):
-            raw_results.extend(r)
-
-    # Deduplicate local scraper torrents by info_hash
-    deduped = deduplicate_torrents(raw_results)
-
     scored_streams: List[StreamItem] = []
     seen_hashes = set()
 
@@ -659,6 +650,20 @@ async def resolve_streams(
                     scored_streams.append(s)
         except Exception as e:
             print(f"[StreamResolver] Torrentio harvest warning: {e}")
+
+    # Bounded gather for local scrapers: if Torrentio already supplied streams, don't stall on slow providers
+    local_timeout = 2.5 if len(scored_streams) >= 1 else 6.0
+    try:
+        gathered = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=local_timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        gathered = []
+    raw_results: List[TorrentItem] = []
+    for r in gathered:
+        if isinstance(r, list):
+            raw_results.extend(r)
+
+    # Deduplicate local scraper torrents by info_hash
+    deduped = deduplicate_torrents(raw_results)
 
     # 2. Filter and score local scraper streams
     for item in deduped:

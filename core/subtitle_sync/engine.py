@@ -166,11 +166,10 @@ class SubtitleSyncEngine:
                     )
 
         # 4. Signal C: Audio Voice Activity Detection (VAD) via FFmpeg silencedetect
-        # A high-confidence container reference already pins the timeline
-        # exactly. Analysing two minutes of swarm audio would add tens of
-        # seconds of latency without changing the answer.
+        # A solid container reference or multi-external consensus already pins the timeline
+        # accurately. Analyzing excessive swarm audio adds latency and swarm piece contention.
         vad_drift_model = None
-        reference_is_authoritative = reference_offset is not None and reference_conf >= 0.85
+        reference_is_authoritative = (reference_offset is not None and reference_conf >= 0.70) or (len(candidates) >= 2 and any(c.confidence >= 0.75 for c in candidates))
         if video_source and not reference_is_authoritative:
             try:
                 # If start_time not provided, but dialogue only starts later (e.g. after intro),
@@ -181,22 +180,23 @@ class SubtitleSyncEngine:
 
                 span = (clean_cues[-1][0] - clean_cues[0][0]) if len(clean_cues) >= 2 else 0.0
                 is_http_stream = str(video_source).startswith("http")
-                # For HTTP streaming sources (torrents), avoid seeking far ahead into unbuffered media
-                # which causes piece starvation and times out the VAD task.
+                # For HTTP streaming sources (torrents), bound duration to 45s to avoid piece contention
+                effective_vad_duration = min(45.0, vad_duration) if is_http_stream else vad_duration
+                # Avoid seeking far ahead into unbuffered media which causes piece starvation
                 multi_window = span >= 300.0 and not reference_cues and not is_http_stream
                 w2_start = round(clean_cues[0][0] + span * 0.5, 1) if multi_window else 0.0
 
                 if multi_window:
                     tasks = [
-                        extract_speech_intervals_from_stream(video_source, duration=vad_duration, start_time=effective_start, audio_track=audio_track),
-                        extract_speech_intervals_from_stream(video_source, duration=min(60.0, vad_duration), start_time=w2_start, audio_track=audio_track),
+                        extract_speech_intervals_from_stream(video_source, duration=effective_vad_duration, start_time=effective_start, audio_track=audio_track),
+                        extract_speech_intervals_from_stream(video_source, duration=min(45.0, effective_vad_duration), start_time=w2_start, audio_track=audio_track),
                     ]
                     results = await asyncio.gather(*tasks, return_exceptions=True)
                     speech = results[0] if not isinstance(results[0], Exception) else []
                     speech2 = results[1] if multi_window and not isinstance(results[1], Exception) else []
                 else:
                     speech = await extract_speech_intervals_from_stream(
-                        video_source, duration=vad_duration, start_time=effective_start, audio_track=audio_track
+                        video_source, duration=effective_vad_duration, start_time=effective_start, audio_track=audio_track
                     )
                     speech2 = []
 

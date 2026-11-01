@@ -9510,7 +9510,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
                 }
               }).catch(() => {});
             }
-          } else if (curActive.useTransmux && !curActive.transcodeVideo && videoNeedsTranscode) {
+          } else if (curActive.useTransmux && !curActive.transcodeVideo && videoNeedsTranscode && !(video && (!video.paused || video.readyState >= 3) && !video.error)) {
             console.log(`[EvoPlayer] Probe detected unsupported video codec (${vCodecLower}); enabling H.264 transcode...`);
             curActive.transcodeVideo = true;
             const curPlayTime = (curActive.playbackOffset || 0) + ((video.currentTime && !isNaN(video.currentTime)) ? video.currentTime : 0);

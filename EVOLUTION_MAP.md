@@ -231,20 +231,20 @@ EvoScrapper operates as a hybrid polyglot system composed of five distinct runti
 
 ## 3. Exhaustive Flaws, Vulnerabilities & Concurrency Hazards Matrix
 
-| ID | Subsystem | Severity | Category | Description | Root Cause & Impact |
-|:---|:---|:---:|:---|:---|:---|
-| **FLAW-01** | `core/database.py` | **CRITICAL** | Concurrency / Data Integrity | Unsynchronized aiosqlite singleton connection across coroutines. | No `asyncio.Lock` wrapping `self._conn.execute()` / `commit()`. Causes `cannot start a transaction within a transaction` under concurrent requests. |
-| **FLAW-02** | `streamer/torrent_engine.js` | **HIGH** | Streaming / Playback | 1-Piece Gap in Sliding Window (`bufferStart = urgentEnd + 2`). | Gap piece left unselected or low priority. Player stalls when video cursor crosses from urgent to buffer tier. |
-| **FLAW-03** | `core/transmuxer.py` | **HIGH** | Process / Concurrency | Top-level Semaphore instantiation at module import. | `_FFMPEG_SEMAPHORE = asyncio.Semaphore(...)` binds to import-time loop; crashes with `different loop` under worker reloads. |
-| **FLAW-04** | `core/transmuxer.py` | **HIGH** | Protocol / Error Handling | Raising `HTTPException` inside active streaming generator. | Headers already sent (200 OK); client gets corrupted fMP4 stream instead of 502 error JSON. |
-| **FLAW-05** | `core/stream_resolver.py` | **HIGH** | Performance / Latency | Blocking `asyncio.gather` on 36 scraper tasks before returning Torrentio streams. | 5-8 second resolution delay waiting for dead/throttled scrapers even when Torrentio resolves in 200ms. |
-| **FLAW-06** | `core/subtitle_sync/vad.py` | **HIGH** | Performance / I/O Contention | Audio VAD connects directly to live stream URL during initial playback. | FFmpeg silencedetect pulls 90s audio, starving player video buffer of swarm pieces and causing stutter. |
-| **FLAW-07** | `static/app.js` | **HIGH** | Architectural / State Race | Probe callback mutates `video.src` mid-flight after playback started. | Player reloads stream source after 1-2 seconds, causing buffering animation to flash on and off. |
-| **FLAW-08** | `core/debrid/proxy.py` | **HIGH** | Security / Auth Bypass | Hardcoded fallback `DEBRID_PROXY_SECRET`. | Allows remote attacker to forge HMAC tokens and use server as open HTTP proxy relay. |
-| **FLAW-09** | `core/transmuxer.py` | **MEDIUM** | Resource / Memory Leak | `generate_sprite_sheet` buffers entire `stderr` via `proc.communicate()`. | Unbounded RAM allocation during long sprite generations (up to 180s). |
-| **FLAW-10** | `streamer/torrent_engine.js` | **MEDIUM** | Performance / CPU Churn | `torrent.on('wire')` repeatedly executes `applySlidingWindow()`. | 50 peer handshakes trigger 50 deselect/select rebuilds in 5s, thrashing WebTorrent queue. |
-| **FLAW-11** | `routers/stream.py` | **MEDIUM** | Networking / Loopback Hop | Overly strict localhost check disables direct 307 range redirect in Docker/LAN. | Forces all video traffic through Python loopback proxy, adding latency and CPU overhead. |
-| **FLAW-12** | `static/app.js` | **MEDIUM** | Architectural Debt | 10,310-line monolithic unstructured JS file. | High maintenance friction, timer leaks on fast navigation, repeated DOM queries in 60fps loops. |
+| ID | Subsystem | Severity | Category | Description | Status |
+|:---|:---|:---:|:---|:---|:---:|
+| **FLAW-01** | `core/database.py` | **CRITICAL** | Concurrency / Data Integrity | Unsynchronized aiosqlite singleton connection across coroutines. | **RESOLVED (v2.5.0)**: Added `_get_lock()` mutex & `execute_many` batch commits. |
+| **FLAW-02** | `streamer/torrent_engine.js` | **HIGH** | Streaming / Playback | 1-Piece Gap in Sliding Window (`bufferStart = urgentEnd + 2`). | **RESOLVED (v2.5.0)**: Wire flood unchokes adjacent gap blocks dynamically. |
+| **FLAW-03** | `core/transmuxer.py` | **HIGH** | Process / Concurrency | Top-level Semaphore instantiation at module import. | **RESOLVED (v2.5.0)**: `_LazySemaphore` proxies loop attachment lazily. |
+| **FLAW-04** | `core/transmuxer.py` | **HIGH** | Protocol / Error Handling | Raising `HTTPException` inside active streaming generator. | **AUDITED & TESTED**: Guarded before byte yield; safe pipeline logging. |
+| **FLAW-05** | `core/stream_resolver.py` | **HIGH** | Performance / Latency | Blocking `asyncio.gather` on 36 scraper tasks before returning Torrentio streams. | **RESOLVED (v2.5.0)**: Fast-path Torrentio harvest + 2.5s bounded local timeout. |
+| **FLAW-06** | `core/subtitle_sync/vad.py` | **HIGH** | Performance / I/O Contention | Audio VAD connects directly to live stream URL during initial playback. | **RESOLVED (v2.5.0)**: Capped stream VAD to 45.0s, avoiding swarm starvation. |
+| **FLAW-07** | `static/app.js` | **HIGH** | Architectural / State Race | Probe callback mutates `video.src` mid-flight after playback started. | **RESOLVED (v2.5.0)**: Guarded against reload when `!video.paused` or `readyState >= 3`. |
+| **FLAW-08** | `core/debrid/proxy.py` | **HIGH** | Security / Auth Bypass | Hardcoded fallback `DEBRID_PROXY_SECRET`. | Scheduled Phase 4. |
+| **FLAW-09** | `core/transmuxer.py` | **MEDIUM** | Resource / Memory Leak | `generate_sprite_sheet` buffers entire `stderr` via `proc.communicate()`. | Scheduled Phase 4. |
+| **FLAW-10** | `streamer/torrent_engine.js` | **MEDIUM** | Performance / CPU Churn | `torrent.on('wire')` repeatedly executes `applySlidingWindow()`. | **RESOLVED (v2.5.0)**: Coalesced wire handshakes with 250ms debounce timer. |
+| **FLAW-11** | `routers/stream.py` | **MEDIUM** | Networking / Loopback Hop | Overly strict localhost check disables direct 307 range redirect in Docker/LAN. | Scheduled Phase 4. |
+| **FLAW-12** | `static/app.js` | **MEDIUM** | Architectural Debt | 10,310-line monolithic unstructured JS file. | Scheduled Phase 3. |
 
 ---
 
