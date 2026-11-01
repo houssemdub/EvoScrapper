@@ -6111,10 +6111,10 @@ function initPlayerTimelineControls() {
       startPlayerTicker();
     });
     video.addEventListener('waiting', () => {
-      requestShowBufferingHUD(450);
+      requestShowBufferingHUD(800);
     });
     video.addEventListener('stalled', () => {
-      requestShowBufferingHUD(450);
+      requestShowBufferingHUD(800);
     });
     video.addEventListener('pause', () => {
       updatePlayPauseIcon(false);
@@ -8633,13 +8633,13 @@ let playerBufferingStartTime = 0;
 let _hudShowDebounceTimer = null;
 let _hudMinDisplayUntil = 0;
 
-function requestShowBufferingHUD(delayMs = 450) {
+function requestShowBufferingHUD(delayMs = 800) {
   if (_hudShowDebounceTimer) clearTimeout(_hudShowDebounceTimer);
   _hudShowDebounceTimer = setTimeout(() => {
     const video = document.getElementById('evo-video-player');
     if (video && (video.paused || video.readyState < 3)) {
       showPlayerBufferingHUD();
-      _hudMinDisplayUntil = Date.now() + 500;
+      _hudMinDisplayUntil = Date.now() + 1500;
     }
   }, delayMs);
 }
@@ -8711,8 +8711,8 @@ function showPlayerBufferingHUD() {
       }
     }
 
-    // Auto-dismiss HUD only once video is actively advancing with a healthy playback buffer (>= 1.5s)
-    if (video && !video.paused && video.currentTime > 0 && (video.readyState >= 3 || bufferAheadSec >= 1.5)) {
+    // Auto-dismiss HUD only once video is actively advancing with a healthy playback buffer (>= 2.0s)
+    if (video && !video.paused && video.currentTime > 0 && video.readyState >= 3 && bufferAheadSec >= 2.0) {
       requestHideBufferingHUD();
       return;
     }
@@ -8720,7 +8720,7 @@ function showPlayerBufferingHUD() {
     // Dynamic buffer percentage: measures immediate playback readiness buffer ahead of current playhead
     let bufferPct = 15;
     if (bufferAheadSec > 0) {
-      bufferPct = Math.min(100, Math.max(30, Math.round((bufferAheadSec / 1.5) * 100)));
+      bufferPct = Math.min(100, Math.max(30, Math.round((bufferAheadSec / 2.0) * 100)));
     } else {
       const elapsedSec = (Date.now() - playerBufferingStartTime) / 1000;
       bufferPct = Math.min(95, Math.max(15, Math.round(elapsedSec * 40)));
@@ -9179,12 +9179,9 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   const hasIncompatibleAudio = /\b(ac3|eac3|ddp|dd\+|dts|truehd|atmos|dts-hd|flac|5\.1|7\.1|dual[\s._-]?audio|multi[\s._-]?audio)\b/i.test(title);
   const isHevcOrUnsupportedVideo = /\b(hevc|x265|h\.?265|10bit|hdr|av1)\b/i.test(title);
 
-  // Default to Direct Stream (RFC 7233 HTTP 206 Partial Content byte ranges) for direct-compatible media.
-  // For MKV or multi-audio releases requiring downmix/re-muxing, intelligently enable transmux.
-  let useTransmux = false;
-  if (isMkv || hasIncompatibleAudio || isHevcOrUnsupportedVideo || !isDirectStream) {
-    useTransmux = true;
-  }
+  // Always use transmux pipeline: lossless stream copy for compatible codecs, full remux for incompatible.
+  // This prevents mid-start pipeline switches that cause buffering HUD to flash on/off.
+  let useTransmux = true;
   // Thunder-God speed: ALWAYS default to lossless stream copy (-c:v copy).
   // Modern browsers (Chrome 107+, Brave, Edge, Safari) decode HEVC natively in fMP4.
   // Video transcoding is reserved strictly as an error-fallback if the browser's video engine rejects the stream.
@@ -9601,7 +9598,7 @@ function playStreamInBrowser(infoHash, fileIdx, title, isMkvHint = false, magnet
   };
 
   video.onwaiting = () => {
-    requestShowBufferingHUD(450);
+    requestShowBufferingHUD(800);
   };
   video.oncanplay = () => {
     if (!state.discover.activeStream?.audioTracks?.length) {
