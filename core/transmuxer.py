@@ -385,7 +385,7 @@ async def stream_transmuxed_video(
             "-reconnect_at_eof", "1",
             "-reconnect_streamed", "1",
             "-reconnect_on_network_error", "1",
-            "-reconnect_delay_max", "15",
+            "-reconnect_delay_max", "5",
         ])
 
     probe_sz = "1048576"
@@ -680,7 +680,7 @@ def _build_hls_ffmpeg_cmd(
             "-reconnect_at_eof", "1",
             "-reconnect_streamed", "1",
             "-reconnect_on_network_error", "1",
-            "-reconnect_delay_max", "15",
+            "-reconnect_delay_max", "5",
         ])
 
     cmd.extend([
@@ -1184,7 +1184,7 @@ async def stream_hls_subtitle_segment(
             "-reconnect_at_eof", "1",
             "-reconnect_streamed", "1",
             "-reconnect_on_network_error", "1",
-            "-reconnect_delay_max", "15",
+            "-reconnect_delay_max", "5",
         ])
     cmd.extend([
         "-ss", f"{start_seconds:.3f}",

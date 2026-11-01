@@ -218,7 +218,7 @@ async def stream_raw_torrent(
             upstream_resp = await session.get(
                 target_url,
                 headers=req_headers,
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=10.0, sock_read=45.0),
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=5.0, sock_read=15.0),
             )
             # If 503 (swarm buffering with Retry-After), wait briefly and retry
             if upstream_resp.status == 503 and attempt < 3:
