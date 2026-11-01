@@ -249,11 +249,14 @@ To eliminate playback stalls during 4K and 1080p high-bitrate streaming, the Web
 5. **Continuous Rolling Sliding Window**:
    - `createReadStream()` continuously monitors stream consumption. Every 2 pieces transferred, `applySlidingWindow()` rolls the entire 4-tier horizon forward, maintaining an unbroken 64MB–100MB buffer reservoir.
 
-### 5.2. WebTorrent Critical Piece Hotswapping
+### 5.2. WebTorrent Critical Piece Hotswapping & Fast Stall Recovery
 Under traditional BitTorrent piece reservation strategies, pieces assigned to slow or choked peers block playback pipeline progress even if dozens of fast peers are idle.
 - In `streamer/torrent_engine.js`, EvoScrapper invokes `torrent.critical(cursorPiece, cursorPiece + 3)` upon stream initialization and subsequent playback seeks.
 - The `critical()` directive bypasses normal piece reservation queues and instructs the wire manager to burst requests for the target blocks across **all** connected active wires concurrently.
-- The first wire to deliver the block completes the piece; redundant outstanding requests to slower wires are cancelled immediately via standard cancel messages, slashing initial buffer latency by up to 80%.
+- The first wire to deliver the blocks wins; duplicate requests are cancelled on slower wires.
+- **Urgent Stall Recovery (`_recoverStalledRequests`)**: When wires slow down (<1 KB/s) while holding requests in the urgent cursor window (`STALL_RECOVERY_WINDOW_PIECES = 8`), requests are cancelled after a tight 2.5s threshold (`STALL_RECOVERY_AFTER_MS = 2500`, up to 4 cancellations per sweep) whenever alternate unchoked wires possess the pieces. This prevents FFmpeg demuxer starvation and timestamp drift.
+- **Demuxer Timestamp Continuity**: In `core/transmuxer.py`, the FFmpeg command utilizes `-fflags +genpts+discardcorrupt+igndts` and `aresample=async=1000:min_hard_comp=0.100000` to gracefully span short network/piece arrival gaps without abrupt audio PTS jumps or desynchronizing HTML5 subtitle overlays.
+- **Bitrate-Aware Swarm Ranking**: In `core/stream_resolver.py`, releases with high bitrate requirements (4K/REMUX) are penalized when swarm size is low (<5 or <15 seeders), ensuring streams served directly from P2P have sufficient wire throughput to maintain uninterrupted buffer flow.k completes the piece; redundant outstanding requests to slower wires are cancelled immediately via standard cancel messages, slashing initial buffer latency by up to 80%.
 
 ### 5.3. Double-NAT & Fixed P2P Port Traversal Architecture
 Home network topologies often involve cascading routers (e.g. an ISP fiber ONT/Modem in router mode connected to a high-speed WiFi router). This creates a **Double-NAT** environment where P2P clients fail to receive incoming connections unless ports are deterministically configured and forwarded:

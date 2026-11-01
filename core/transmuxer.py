@@ -369,7 +369,10 @@ async def stream_transmuxed_video(
     cmd.extend([
         "-probesize", "524288",         # 512KB probe for ultra-low latency playback initiation
         "-analyzeduration", "1000000",  # 1s header analysis for multi-track streams
-        "-fflags", "+genpts+discardcorrupt",
+        # +genpts rebuilds missing timestamps; +discardcorrupt drops damaged packets
+        # rather than stalling; +igndts ignores DTS-only streams (common in P2P MKVs)
+        # so PTS drives timing and a slow swarm piece can't freeze the demuxer clock.
+        "-fflags", "+genpts+discardcorrupt+igndts",
     ])
 
     # Input-seek (-ss before -i) allows instant seek without reading preceding stream bytes.
@@ -413,10 +416,13 @@ async def stream_transmuxed_video(
         ])
 
     # Build audio filter chain with ITU-R BS.775 downmix and timestamp correction:
-    # 1. aresample=async=1 dynamically synchronizes audio clock to video stream without PTS jumps
+    # 1. aresample=async=1000 stretches/trims audio up to 1000 samples per frame
+    #    so a P2P stall lasting up to ~20 ms (at 48 kHz) is absorbed without a
+    #    hard PTS jump that would desync subtitles.  min_hard_comp=0.1 s keeps the
+    #    same tolerance for intentional A/V offset correction.
     # 2. ITU-R BS.775 downmix pan matrix for surround audio (> 2 channels)
-    # 3. volume boost restores center channel dialogue
-    af_filters = ["aresample=async=1:min_hard_comp=0.100000"]
+    # 3. volume boost restores centre channel dialogue
+    af_filters = ["aresample=async=1000:min_hard_comp=0.100000"]
     if channels is not None and channels > 2:
         af_filters.append("pan=stereo|FL=0.5*c0+0.7071*c2+0.7071*c4|FR=0.5*c1+0.7071*c2+0.7071*c5")
     if audio_boost and audio_boost > 0:

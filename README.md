@@ -37,7 +37,9 @@
 
 ### 🎬 3. Multi-Tier Concurrent P2P WebTorrent Streaming
 - **4-Tier Concurrent Swarm Buffering**: Node.js WebTorrent micro-daemon orchestrates a dynamic 100+ piece sliding window across 4 concurrent tiers (Critical Header Lock, Immediate Playback Horizon, Multi-Peer Swarm Horizon, and Deep Predictive Reservoir).
-- **Critical Piece Hotswapping**: Invokes WebTorrent `torrent.critical(cursorPiece, cursorPiece + 3)` to dynamically leapfrog choked peers and burst request immediate playback pieces across all connected wires simultaneously.
+- **Fast Urgent-Piece Stall Recovery & Hotswapping**: Low-latency stall cancellation (2.5s timeout, 4 cancels/sweep) aggressively redistributes urgent playback pieces from throttled peers to faster unchoked wires before demuxer starvation occurs.
+- **Throughput-Aware Swarm Ranking**: Stream resolver factors bitrate demands vs active seeders, penalising thin swarms on massive 4K/REMUX releases to prioritize playable, stall-free streams over unviable peers.
+- **Demuxer Sync Continuity**: FFmpeg transmux pipeline applies `+genpts+discardcorrupt+igndts` and `aresample=async=1000` to smoothly bridge transient P2P piece delivery jitter without presentation timestamp (PTS) skips or subtitle desync.
 - **Deterministic NAT Traversal (Ports 50000 TCP / 50001 UDP)**: Fixed inbound listener ports support both direct UPnP port mapping and double-NAT forwarding topologies (modem DMZ + router port forwarding), unlocking full bilateral peer connectivity and multi-megabyte swarm throughput.
 - **Continuous Rolling Sliding Window**: Dynamically rolls priority pieces forward as video data streams to guarantee uninterrupted buffer reserves.
 - **Dynamic Virtual HLS**: On-the-fly MPEG-TS segment generation (`/api/v1/stream/hls/segment`) preserving PTS timestamp continuity (`-output_ts_offset`) for uninterrupted Hls.js streaming.

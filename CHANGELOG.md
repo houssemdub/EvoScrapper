@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Swarm Selection, Buffering & Demuxer Sync Resilience
+
+#### Fixed
+- **Bitrate-Aware Swarm Scoring (`core/stream_resolver.py`)**: Added throughput-aware swarm penalties during stream candidate scoring (`compute_stream_score`). High-bitrate 4K REMUX / BluRay releases with thin swarms (<5 seeders: -60 pts, <15 seeders: -25 pts) and 1080p remuxes with <3 seeders are penalised so high-speed 1080p releases rank ahead of unstreamable swarms on P2P.
+- **Fast Urgent-Piece Stall Recovery (`streamer/torrent_engine.js`)**: Reduced `STALL_RECOVERY_AFTER_MS` from 8000ms to 2500ms and increased `STALL_RECOVERY_MAX_CANCELS` from 2 to 4 (cooldown 4000ms). Prevents slow or throttled peers from stalling critical playback window blocks and starving the FFmpeg demuxer.
+- **FFmpeg DTS Demuxer Freeze Protection (`core/transmuxer.py`)**: Added `+igndts` to `-fflags` (`+genpts+discardcorrupt+igndts`). Prevents FFmpeg from freezing the demuxer clock on damaged or DTS-only packets during P2P stream stalls, ensuring PTS strictly drives playback timing.
+- **Continuous Audio Async Resample Compensation (`core/transmuxer.py`)**: Upgraded audio resample filter from `aresample=async=1:min_hard_comp=0.1` to `aresample=async=1000:min_hard_comp=0.1`. Allows audio stretching/trimming up to 1000 samples/frame (~20ms at 48kHz) to absorb micro-stalls smoothly without hard PTS discontinuities that desync subtitles.
+
 ### Subtitle Desync & Buffer Playback Pipeline Hardening
 
 #### Fixed

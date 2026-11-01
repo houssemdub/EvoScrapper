@@ -64,9 +64,12 @@ const LOOKAHEAD_SCAN_SECONDS = 120;
 const LOOKAHEAD_SCAN_PIECES_MIN = 64;
 const LOOKAHEAD_SCAN_PIECES_MAX = 4096;
 const STALL_RECOVERY_WINDOW_PIECES = 8;
-const STALL_RECOVERY_AFTER_MS = 8000;
-const STALL_RECOVERY_COOLDOWN_MS = 8000;
-const STALL_RECOVERY_MAX_CANCELS = 2;
+// Urgent-piece stall recovery: cancel a stalled block on a slow wire after
+// 2.5 s (was 8 s) and try up to 4 cancels per sweep (was 2).  The cooldown
+// is kept at 4 s so we don't spin, but still react before playback stalls.
+const STALL_RECOVERY_AFTER_MS = 2500;
+const STALL_RECOVERY_COOLDOWN_MS = 4000;
+const STALL_RECOVERY_MAX_CANCELS = 4;
 const STALL_RECOVERY_MIN_WIRE_SPEED_BPS = 1024;
 const PEER_CACHE_FLUSH_MS = Math.max(0, parseInt(process.env.EVO_PEER_CACHE_FLUSH_MS || '15000', 10));
 // Swarm pause hysteresis (stremio swarm_paused equivalent): stop requesting

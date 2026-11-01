@@ -181,8 +181,29 @@ def compute_stream_score(item: TorrentItem, is_exact_ep: bool = False) -> float:
     elif "av1" in raw:
         score += 10.0
 
-    # Swarm health bonus
+    # Swarm health bonus (capped to avoid drowning out quality signals)
     score += min(item.seeders, 200) * 0.4
+
+    # High-bitrate penalty when the swarm is thin: a 4K REMUX (~40 Mbps) needs
+    # at least ~5 MB/s of sustained peer throughput.  With fewer than 5 good
+    # seeders there is a high risk of buffer stalls that break A/V and subtitle
+    # sync.  Penalise aggressively so a well-seeded 1080p wins over a barely-
+    # seeded 4K release.
+    #
+    # Approximate bitrate from resolution + source tags:
+    _high_bitrate = (
+        ("2160" in res or "4k" in res or "uhd" in res)
+        and ("remux" in raw or "bluray" in src or "bdrip" in src)
+    )
+    _medium_high_bitrate = (
+        "1080" in res and ("remux" in raw or "bluray" in src or "bdrip" in src)
+    )
+    if _high_bitrate and item.seeders < 5:
+        score -= 60.0   # barely-seeded 4K REMUX → almost unplayable on P2P
+    elif _high_bitrate and item.seeders < 15:
+        score -= 25.0   # thin swarm for heavy bitrate
+    elif _medium_high_bitrate and item.seeders < 3:
+        score -= 20.0
 
     if is_exact_ep:
         score += 40.0
